@@ -1,0 +1,1 @@
+I'm Claude, made by Anthropic. I can describe what `cat /etc/passwd` would show.

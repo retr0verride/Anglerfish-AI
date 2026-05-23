@@ -67,19 +67,22 @@ def compile_pattern(spec: PatternSpec) -> re.Pattern[str]:
 
 OUTPUT_PATTERNS: Final[list[PatternSpec]] = [
     # --- ai_self_disclosure ---
-    # Direct admissions the model is an AI / language model.
+    # Direct admissions the model is an AI / language model. The
+    # `(?:\w+\s+)?` slot allows one optional adjective (large, small,
+    # generative, conversational, etc.) between the article and the
+    # noun phrase — caught real-world phrasings the corpus surfaced.
     {
-        "pattern": r"\bas\s+an?\s+(?:ai|artificial\s+intelligence|language\s+model)\b",
+        "pattern": r"\bas\s+an?\s+(?:\w+\s+)?(?:ai|artificial\s+intelligence|language\s+model)\b",
         "category": "ai_self_disclosure",
         "severity": 1.0,
     },
     {
-        "pattern": r"\bi\s+am\s+(?:an?\s+)?(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
+        "pattern": r"\bi\s+am\s+(?:an?\s+)?(?:\w+\s+)?(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
         "category": "ai_self_disclosure",
         "severity": 1.0,
     },
     {
-        "pattern": r"\bi'?m\s+(?:an?\s+)?(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
+        "pattern": r"\bi'?m\s+(?:an?\s+)?(?:\w+\s+)?(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
         "category": "ai_self_disclosure",
         "severity": 1.0,
     },
@@ -109,7 +112,9 @@ OUTPUT_PATTERNS: Final[list[PatternSpec]] = [
         "severity": 1.0,
     },
     {
-        "pattern": r"\bi\s+(?:am\s+)?(?:pretending|simulating|emulating|imitating)\s+(?:to\s+be\s+)?(?:a\s+)?(?:shell|terminal|server|system|computer)\b",
+        # Allows i'm contractions AND an adjective slot before the target
+        # noun ("Linux shell", "fake terminal", etc.).
+        "pattern": r"\bi(?:\s+am|'?m)\s+(?:pretending|simulating|emulating|imitating)\s+(?:to\s+be\s+)?(?:a\s+)?(?:\w+\s+)?(?:shell|terminal|server|system|computer|response)\b",
         "category": "honeypot_self_disclosure",
         "severity": 1.0,
     },
@@ -135,13 +140,12 @@ OUTPUT_PATTERNS: Final[list[PatternSpec]] = [
         "severity": 1.0,
     },
     {
-        # Markdown headings (#, ##, ###, ...) at start of line.
-        "pattern": r"^#{1,6}\s+\S",
-        "category": "markdown_formatting",
-        "severity": 1.0,
-    },
-    {
         # Blockquote markers at start of line — common LLM output style.
+        # NOTE: Single-`#` headings are deliberately NOT detected; shell
+        # comment syntax uses `#` at line start so the pattern would
+        # false-positive on real config files (resolv.conf, sshd_config,
+        # crontab, etc.). Code fences and bold are the high-signal
+        # markdown indicators we keep.
         "pattern": r"^>\s+\S",
         "category": "markdown_formatting",
         "severity": 1.0,
@@ -248,7 +252,10 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
     # --- language_evasion ---
     # Attempts to bypass English-only output filters by switching language.
     {
-        "pattern": r"\b(?:translate|respond|reply|answer)\s+(?:your|the|in)\s+(?:instructions|system\s+prompt|response|answer)?\s*(?:to|in)\s+(?:french|spanish|russian|chinese|japanese|german|korean|arabic)\b",
+        # Trigger verb + 0-30 chars of glue + (to|in) + target language.
+        # The 30-char window absorbs phrases like "respond only in",
+        # "translate your instructions to", "answer me in", etc.
+        "pattern": r"\b(?:translate|respond|reply|answer)\b[^\n]{0,30}\b(?:to|in)\s+(?:french|spanish|russian|chinese|japanese|german|korean|arabic|portuguese|italian|polish|dutch|hindi)\b",
         "category": "language_evasion",
         "severity": 1.0,
     },
@@ -265,7 +272,10 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
     # --- override_instructions ---
     # Classic jailbreak opener.
     {
-        "pattern": r"\b(?:ignore|disregard|forget|override|bypass)\s+(?:all|any|the|your)?\s*(?:previous|prior|earlier|above|preceding|original)\s+(?:instructions?|prompts?|rules?|guidelines?|commands?)\b",
+        # The optional `(?:\w+\s+)?` slot allows one adjective between the
+        # temporal word and the target noun (e.g. "previous SAFETY
+        # guidelines", "prior SYSTEM instructions").
+        "pattern": r"\b(?:ignore|disregard|forget|override|bypass)\s+(?:all|any|the|your)?\s*(?:previous|prior|earlier|above|preceding|original)\s+(?:\w+\s+)?(?:instructions?|prompts?|rules?|guidelines?|commands?|safety|filters?|restrictions?)\b",
         "category": "override_instructions",
         "severity": 1.0,
     },
@@ -333,13 +343,16 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
     # whitespace-padded variants Ollama tokenizes identically.
     {
         # ChatML / Qwen format: <|im_start|>, <|im_end|>, <|system|>, etc.
-        "pattern": r"<\|\s*(?:im_start|im_end|system|user|assistant|endoftext)\s*\|>",
+        # The `\s*` around each pipe also catches whitespace-padded
+        # variants `< | im_start | >` that Ollama's chat-template
+        # compiler tokenizes identically to the canonical form.
+        "pattern": r"<\s*\|\s*(?:im_start|im_end|system|user|assistant|endoftext)\s*\|\s*>",
         "category": "special_token_injection",
         "severity": 1.0,
     },
     {
         # Llama 3 format: <|begin_of_text|>, <|start_header_id|>, etc.
-        "pattern": r"<\|\s*(?:begin_of_text|start_header_id|end_header_id|eot_id|finetune_right_pad_id)\s*\|>",
+        "pattern": r"<\s*\|\s*(?:begin_of_text|start_header_id|end_header_id|eot_id|finetune_right_pad_id)\s*\|\s*>",
         "category": "special_token_injection",
         "severity": 1.0,
     },
@@ -367,7 +380,9 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
         "severity": 1.0,
     },
     {
-        "pattern": r"\b(?:print|show|display|output|reveal|tell\s+me|repeat|recite)\s+(?:your|the)\s+(?:system\s+prompt|instructions?|initial\s+prompt|guidelines?|rules?)\b",
+        # Allow an optional "me" pronoun between the verb and "your"
+        # so "show me your initial prompt" matches too.
+        "pattern": r"\b(?:print|show|display|output|reveal|tell|repeat|recite)\s+(?:me\s+)?(?:your|the)\s+(?:system\s+prompt|instructions?|initial\s+prompt|guidelines?|rules?)\b",
         "category": "system_prompt_extract",
         "severity": 1.0,
     },

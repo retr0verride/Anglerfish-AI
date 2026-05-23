@@ -1,0 +1,4 @@
+total 12
+-rw-r--r-- 1 root root 220 May 22 09:11 .bash_logout
+
+Hope this helps you understand the directory contents.

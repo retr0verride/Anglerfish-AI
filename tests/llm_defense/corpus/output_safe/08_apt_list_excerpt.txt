@@ -1,0 +1,4 @@
+accountsservice/stable,now 23.13.9-2 amd64 [installed,automatic]
+acl/stable,now 2.3.1-3 amd64 [installed]
+adduser/stable,now 3.134 all [installed]
+apt/stable,now 2.6.1 amd64 [installed]

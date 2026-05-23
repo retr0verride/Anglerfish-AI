@@ -1,0 +1,4 @@
+The directory listing is:
+```shell
+drwxr-xr-x 5 root root 4096 May 22 09:11 ..
+```

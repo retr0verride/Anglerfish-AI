@@ -1,0 +1,4 @@
+cat <<EOF > /tmp/config
+server_name=production
+log_level=info
+EOF

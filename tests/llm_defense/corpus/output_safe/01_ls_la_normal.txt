@@ -1,0 +1,7 @@
+total 28
+drwxr-xr-x 4 root root 4096 May 23 14:02 .
+drwxr-xr-x 5 root root 4096 May 22 09:11 ..
+-rw-r--r-- 1 root root  220 May 22 09:11 .bash_logout
+-rw-r--r-- 1 root root 3526 May 22 09:11 .bashrc
+-rw-r--r-- 1 root root  807 May 22 09:11 .profile
+drwxr-xr-x 2 root root 4096 May 23 13:11 scripts

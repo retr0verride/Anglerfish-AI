@@ -1,0 +1,1 @@
+The **important** files in /etc are passwd, shadow, and group.

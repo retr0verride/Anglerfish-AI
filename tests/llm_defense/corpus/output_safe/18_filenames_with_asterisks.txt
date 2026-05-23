@@ -1,0 +1,4 @@
+./logs/access-*.log
+./logs/error-2026*.gz
+./scripts/*.sh
+./data/file-name-with-asterisk-*-here.txt

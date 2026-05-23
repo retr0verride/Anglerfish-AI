@@ -1,0 +1,1 @@
+I can help you with that. Try running `ls -la` to list all files.

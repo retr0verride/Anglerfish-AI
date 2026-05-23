@@ -1,0 +1,1 @@
+grep -i "warning" /var/log/syslog | head -20

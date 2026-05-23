@@ -1,0 +1,1 @@
+According to my instructions, I should respond only with shell-like output.

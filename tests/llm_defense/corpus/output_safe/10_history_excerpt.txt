@@ -1,0 +1,5 @@
+  121  cd /var/log
+  122  tail -50 syslog
+  123  grep -i error syslog
+  124  cd
+  125  ls -la

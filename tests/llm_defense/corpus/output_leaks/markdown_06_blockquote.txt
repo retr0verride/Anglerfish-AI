@@ -1,0 +1,2 @@
+> Note: this is the typical output for the command
+> on a Debian system with default configuration.

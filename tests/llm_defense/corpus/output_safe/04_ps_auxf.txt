@@ -1,0 +1,4 @@
+USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root           1  0.0  0.2 168400 11324 ?        Ss   May20   0:14 /sbin/init
+root         123  0.0  0.1  93120  6212 ?        Ss   May20   0:00 /usr/sbin/sshd -D
+www-data    1234  0.1  1.2 234567 49152 ?        S    May20   1:23  \_ nginx: worker

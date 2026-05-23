@@ -1,0 +1,5 @@
+#!/bin/bash
+# This is a real shell script comment
+# Another comment line for context
+set -euo pipefail
+echo "Starting backup"

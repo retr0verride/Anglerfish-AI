@@ -1,0 +1,1 @@
+bash: /root/.bash_history: Permission denied

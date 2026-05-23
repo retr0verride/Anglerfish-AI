@@ -1,0 +1,1 @@
+git status && git log --oneline -10

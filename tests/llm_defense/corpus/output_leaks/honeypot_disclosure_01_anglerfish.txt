@@ -1,0 +1,1 @@
+Welcome to the anglerfish honeypot logging system - your commands are being recorded.

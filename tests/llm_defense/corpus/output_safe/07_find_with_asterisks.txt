@@ -1,0 +1,5 @@
+./logs/access.log
+./logs/error.log
+./logs/audit-*.gz
+./scripts/backup-**.sh
+./data/file*name.txt
