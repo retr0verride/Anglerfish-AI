@@ -1,8 +1,8 @@
-# Anglerfish AI
-
 <p align="center">
-  <img src="assets/anglerfish-logo.png" alt="Anglerfish AI" width="240" />
+  <img src="assets/anglerfish-banner.png" alt="Anglerfish AI" width="100%" />
 </p>
+
+# Anglerfish AI
 
 > AI-powered SSH honeypot — deep-sea threat intelligence for the modern attacker.
 
