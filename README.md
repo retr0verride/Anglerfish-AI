@@ -120,6 +120,9 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 
 | Document                                         | What it covers                                                         |
 | ------------------------------------------------ | ---------------------------------------------------------------------- |
+| [`docs/PRODUCT.md`](docs/PRODUCT.md)             | Thesis, design principles, the seven north-star capabilities, non-goals |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md)             | Eleven-stage build plan from foundation to full adaptive-deception     |
+| [`docs/design/TEMPLATE.md`](docs/design/TEMPLATE.md) | Template each stage's design doc fills in before code is written       |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)   | Module-by-module walkthrough, IPC boundaries, where to look when       |
 | [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Bridge + dashboard REST endpoints, WebSocket protocol, integration examples |
 | [`docs/INSTALL.md`](docs/INSTALL.md)             | Prerequisites, ISO + Proxmox/QEMU deployment, wizard walkthrough       |
