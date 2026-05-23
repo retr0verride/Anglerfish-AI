@@ -23,6 +23,11 @@ def test_settings_direct_construction(
     assert s.ollama.base_url.host == "127.0.0.1"
     assert s.bridge.fake_hostname == "srv-prod-01"
     assert s.rate_limit.max_concurrent_requests == 8
+    # DefenseConfig defaults are reachable via the settings root.
+    assert s.defense.output_filter_enabled is True
+    assert s.defense.injection_filter_enabled is True
+    assert s.defense.injection_threshold == pytest.approx(0.7)
+    assert s.defense.model_expected_hash is None
 
 
 def test_settings_missing_required_fields_fails() -> None:

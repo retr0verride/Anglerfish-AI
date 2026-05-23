@@ -30,6 +30,7 @@ from anglerfish.config.models import (
     CowrieConfig,
     CredentialsConfig,
     DashboardConfig,
+    DefenseConfig,
     FingerprintConfig,
     GeoConfig,
     LogLevel,
@@ -71,6 +72,7 @@ class AnglerfishSettings(BaseSettings):
     bridge: BridgeConfig = Field(default_factory=BridgeConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     threat: ThreatConfig = Field(default_factory=ThreatConfig)
+    defense: DefenseConfig = Field(default_factory=DefenseConfig)
     geo: GeoConfig = Field(default_factory=GeoConfig)
     fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
     credentials: CredentialsConfig

@@ -14,6 +14,7 @@ from anglerfish.config.models import (
     CowrieConfig,
     CredentialsConfig,
     DashboardConfig,
+    DefenseConfig,
     FingerprintConfig,
     GeoConfig,
     LogLevel,
@@ -385,3 +386,100 @@ def test_credentials_accepts_32_byte_key() -> None:
     key = base64.b64encode(b"\x07" * 32).decode("ascii")
     cfg = CredentialsConfig(encryption_key=SecretStr(key))
     assert cfg.encryption_key.get_secret_value() == key
+
+
+# ---------------------------------------------------------------------------
+# DefenseConfig — Stage 1 LLM defense layer
+# ---------------------------------------------------------------------------
+
+
+# A real SHA256 (lowercase hex, 64 chars) used by several tests below.
+_VALID_SHA256 = "a" * 64
+_VALID_SHA256_PREFIXED = "sha256:" + ("b" * 64)
+
+
+def test_defense_defaults() -> None:
+    cfg = DefenseConfig()
+    assert cfg.output_filter_enabled is True
+    assert cfg.injection_filter_enabled is True
+    assert cfg.injection_threshold == pytest.approx(0.7)
+    assert cfg.model_expected_hash is None
+    assert cfg.pattern_overrides_path is None
+
+
+def test_defense_threshold_in_range() -> None:
+    DefenseConfig(injection_threshold=0.0)
+    DefenseConfig(injection_threshold=1.0)
+    DefenseConfig(injection_threshold=0.95)
+
+
+def test_defense_threshold_out_of_range_rejected() -> None:
+    with pytest.raises(ValidationError):
+        DefenseConfig(injection_threshold=-0.01)
+    with pytest.raises(ValidationError):
+        DefenseConfig(injection_threshold=1.01)
+
+
+def test_defense_filters_can_be_disabled() -> None:
+    cfg = DefenseConfig(output_filter_enabled=False, injection_filter_enabled=False)
+    assert cfg.output_filter_enabled is False
+    assert cfg.injection_filter_enabled is False
+
+
+def test_defense_model_hash_accepts_bare_sha256() -> None:
+    cfg = DefenseConfig(model_expected_hash=SecretStr(_VALID_SHA256))
+    assert cfg.model_expected_hash is not None
+    assert cfg.model_expected_hash.get_secret_value() == _VALID_SHA256
+
+
+def test_defense_model_hash_accepts_sha256_prefix() -> None:
+    cfg = DefenseConfig(model_expected_hash=SecretStr(_VALID_SHA256_PREFIXED))
+    assert cfg.model_expected_hash is not None
+    # The validator preserves the raw form; downstream code normalizes.
+    assert cfg.model_expected_hash.get_secret_value() == _VALID_SHA256_PREFIXED
+
+
+def test_defense_model_hash_rejects_wrong_length() -> None:
+    with pytest.raises(ValidationError, match="SHA256 hex"):
+        DefenseConfig(model_expected_hash=SecretStr("a" * 63))
+    with pytest.raises(ValidationError, match="SHA256 hex"):
+        DefenseConfig(model_expected_hash=SecretStr("a" * 65))
+    with pytest.raises(ValidationError, match="SHA256 hex"):
+        DefenseConfig(model_expected_hash=SecretStr("sha256:" + "a" * 63))
+
+
+def test_defense_model_hash_rejects_non_hex() -> None:
+    with pytest.raises(ValidationError, match="SHA256 hex"):
+        DefenseConfig(model_expected_hash=SecretStr("g" * 64))  # 'g' isn't hex
+    with pytest.raises(ValidationError, match="SHA256 hex"):
+        DefenseConfig(model_expected_hash=SecretStr("z" * 64))  # 'z' isn't hex
+
+
+def test_defense_model_hash_accepts_uppercase_normalized() -> None:
+    # Validator normalizes case during the hex check, so uppercase is
+    # accepted. Operators who paste from `jq` get lowercase by default;
+    # accepting both prevents copy-paste friction with no security loss
+    # (the underlying hash is the same value either way).
+    cfg = DefenseConfig(model_expected_hash=SecretStr("A" * 64))
+    assert cfg.model_expected_hash is not None
+
+
+def test_defense_model_hash_rejects_empty() -> None:
+    with pytest.raises(ValidationError, match="SHA256 hex"):
+        DefenseConfig(model_expected_hash=SecretStr(""))
+
+
+def test_defense_pattern_overrides_path_optional() -> None:
+    cfg = DefenseConfig(pattern_overrides_path=Path("/etc/anglerfish/overrides.toml"))
+    assert cfg.pattern_overrides_path == Path("/etc/anglerfish/overrides.toml")
+
+
+def test_defense_frozen() -> None:
+    cfg = DefenseConfig()
+    with pytest.raises(ValidationError):
+        cfg.output_filter_enabled = False  # type: ignore[misc]
+
+
+def test_defense_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        DefenseConfig(secret_setting="oops")  # type: ignore[call-arg]

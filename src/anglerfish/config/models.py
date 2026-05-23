@@ -42,6 +42,7 @@ __all__ = [
     "CowrieConfig",
     "CredentialsConfig",
     "DashboardConfig",
+    "DefenseConfig",
     "FingerprintConfig",
     "GeoConfig",
     "LogLevel",
@@ -384,6 +385,107 @@ class ThreatConfig(BaseModel):
                 "addresses are blocked to prevent SSRF-style misconfiguration.",
             )
         return self
+
+
+class DefenseConfig(BaseModel):
+    """LLM-targeted-attack defense configuration.
+
+    Three orthogonal defenses fed from this config:
+
+    1. **Output filter** — post-processes every LLM response, catches
+       leaks like "I am an AI", model names, conversational filler,
+       markdown formatting. Binary fire on any pattern match. Disabled
+       responses fall back to the scripted fallback module so the
+       attacker sees indistinguishable output.
+
+    2. **Injection scorer** — pre-processes every attacker command,
+       scores against known prompt-injection signatures (override
+       instructions, persona switch, special chat-template tokens, …).
+       Score ≥ ``injection_threshold`` skips the LLM entirely and uses
+       fallback. Stage 1 ships only explicit (severity 1.0) signatures;
+       the threshold gates future heuristics.
+
+    3. **Model integrity** — at bridge startup, verifies the Ollama
+       model's blob/layer digest matches ``model_expected_hash``. If
+       set and mismatched, the bridge refuses to start. If unset, a
+       loud structured warning + audit-log entry surfaces the
+       unverified state on every boot. Pins the layer digest (the
+       GGUF blob's sha256), not the human-readable tag — defends
+       against silent tag re-pointing.
+
+    See ``docs/design/STAGE_1_llm_defense.md`` for the full
+    architecture and threat model.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    output_filter_enabled: bool = Field(
+        default=True,
+        description=(
+            "Post-filter LLM responses for leaks. Disable only for "
+            "controlled-environment debugging; production must run with this on."
+        ),
+    )
+    injection_filter_enabled: bool = Field(
+        default=True,
+        description=(
+            "Pre-filter attacker input for prompt-injection signatures. "
+            "Disable only for controlled-environment debugging."
+        ),
+    )
+    injection_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Score threshold above which the injection scorer fires and "
+            "the LLM call is skipped. Stage 1 ships only severity-1.0 "
+            "signatures (always fire regardless of threshold); this knob "
+            "is forward-looking infrastructure for heuristic patterns "
+            "added in later stages with telemetry."
+        ),
+    )
+    model_expected_hash: SecretStr | None = Field(
+        default=None,
+        description=(
+            'Expected SHA256 of the Ollama model\'s blob layer digest. '
+            'When set, bridge verifies at startup and refuses to start '
+            'on mismatch. When unset, bridge logs a loud warning and '
+            'writes a bridge.model_integrity_skipped audit entry on '
+            'every startup. Capture the expected value from the model '
+            'manifest with: jq -r \'.layers[] | '
+            'select(.mediaType == "application/vnd.ollama.image.model") '
+            '| .digest\' < ~/.ollama/models/manifests/.../<tag>'
+        ),
+    )
+    pattern_overrides_path: Path | None = Field(
+        default=None,
+        description=(
+            "Optional TOML file extending the in-tree default patterns "
+            "in src/anglerfish/bridge/defense_patterns.py. Overrides are "
+            "additive only — a malicious or buggy file can add false "
+            "positives but never remove defenses. See "
+            "docs/design/STAGE_1_llm_defense.md for the schema."
+        ),
+    )
+
+    @field_validator("model_expected_hash")
+    @classmethod
+    def _validate_model_hash(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is None:
+            return None
+        raw = v.get_secret_value()
+        # Accept either bare hex sha256 or the "sha256:..." prefix form
+        # that jq returns from the Ollama manifest. Normalize: strip
+        # prefix during the check, accept lowercase hex of length 64.
+        candidate = raw.removeprefix("sha256:").lower()
+        if len(candidate) != 64 or not all(c in "0123456789abcdef" for c in candidate):
+            raise ValueError(
+                "defense.model_expected_hash must be a SHA256 hex digest "
+                "(64 lowercase hex chars), optionally prefixed with "
+                "'sha256:'. Got: " + (raw[:80] + "..." if len(raw) > 80 else raw),
+            )
+        return v
 
 
 class GeoConfig(BaseModel):
