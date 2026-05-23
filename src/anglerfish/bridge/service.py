@@ -171,19 +171,22 @@ class AIBridgeService:
                     history=session.history(),
                 )
                 raw = await self._client.chat(messages)
-                # Defense layer (Stage 1): output filter post-Ollama,
-                # pre-cap. Raises OutputFilterFiredError which the
-                # existing except block converts to a fallback response.
-                output_verdict = self._output_filter.check(raw)
+                # Defense layer (Stage 1): cap FIRST, then scan. Capping
+                # before the filter prevents a misbehaving model (or an
+                # attacker-influenced context) from forcing the regex
+                # engine to iterate over multi-MB responses. cap_output
+                # also normalises trailing whitespace which gives the
+                # filter cleaner input.
+                text = cap_output(
+                    raw,
+                    max_chars=self._settings.ollama.max_response_chars,
+                )
+                output_verdict = self._output_filter.check(text)
                 if output_verdict.fired:
                     self._record_defense_fire(session, output_verdict)
                     raise OutputFilterFiredError(
                         f"{output_verdict.detector} fired (score={output_verdict.score})",
                     )
-                text = cap_output(
-                    raw,
-                    max_chars=self._settings.ollama.max_response_chars,
-                )
                 source = ResponseSource.AI
         except (
             OllamaUnavailableError,

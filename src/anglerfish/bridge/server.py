@@ -165,7 +165,25 @@ def create_bridge_app(
             # Raises ModelIntegrityError on hash mismatch; uvicorn then
             # exits non-zero. Refuse-to-serve is the correct posture for
             # a backdoored/swapped model — see Stage 1 design doc.
-            await integrity.verify()
+            #
+            # 10-second timeout protects startup from a stalled NFS
+            # mount or other filesystem hang on the manifest read; the
+            # work itself is a single small JSON parse so the budget is
+            # generous. A TimeoutError surfaces as a bridge.model_
+            # integrity_failed audit event via verify()'s own except
+            # block and aborts startup with a clean operator message.
+            try:
+                await asyncio.wait_for(integrity.verify(), timeout=10.0)
+            except TimeoutError as exc:
+                logger.error(
+                    "model integrity check timed out after 10s; "
+                    "check that ollama_manifest_dir is reachable. "
+                    "Path: %s",
+                    integrity.manifest_root,
+                )
+                raise RuntimeError(
+                    "model integrity check timed out — see logs",
+                ) from exc
         yield
         await service.aclose()
 

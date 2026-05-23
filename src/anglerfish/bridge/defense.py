@@ -63,6 +63,18 @@ _logger = logging.getLogger(__name__)
 # layer would silently let a weight-swap through.
 _MODEL_BLOB_MEDIA_TYPE = "application/vnd.ollama.image.model"
 
+# Hard cap on bytes scanned by ANY pattern. Regex engines without per-
+# pattern timeouts (CPython < 3.13) are vulnerable to catastrophic
+# backtracking on crafted inputs; bounding scan length is the cheapest
+# defense that works on every Python version. Set above the bridge's
+# typical attacker-command size (4096 from BridgeConfig.max_input_chars)
+# so the cap rarely fires in normal traffic, but well below the request
+# limit (32768 from CommandRequest.command max_length) so a
+# pathological 32KB injection-stuffed command can't pin the event loop.
+# Output filter uses the smaller of this value and the configured
+# ollama.max_response_chars.
+_DEFENSE_SCAN_MAX_CHARS = 8192
+
 
 class DefenseVerdict(BaseModel):
     """Result of one defense check (output filter or injection scorer).
@@ -260,6 +272,13 @@ class OutputFilter:
         Returns the first match found (categories are scanned in the
         order they were registered). When the filter is disabled or
         no pattern matches, ``fired=False``.
+
+        Input is truncated to ``_DEFENSE_SCAN_MAX_CHARS`` before
+        scanning — a misbehaving model emitting megabytes (or an
+        attacker who manipulated context into pushing the cap) cannot
+        cause the regex engine to chew on megabytes of input and pin
+        the event loop. The cap is generous enough that legitimate
+        responses (typically <2KB) are never affected.
         """
         if not self._config.output_filter_enabled:
             return DefenseVerdict(
@@ -268,8 +287,9 @@ class OutputFilter:
                 snippet="",
                 score=0.0,
             )
+        scan_target = llm_response[:_DEFENSE_SCAN_MAX_CHARS]
         for spec, pattern in self._compiled:
-            match = pattern.search(llm_response)
+            match = pattern.search(scan_target)
             if match is not None:
                 snippet = match.group(0)[:120]
                 return DefenseVerdict(
@@ -336,6 +356,14 @@ class InjectionScorer:
         When at least one pattern matches, returns a verdict carrying
         the max severity, the matching pattern's category, and the
         matched snippet truncated to 120 chars.
+
+        Input is truncated to ``_DEFENSE_SCAN_MAX_CHARS`` before
+        scanning. The bridge's ``BridgeConfig.max_input_chars``
+        sanitiser typically caps attacker commands at 4096 chars
+        upstream, but the underlying request body permits 32768; the
+        defense layer's hard cap prevents a pathological 32KB
+        injection-stuffed command from pinning the event loop in the
+        regex engine.
         """
         if not self._config.injection_filter_enabled:
             return DefenseVerdict(
@@ -344,12 +372,13 @@ class InjectionScorer:
                 snippet="",
                 score=0.0,
             )
+        scan_target = attacker_input[:_DEFENSE_SCAN_MAX_CHARS]
         # Collect all matches; aggregation is max-severity. Stage 1
         # only ships severity 1.0 patterns, but the structure has to
         # support fuzzy heuristics that will land in later stages.
         matches: list[tuple[float, str, str]] = []
         for spec, pattern in self._compiled:
-            match = pattern.search(attacker_input)
+            match = pattern.search(scan_target)
             if match is not None:
                 matches.append(
                     (spec["severity"], spec["category"], match.group(0)[:120]),
@@ -433,6 +462,16 @@ class ModelIntegrity:
             self._manifest_root = manifest_root
         else:
             self._manifest_root = config.ollama_manifest_dir or Path()
+
+    @property
+    def manifest_root(self) -> Path:
+        """Read-only access to the manifest directory in use.
+
+        Useful for error reporting from the bridge-startup lifespan
+        (operator wants to know which path failed) without breaking the
+        encapsulation of the internal attribute.
+        """
+        return self._manifest_root
 
     async def verify(self) -> None:
         """Run the check once. Emits exactly one audit event per call.
