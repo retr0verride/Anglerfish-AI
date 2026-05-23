@@ -23,7 +23,8 @@ the README first. The wizard refuses to proceed until you accept it.
 | Concern         | Requirement                                                       |
 |-----------------|-------------------------------------------------------------------|
 | ISO host        | A linux host with `live-build` (to build the ISO) **or** a release artefact downloaded from GitHub Releases. |
-| LLM             | An Ollama instance reachable from the service NIC. Trusted-remote (your GPU box) is the supported default; on-host install is opt-in at ISO build time. |
+| LLM             | **Ollama co-located on the Anglerfish VM** (recommended — see [`PRODUCT.md`](PRODUCT.md) and [`MODEL_SETUP.md`](MODEL_SETUP.md)). Trusted-remote Ollama is supported via `trusted_remote_host` but adds operational complexity for no gain on single-honeypot deployments. |
+| GPU             | NVIDIA card with ≥12GB VRAM passed through to the Anglerfish VM. RTX 3060 12GB is the reference. CPU-only works but inference is slow enough to break the deception. See [`proxmox.md`](proxmox.md) §1.3 for passthrough setup. |
 | Operator access | An ED25519 SSH public key. The wizard installs it into the operator account; nothing else gets you back into the VM. |
 | Optional        | A MaxMind licence key for first-boot GeoLite2 fetch. Without it, geo enrichment is empty until you stage `.mmdb` files manually. |
 
@@ -79,14 +80,28 @@ package versions land in `build/manifest.txt` (live-build's default).
 
 ### 2.3 Build-time options
 
-The build hooks read two environment variables, both optional:
+The build hooks read environment variables. All optional.
 
 | Variable                    | Default | Meaning                                                    |
 |-----------------------------|---------|------------------------------------------------------------|
 | `ANGLERFISH_INSTALL_OLLAMA` | `0`     | When `1`, hook `0060` installs Ollama on-host (+5 GB ISO). |
 
-Trusted-remote Ollama remains the supported default; the on-host
-path exists for air-gapped deployments.
+**Recommendation for new deployments:** set `ANGLERFISH_INSTALL_OLLAMA=1`.
+The slim-ISO path still works (you `curl | sh` Ollama in after first
+boot per [`MODEL_SETUP.md`](MODEL_SETUP.md)), but the on-host install
+is the canonical path now that Ollama runs co-located with the bridge
+on a loopback endpoint. See [`proxmox.md`](proxmox.md) §1.3 for the
+GPU-passthrough rationale and [`PRODUCT.md`](PRODUCT.md) for the
+design principle.
+
+```bash
+# Build with Ollama baked in (recommended)
+ANGLERFISH_INSTALL_OLLAMA=1 sudo ./iso/build.sh
+```
+
+Trusted-remote Ollama still works for the rare cases (multi-honeypot
+fleet sharing one inference server, or operators with GPU constraints
+forcing the LLM onto a separate box).
 
 ---
 
@@ -161,9 +176,51 @@ After the wizard:
   supplied.
 * Cowrie + the bridge + the dashboard start.
 
+The bridge starts but **the fast-tier LLM model is not yet pulled** —
+the wizard configures the model *tag* but the actual model blob
+(several GB) is operator-controlled. The bridge will fail every
+Ollama call until you complete the next step.
+
 ---
 
-## 6. Verify
+## 6. Set up the local LLM
+
+SSH in over the service NIC and walk through
+[`MODEL_SETUP.md`](MODEL_SETUP.md). Short version:
+
+```bash
+ssh anglerfish-ops@<service-ip>
+
+# Tune Ollama for the honeypot workload (steps from MODEL_SETUP.md §3)
+sudo systemctl edit ollama.service
+# ... paste the [Service] block ...
+sudo systemctl daemon-reload && sudo systemctl restart ollama.service
+
+# Pull the three-tier stack (~13GB total)
+ollama pull qwen2.5-coder:7b-instruct   # fast tier — used by Stage 1
+ollama pull phi-4                        # deep tier — used by Stage 5+
+ollama pull nomic-embed-text             # embed tier — used by Stage 6+
+
+# Capture the fast-tier hash for the Stage 1 integrity check
+sudo apt install -y jq
+jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
+    ~/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5-coder/7b-instruct
+
+# Add the hash to /etc/anglerfish/anglerfish.env:
+#   ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste here>
+
+# Restart the bridge so it verifies the hash and starts serving
+sudo systemctl restart anglerfish-bridge.service
+```
+
+The full guide ([`MODEL_SETUP.md`](MODEL_SETUP.md)) covers hardware
+sizing for non-RTX-3060 GPUs, the Stage 1 hash-rotation workflow when
+you `ollama pull` an updated model, and the GPU-passthrough
+prerequisites if you skipped them earlier.
+
+---
+
+## 7. Verify
 
 From an operator host on the service NIC:
 
@@ -188,7 +245,7 @@ with the admin credentials you set in step 9 of the wizard.
 
 ---
 
-## 7. Reconfiguring
+## 8. Reconfiguring
 
 The wizard supports `--reconfigure` for changing operator-facing
 answers (IPs, model, webhook, geo key) without losing service state:
@@ -204,11 +261,19 @@ rotate it explicitly via `anglerfish credentials rotate-key`.
 
 ---
 
-## 8. Next steps
+## 9. Next steps
 
+* **[PRE_DEPLOY_CHECKLIST.md](PRE_DEPLOY_CHECKLIST.md)** — twelve-section
+  verification before exposing the honeypot to attacker traffic.
+* **[MODEL_SETUP.md](MODEL_SETUP.md)** — full LLM setup, hardware
+  sizing, hash-rotation workflow.
 * **[RUNBOOK.md](RUNBOOK.md)** — day-2 operations: rotate keys, replay
   sessions, recover from common failures.
+* **[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)** — playbook for
+  unknown failure modes.
 * **[ARCHITECTURE.md](ARCHITECTURE.md)** — what each module does, who
   talks to whom, what gets persisted.
 * **[THREAT_MODEL.md](THREAT_MODEL.md)** — STRIDE walkthrough and the
   hardening that addresses each row.
+* **[API_REFERENCE.md](API_REFERENCE.md)** — bridge and dashboard
+  endpoints + WebSocket protocol for custom integrations.

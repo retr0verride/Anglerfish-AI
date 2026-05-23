@@ -126,7 +126,8 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)   | Module-by-module walkthrough, IPC boundaries, where to look when       |
 | [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Bridge + dashboard REST endpoints, WebSocket protocol, integration examples |
 | [`docs/INSTALL.md`](docs/INSTALL.md)             | Prerequisites, ISO + Proxmox/QEMU deployment, wizard walkthrough       |
-| [`docs/proxmox.md`](docs/proxmox.md)             | Proxmox-specific bridge prep, VM config, snapshots                     |
+| [`docs/MODEL_SETUP.md`](docs/MODEL_SETUP.md)     | Local LLM install: hardware sizing, Ollama tuning, three-tier model stack, integrity hashes |
+| [`docs/proxmox.md`](docs/proxmox.md)             | Proxmox-specific bridge prep, VM config, GPU passthrough, snapshots    |
 | [`docs/proxmox-lab.md`](docs/proxmox-lab.md)     | Strict-lab variant: air-gapped bait bridge, PCAP capture, snapshot/reset workflow |
 | [`docs/PRE_DEPLOY_CHECKLIST.md`](docs/PRE_DEPLOY_CHECKLIST.md) | Top-to-bottom verification before exposing to attacker traffic         |
 | [`docs/INCIDENT_RESPONSE.md`](docs/INCIDENT_RESPONSE.md) | Playbook for the unknown — pivot, breach, audit-log gap, upstream CVE  |

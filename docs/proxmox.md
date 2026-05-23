@@ -82,6 +82,74 @@ not present:
 apt install proxmox-ve jq gawk
 ```
 
+### 1.3 GPU passthrough (for local LLM)
+
+Anglerfish runs entirely on a local LLM via Ollama, co-located with
+the bridge for loopback-only inference. That means **the GPU should
+be passed through to the Anglerfish VM**, not to any sibling VM
+(Kali, replay VM, etc.).
+
+Three reasons:
+
+1. **Architectural alignment.** The Ollama endpoint validator
+   ([`src/anglerfish/config/models.py:104-132`](../src/anglerfish/config/models.py#L104-L132))
+   defaults to loopback; remote-Ollama via `trusted_remote_host` works
+   but adds operator complexity and policy surface area for no gain
+   when one box can do both.
+2. **Mixed-role hygiene.** Hosting the defender's LLM on the same
+   VM as your attacker/replay tooling crosses defender and attacker
+   infrastructure. Even in a lab, that's bad hygiene — if the
+   attacker VM is ever compromised by something you replay, your
+   honeypot's LLM is on the same box.
+3. **Latency + nftables simplicity.** Loopback is ~0.2ms; cross-VM
+   service-net inference is ~1-5ms + TCP overhead. And co-located
+   keeps the nftables egress policy at "Splunk + dashboard, nothing
+   else" — no Ollama port to allow.
+
+A GPU can only be passed through to one VM at a time on Proxmox.
+Switch it to Anglerfish:
+
+```bash
+# Find the GPU's PCI address on the host
+lspci -nn | grep -i nvidia
+# 01:00.0 VGA compatible controller [0300]: NVIDIA Corporation GA106 [GeForce RTX 3060] [10de:2504]
+
+# If GPU is currently attached to another VM, detach first
+qm set <other-vmid> --delete hostpci0
+
+# Attach to the Anglerfish VM (replace 01:00 with your actual PCI address)
+qm set <anglerfish-vmid> --hostpci0 01:00,pcie=1,x-vga=1
+
+# Boot the VM
+qm start <anglerfish-vmid>
+```
+
+Inside the Anglerfish VM, install the NVIDIA driver and verify:
+
+```bash
+sudo apt install -y nvidia-driver firmware-misc-nonfree
+sudo reboot
+
+# After reboot
+nvidia-smi
+# Should show your card with VRAM available
+```
+
+Once `nvidia-smi` works inside the guest, proceed with the model
+install per [`MODEL_SETUP.md`](MODEL_SETUP.md).
+
+**When you'd legitimately keep the GPU elsewhere:**
+
+* Multiple Anglerfish honeypots sharing one inference server (use
+  `trusted_remote_host` in that case).
+* AI-assisted attack research on the attacker VM (you want local LLMs
+  for exploit generation). Then run smaller CPU-mode Ollama on
+  Anglerfish for the honeypot's hot path.
+* Hardware budget for two GPUs. Not the common case.
+
+None of those apply to a single-honeypot lab — pass the GPU to
+Anglerfish.
+
 ---
 
 ## 2. Deploy the VM
