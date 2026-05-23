@@ -9,26 +9,6 @@ driven by a local LLM; you see structured intelligence in Splunk, a live
 dashboard, a MITRE ATT&CK-tagged threat timeline, and an encrypted credential
 database.
 
-```
-                          ●            (the bioluminescent lure)
-                         /
-                        /
-                       *
-                      / |    .-""""""""-.
-                     /  |  .'            '.
-                    .   | /                \
-                    |   |/      O           |
-                    |   /                   |
-                     \  |    ___        ___/
-                      \  '--'   '-.__.-'
-                       '-.________________.-'
-                                /\/\/\
-                                 \/\/
-
-           █▀█ █▄░█ █▀▀ █░░ █▀▀ █▀█ █▀▀ █ █▀ █░█   ▄▀█ █
-           █▀█ █░▀█ █▄█ █▄▄ ██▄ █▀▄ █▀░ █ ▄█ █▀█   █▀█ █
-```
-
 ---
 
 ## ⚠️ Legal and ethical use

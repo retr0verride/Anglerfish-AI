@@ -173,10 +173,6 @@ ignore = [
     "PT011",  # broad pytest.raises is sometimes legitimate
     "PLR2004",
 ]
-"src/anglerfish/cli/banner.py" = [
-    "RUF001", # ASCII art uses unicode lookalikes intentionally
-    "RUF003",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["anglerfish"]

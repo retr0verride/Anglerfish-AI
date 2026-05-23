@@ -1,11 +1,17 @@
-"""ASCII banner for the Anglerfish AI CLI.
+"""CLI banner for Anglerfish AI.
 
-The banner is shipped as a string constant so it travels with the
-wheel and is available regardless of working directory or installation
-method. Two entrypoints are exposed:
+The banner is a small text block printed by ``anglerfish banner`` and
+at the top of the first-boot wizard. It deliberately does NOT include
+ASCII fish art — operators see this on tty1 during install and at the
+top of every interactive CLI invocation, where character-art renders
+inconsistently across terminals (mono-spaced vs. proportional fonts,
+unicode-block-glyph fallbacks, low-contrast themes). Plain text with
+a single accent colour reads cleanly on every terminal.
+
+Two entrypoints:
 
 * :func:`render_banner` returns the banner as a string, optionally
-  with an ANSI cyan glow on the bioluminescent lure.
+  with an ANSI cyan accent on the project name.
 * :func:`write_banner` writes the banner to a stream, autodetecting
   whether colour is appropriate from the stream's ``isatty``.
 """
@@ -20,31 +26,13 @@ __all__ = ["BANNER", "BANNER_LINES", "render_banner", "write_banner"]
 
 _ANSI_CYAN = "\x1b[1;36m"
 _ANSI_RESET = "\x1b[0m"
-_LURE_GLYPH = "●"
+_ACCENT_WORDMARK = "Anglerfish AI"
 
 
 BANNER: str = (
-    r"""
-                          .
-                         /
-                        /
-                       *
-                      / |    .-"""
-    """""-.
-                     /  |  .'            '.
-                    .   | /                \
-                    |   |/      O           |
-                    |   /                   |
-                     \\  |    ___        ___/
-                      \\  '--'   '-.__.-'
-                       '-.________________.-'
-                                /\\/\\/\
-                                 \\/\\/
-
-           █▀█ █▄░█ █▀▀ █░░ █▀▀ █▀█ █▀▀ █ █▀ █░█   ▄▀█ █
-           █▀█ █░▀█ █▄█ █▄▄ ██▄ █▀▄ █▀░ █ ▄█ █▀█   █▀█ █
-
-              AI-powered SSH honeypot · Deep-sea intel
+    """
+  Anglerfish AI
+  AI-powered SSH honeypot · Deep-sea threat intelligence
 """.lstrip("\n").rstrip()
     + "\n"
 )
@@ -56,23 +44,17 @@ BANNER_LINES: tuple[str, ...] = tuple(BANNER.splitlines())
 def render_banner(*, color: bool = True) -> str:
     """Return the banner string.
 
-    When ``color`` is true the bioluminescent lure (the standalone
-    period on the first non-empty line) is replaced with a cyan glyph
-    using ANSI escape codes. When false, the banner is returned as
-    plain ASCII suitable for log files.
+    When ``color`` is true the project name is wrapped in cyan ANSI
+    escapes. When false, the banner is returned as plain text suitable
+    for log files.
     """
     if not color:
         return BANNER
-    lines = list(BANNER_LINES)
-    for i, line in enumerate(lines):
-        if line.strip() == ".":
-            lines[i] = line.replace(
-                ".",
-                f"{_ANSI_CYAN}{_LURE_GLYPH}{_ANSI_RESET}",
-                1,
-            )
-            break
-    return "\n".join(lines) + "\n"
+    return BANNER.replace(
+        _ACCENT_WORDMARK,
+        f"{_ANSI_CYAN}{_ACCENT_WORDMARK}{_ANSI_RESET}",
+        1,
+    )
 
 
 def write_banner(stream: TextIO | None = None, *, color: bool | None = None) -> None:
