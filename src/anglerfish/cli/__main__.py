@@ -117,7 +117,9 @@ def bridge_serve(
     """
     import uvicorn
 
+    from anglerfish.audit import AuditLog
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
+    from anglerfish.bridge.defense import ModelIntegrity
 
     try:
         settings = load_settings()
@@ -125,9 +127,17 @@ def bridge_serve(
         Console().print(Panel(str(exc), title="[red]Configuration error[/red]"))
         raise typer.Exit(code=2) from exc
 
+    # Shared audit log: defense fires (per-request) AND model integrity
+    # results (startup) both write to the same JSONL append-only log.
+    audit_log = AuditLog()
     ai_client = OllamaClient(settings.ollama)
-    service = AIBridgeService(settings, client=ai_client)
-    application = create_bridge_app(service)
+    integrity = ModelIntegrity(
+        settings.defense,
+        settings.ollama.model,
+        audit_log,
+    )
+    service = AIBridgeService(settings, client=ai_client, audit_log=audit_log)
+    application = create_bridge_app(service, integrity=integrity)
     uvicorn.run(application, host=host, port=port, log_level=settings.log_level.value.lower())
 
 

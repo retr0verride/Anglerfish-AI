@@ -14,8 +14,10 @@ from __future__ import annotations
 __all__ = [
     "BridgeError",
     "GlobalQueueTimeoutError",
+    "InjectionDetectedError",
     "OllamaResponseError",
     "OllamaUnavailableError",
+    "OutputFilterFiredError",
     "SessionRateLimitedError",
 ]
 
@@ -38,3 +40,20 @@ class SessionRateLimitedError(BridgeError):
 
 class GlobalQueueTimeoutError(BridgeError):
     """Global Ollama concurrency slot could not be acquired in time."""
+
+
+class InjectionDetectedError(BridgeError):
+    """Attacker input matched a Stage 1 injection-scorer signature.
+
+    Carries the firing :class:`~anglerfish.bridge.defense.DefenseVerdict`
+    for audit-log enrichment. The bridge converts this into a fallback
+    response so the attacker never learns defense fired.
+    """
+
+
+class OutputFilterFiredError(BridgeError):
+    """LLM response matched a Stage 1 output-filter signature.
+
+    Same handling as :class:`InjectionDetectedError`: caught by the
+    bridge, replaced with a fallback response, audit-logged.
+    """

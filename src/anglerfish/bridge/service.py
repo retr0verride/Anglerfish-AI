@@ -25,12 +25,20 @@ import time
 from collections.abc import Callable
 from typing import Self
 
+from anglerfish.audit import AuditLog
 from anglerfish.bridge.client import OllamaClient
+from anglerfish.bridge.defense import (
+    DefenseVerdict,
+    InjectionScorer,
+    OutputFilter,
+)
 from anglerfish.bridge.errors import (
     BridgeError,
     GlobalQueueTimeoutError,
+    InjectionDetectedError,
     OllamaResponseError,
     OllamaUnavailableError,
+    OutputFilterFiredError,
     SessionRateLimitedError,
 )
 from anglerfish.bridge.fallback import fallback_response
@@ -56,12 +64,27 @@ class AIBridgeService:
         *,
         client: OllamaClient,
         limiter: BridgeRateLimiter | None = None,
+        audit_log: AuditLog | None = None,
+        output_filter: OutputFilter | None = None,
+        injection_scorer: InjectionScorer | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
     ) -> None:
         self._settings = settings
         self._client = client
         self._limiter = limiter if limiter is not None else BridgeRateLimiter(settings.rate_limit)
+        # The defense layer is constructed here from settings.defense by
+        # default so simple call-sites (CLI, tests) don't have to know
+        # about its existence. Production code may pass explicit
+        # instances to share them across services or pre-load operator
+        # overrides at startup.
+        self._audit_log = audit_log if audit_log is not None else AuditLog()
+        self._output_filter = (
+            output_filter if output_filter is not None else OutputFilter(settings.defense)
+        )
+        self._injection_scorer = (
+            injection_scorer if injection_scorer is not None else InjectionScorer(settings.defense)
+        )
         self._monotonic = monotonic
         self._logger = logger if logger is not None else logging.getLogger(__name__)
 
@@ -104,6 +127,26 @@ class AIBridgeService:
             )
             return BridgeResponse(text="", source=ResponseSource.AI, latency_ms=0.0)
 
+        # Defense layer (Stage 1): injection scorer on sanitised input.
+        # Runs before the `cd` shortcut because an injection attempt
+        # disguised as `cd <attack>` still warrants the audit signal.
+        # When fired, skip Ollama entirely and use a scripted fallback
+        # so the attacker can't tell defense triggered.
+        injection_verdict = self._injection_scorer.score(sanitised)
+        if injection_verdict.fired:
+            start = self._monotonic()
+            self._record_defense_fire(session, injection_verdict)
+            text, source = self._fallback(
+                session,
+                sanitised,
+                reason=InjectionDetectedError(
+                    f"{injection_verdict.detector} fired (score={injection_verdict.score})",
+                ),
+            )
+            latency_ms = (self._monotonic() - start) * 1000.0
+            session.record(sanitised, text, source=source, latency_ms=latency_ms)
+            return BridgeResponse(text=text, source=source, latency_ms=latency_ms)
+
         # `cd` is handled deterministically so cwd never depends on the LLM.
         if self._handle_cd(session, sanitised):
             session.record(
@@ -115,8 +158,10 @@ class AIBridgeService:
             return BridgeResponse(text="", source=ResponseSource.AI, latency_ms=0.0)
 
         start = self._monotonic()
-        text: str
-        source: ResponseSource
+        # Note: `text` and `source` types are inferred from both branches
+        # (try / except). The explicit annotations that used to live here
+        # are no longer necessary since the injection branch above
+        # establishes the types via destructuring assignment.
         try:
             async with self._limiter.slot(session.session_id):
                 messages = build_messages(
@@ -126,6 +171,15 @@ class AIBridgeService:
                     history=session.history(),
                 )
                 raw = await self._client.chat(messages)
+                # Defense layer (Stage 1): output filter post-Ollama,
+                # pre-cap. Raises OutputFilterFiredError which the
+                # existing except block converts to a fallback response.
+                output_verdict = self._output_filter.check(raw)
+                if output_verdict.fired:
+                    self._record_defense_fire(session, output_verdict)
+                    raise OutputFilterFiredError(
+                        f"{output_verdict.detector} fired (score={output_verdict.score})",
+                    )
                 text = cap_output(
                     raw,
                     max_chars=self._settings.ollama.max_response_chars,
@@ -134,6 +188,7 @@ class AIBridgeService:
         except (
             OllamaUnavailableError,
             OllamaResponseError,
+            OutputFilterFiredError,
             SessionRateLimitedError,
             GlobalQueueTimeoutError,
         ) as exc:
@@ -142,6 +197,22 @@ class AIBridgeService:
         latency_ms = (self._monotonic() - start) * 1000.0
         session.record(sanitised, text, source=source, latency_ms=latency_ms)
         return BridgeResponse(text=text, source=source, latency_ms=latency_ms)
+
+    def _record_defense_fire(
+        self,
+        session: SessionContext,
+        verdict: DefenseVerdict,
+    ) -> None:
+        """Audit-log a defense trigger. Asymmetric observability: we
+        always know defense fired, the attacker never does."""
+        self._audit_log.record(
+            "bridge.defense_fired",
+            detector=verdict.detector,
+            score=verdict.score,
+            snippet=verdict.snippet,
+            session_id=str(session.session_id),
+            attacker_ip=session.source_ip,
+        )
 
     def _fallback(
         self,

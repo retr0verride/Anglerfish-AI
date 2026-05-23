@@ -35,6 +35,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from anglerfish import __version__
+from anglerfish.bridge.defense import ModelIntegrity
 from anglerfish.bridge.service import AIBridgeService
 from anglerfish.bridge.session import SessionContext
 
@@ -137,8 +138,22 @@ class CommandResponse(BaseModel):
     cwd: str
 
 
-def create_bridge_app(service: AIBridgeService) -> FastAPI:
-    """Build the FastAPI app that exposes ``service`` over HTTP."""
+def create_bridge_app(
+    service: AIBridgeService,
+    *,
+    integrity: ModelIntegrity | None = None,
+) -> FastAPI:
+    """Build the FastAPI app that exposes ``service`` over HTTP.
+
+    ``integrity`` runs once during startup (lifespan enter) before any
+    requests are accepted. When unset, the integrity check is skipped
+    entirely — useful for tests and dev loops; production deployments
+    should construct it from settings.defense and pass it here.
+
+    A :class:`ModelIntegrityError` raised by ``integrity.verify()``
+    propagates out of the lifespan, which uvicorn surfaces as a
+    non-zero process exit. The bridge does not start in that state.
+    """
     logger = logging.getLogger(__name__)
     settings = service.settings
     sessions: dict[UUID, SessionContext] = {}
@@ -146,6 +161,11 @@ def create_bridge_app(service: AIBridgeService) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if integrity is not None:
+            # Raises ModelIntegrityError on hash mismatch; uvicorn then
+            # exits non-zero. Refuse-to-serve is the correct posture for
+            # a backdoored/swapped model — see Stage 1 design doc.
+            await integrity.verify()
         yield
         await service.aclose()
 
