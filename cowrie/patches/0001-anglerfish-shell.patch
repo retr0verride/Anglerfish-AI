@@ -1,0 +1,57 @@
+From: Anglerfish AI <noreply@anglerfish-ai.local>
+Subject: [PATCH] Route Cowrie shell input through the Anglerfish bridge
+
+Insert one import and a single hook call at the top of
+HoneyPotShell.lineReceived so attacker input goes through the Anglerfish
+bridge (LLM-driven response) before Cowrie's static command registry
+sees it. If the bridge has nothing to say, control falls through to the
+original Cowrie dispatch — Cowrie's command implementations keep working
+as a fallback.
+
+This patch is an alternative to the runtime monkey-patch installed by
+``anglerfish.integration.cowrie_shell_adapter.install()``. Both produce
+the same behaviour; the patch is preferred when operators want a fully
+auditable Cowrie checkout. Apply with:
+
+    cd /opt/cowrie
+    git apply /path/to/0001-anglerfish-shell.patch
+
+Tested against Cowrie v2.5.0 (commit 35e4ebd). On future Cowrie releases,
+update the context lines below to match the local source.
+
+---
+ src/cowrie/shell/honeypot.py | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/cowrie/shell/honeypot.py b/src/cowrie/shell/honeypot.py
+--- a/src/cowrie/shell/honeypot.py
++++ b/src/cowrie/shell/honeypot.py
+@@ -1,6 +1,12 @@
+ # Copyright (c) 2009-2014 Upi Tamminen <desaster@gmail.com>
+ # See the COPYRIGHT file for more information
+
++# --- Anglerfish AI integration -------------------------------------------
++try:
++    from anglerfish.integration import cowrie_shell_adapter as _anglerfish_adapter
++except ImportError:  # pragma: no cover - Anglerfish not installed alongside Cowrie
++    _anglerfish_adapter = None
++# -------------------------------------------------------------------------
++
+ from __future__ import annotations
+
+ import copy
+@@ -100,6 +106,12 @@ class HoneyPotShell:
+         """
+         Called when the attacker has typed a line and pressed Enter.
+         """
++        # Anglerfish hook: route to the bridge first. If the bridge
++        # returns content, it writes to the terminal and shows the
++        # next prompt itself; we then return without dispatching.
++        if _anglerfish_adapter is not None and _anglerfish_adapter.is_installed():
++            return _anglerfish_adapter._patched_line_received(self, line)  # noqa: SLF001
++
+         log.msg(eventid="cowrie.command.input", input=line, format="CMD: %(input)s")
+         self.lexer = shlex.shlex(instream=line, posix=True, punctuation_chars=True)
+         self.lexer.whitespace_split = True
+--
+2.45.0

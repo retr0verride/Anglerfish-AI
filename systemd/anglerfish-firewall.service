@@ -1,0 +1,17 @@
+[Unit]
+Description=Anglerfish AI service-network firewall (nftables)
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+DefaultDependencies=no
+After=network-pre.target
+Before=network.target network-online.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/anglerfish/nftables/anglerfish.nft
+ExecReload=/usr/sbin/nft -f /etc/anglerfish/nftables/anglerfish.nft
+ExecStop=/usr/sbin/nft delete table inet anglerfish
+
+[Install]
+WantedBy=multi-user.target

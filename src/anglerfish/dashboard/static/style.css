@@ -1,0 +1,273 @@
+/* Anglerfish AI — deep-sea bioluminescent theme. */
+
+:root {
+  --abyss: #02060f;
+  --abyss-2: #050b1d;
+  --abyss-3: #0a1530;
+  --kelp: #0f2849;
+  --bioluminescence: #22d3ee;
+  --bioluminescence-soft: #67e8f9;
+  --warning: #fb923c;
+  --alert: #f43f5e;
+  --text: #e2f3ff;
+  --text-dim: #94a8c0;
+  --border: rgba(34, 211, 238, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: radial-gradient(ellipse at top, var(--abyss-2) 0%, var(--abyss) 60%);
+  color: var(--text);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 100vh;
+  scrollbar-color: var(--bioluminescence) var(--abyss);
+}
+
+a {
+  color: var(--bioluminescence);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.lure {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--abyss-3) 0%, transparent 100%);
+}
+
+/* Wrapper exists so the throbbing orb pseudo-element can position
+   relative to the rendered image bounds. */
+.lure__sigil-wrap {
+  position: relative;
+  display: inline-flex;
+  height: 4rem;
+  /* Soft ambient halo around the whole mark. */
+  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.18));
+}
+
+.lure__sigil {
+  height: 4rem;
+  width: auto;
+  display: block;
+}
+
+/* Throbbing cyan glow anchored on the esca. Esca centroid measured at
+   77.6% from left, 32.5% from top of the source image — those
+   percentages survive aspect-preserving resizes, so the overlay stays
+   on target at any display size.
+
+   `mix-blend-mode: screen` makes the glow brighten the underlying orb
+   pixels and bleed a halo outward instead of obscuring them. */
+.lure__sigil-wrap::after {
+  content: "";
+  position: absolute;
+  top: 32.5%;
+  left: 77.6%;
+  width: 50%;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(180, 248, 255, 0.95) 0%,
+    rgba(103, 232, 249, 0.55) 25%,
+    rgba(34, 211, 238, 0.18) 55%,
+    transparent 75%
+  );
+  pointer-events: none;
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%);
+  animation: esca-throb 2.2s ease-in-out infinite;
+}
+
+@keyframes esca-throb {
+  0%, 100% {
+    opacity: 0.55;
+    transform: translate(-50%, -50%) scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.25);
+  }
+}
+
+.lure__title {
+  font-size: 1.5rem;
+  letter-spacing: 0.18em;
+  color: var(--bioluminescence-soft);
+  text-shadow: 0 0 8px rgba(34, 211, 238, 0.4);
+}
+
+.lure__subtitle {
+  grid-column: 2;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+.lure__status {
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.lure__status[data-status="open"]    { color: var(--bioluminescence); border-color: var(--bioluminescence); }
+.lure__status[data-status="closed"]  { color: var(--alert); border-color: var(--alert); }
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+  display: grid;
+  gap: 2rem;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--abyss-3);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.card h2 {
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+}
+
+.card__value {
+  font-size: 2rem;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--bioluminescence-soft);
+}
+
+.card--alert .card__value {
+  color: var(--alert);
+}
+
+.panel {
+  background: var(--abyss-3);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.panel__title {
+  font-size: 0.8rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.stream {
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+  max-height: 360px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+}
+
+.stream li {
+  padding: 0.5rem 0.75rem;
+  background: var(--kelp);
+  border-radius: 6px;
+  border-left: 3px solid var(--bioluminescence);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stream li.is-ai       { border-left-color: var(--bioluminescence); }
+.stream li.is-fallback { border-left-color: var(--warning); }
+.stream li.is-rejected { border-left-color: var(--alert); }
+
+.stream__cmd      { color: var(--bioluminescence-soft); }
+.stream__response { color: var(--text-dim); font-size: 0.8rem; margin-top: 0.25rem; }
+.stream__meta     { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 0.25rem; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.table th {
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.table tbody tr:hover {
+  background: rgba(34, 211, 238, 0.04);
+}
+
+.score-bar {
+  display: inline-block;
+  height: 0.5rem;
+  width: 80px;
+  background: var(--kelp);
+  border-radius: 999px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 0.5rem;
+}
+
+.score-bar__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--bioluminescence), var(--alert));
+}
+
+.meta {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+
+.footer {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  border-top: 1px solid var(--border);
+}

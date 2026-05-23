@@ -1,0 +1,45 @@
+#!/bin/sh
+# Optional on-host Ollama install.
+#
+# Default is trusted-remote: the operator points the bridge at an
+# Ollama instance running on a separate GPU box. On-host install is
+# opt-in via a build-time environment variable so we do not pay the
+# ~5 GB / dbus-requiring install cost by default.
+#
+# To opt in, export ANGLERFISH_INSTALL_OLLAMA=1 in the live-build
+# environment before running ./iso/build.sh. The hook then runs the
+# official Ollama install script under curl|sh, which is acceptable
+# inside an unprivileged chroot — the resulting binary is captured in
+# the image and never re-fetched at runtime.
+#
+# We deliberately avoid pulling a model in the chroot: model bytes are
+# large (multi-GB), and the operator may want a different model than
+# our default. The bridge runs `ollama pull` lazily on first use, or
+# the operator can pre-pull via `ollama pull <model>` after first
+# boot.
+
+set -e
+
+if [ "${ANGLERFISH_INSTALL_OLLAMA:-0}" != "1" ]; then
+    echo "[anglerfish] on-host Ollama install skipped (default: trusted-remote)."
+    echo "[anglerfish] set ANGLERFISH_INSTALL_OLLAMA=1 at build time to opt in."
+    exit 0
+fi
+
+# `curl | sh` inside an offline chroot won't work; live-build hooks run
+# with network access by default, but we guard for the offline case so
+# the failure message is helpful.
+if ! command -v curl >/dev/null 2>&1; then
+    echo "[anglerfish] curl missing; cannot fetch the Ollama install script." >&2
+    exit 1
+fi
+
+echo "[anglerfish] installing Ollama on-host (operator opted in)..."
+curl --fail --silent --show-error --location https://ollama.com/install.sh | sh
+
+# Ollama's installer writes /etc/systemd/system/ollama.service. Enable
+# it so the bridge can reach 127.0.0.1:11434 after the wizard finishes.
+# The service starts on multi-user.target alongside the bridge.
+if [ -f /etc/systemd/system/ollama.service ]; then
+    systemctl enable ollama.service
+fi

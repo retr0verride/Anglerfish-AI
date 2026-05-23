@@ -1,0 +1,17 @@
+#!/bin/sh
+# Clone and install Cowrie into /opt/cowrie inside the chroot.
+
+set -e
+
+mkdir -p /opt/cowrie
+chown cowrie:cowrie /opt/cowrie
+
+su - cowrie -s /bin/sh <<'EOF'
+set -e
+cd /opt/cowrie
+git clone --depth=1 --branch v2.5.0 https://github.com/cowrie/cowrie .
+python3 -m venv cowrie-env
+. cowrie-env/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+EOF

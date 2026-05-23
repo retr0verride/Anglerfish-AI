@@ -1,0 +1,94 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit test / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+htmlcov/
+
+# Mypy / Ruff
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# Environments
+.env
+.env.local
+.env.*.local
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / editor
+.idea/
+*.iml
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Anglerfish runtime state — never commit captured intelligence
+/var/
+sessions.jsonl
+*.jsonl
+credentials.db
+credentials.db.*
+geo/GeoLite2-*.mmdb
+
+# ISO build artifacts
+iso/build/
+iso/cache/
+iso/chroot/
+iso/binary/
+*.iso
+*.iso.sig
+*.iso.sha256
+
+# Cowrie runtime
+cowrie/var/
+cowrie/log/
+cowrie/dl/
+
+# Pre-commit
+.pre-commit-cache/

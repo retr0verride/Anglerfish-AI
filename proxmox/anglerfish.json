@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "anglerfish/proxmox-vm-template",
+  "description": "Default Proxmox VM parameters for an Anglerfish AI honeypot. deploy.sh reads this file when constructing the qm-create command. Operators may copy + edit; deploy.sh accepts --template <path> to override.",
+  "vm": {
+    "memory_mib": 4096,
+    "cores": 4,
+    "sockets": 1,
+    "cpu": "host",
+    "disk_gib": 32,
+    "disk_storage": "local-lvm",
+    "ostype": "l26",
+    "scsihw": "virtio-scsi-pci",
+    "machine": "q35",
+    "boot": "order=ide2;scsi0",
+    "agent": "enabled=1",
+    "onboot": 1,
+    "balloon": 0,
+    "tablet": 0
+  },
+  "network": {
+    "bait_bridge": "vmbr-bait",
+    "service_bridge": "vmbr-service",
+    "bait_model": "virtio",
+    "service_model": "virtio"
+  },
+  "iso": {
+    "storage": "local",
+    "filename_glob": "anglerfish-ai-*.iso"
+  },
+  "host_prereqs": {
+    "expected_bridges": ["vmbr-bait", "vmbr-service"],
+    "notes": [
+      "vmbr-bait should be attached to a physical NIC exposed to attacker traffic; never to the Proxmox management NIC.",
+      "vmbr-service should be attached to the operator network so the dashboard and SSH ops are reachable.",
+      "Neither bridge should be the same as vmbr0 unless the operator has explicitly designed for it."
+    ]
+  }
+}

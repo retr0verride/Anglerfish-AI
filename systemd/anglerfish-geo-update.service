@@ -1,0 +1,38 @@
+[Unit]
+Description=Anglerfish AI — refresh MaxMind GeoLite2 databases
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/anglerfish/anglerfish.env
+
+[Service]
+Type=oneshot
+User=anglerfish
+Group=anglerfish
+EnvironmentFile=/etc/anglerfish/anglerfish.env
+ExecStart=/opt/anglerfish/venv/bin/anglerfish geo update
+
+# Hardening — this unit downloads files and writes them to the geo
+# database directory. It needs network access and write access to one
+# directory, nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/anglerfish/geo /var/log/anglerfish
+PrivateDevices=yes

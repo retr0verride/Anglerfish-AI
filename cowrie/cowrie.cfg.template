@@ -1,0 +1,47 @@
+# Cowrie configuration for Anglerfish AI deployments.
+#
+# Drop this file at /opt/cowrie/etc/cowrie.cfg before starting Cowrie.
+# The first-boot wizard renders the matching .env so that the
+# referenced environment variables resolve at startup.
+
+[honeypot]
+# Identification — keep consistent with bridge.fake_hostname
+hostname = ${ANGLERFISH_COWRIE__HOSTNAME}
+log_path = /var/log/cowrie
+download_path = /var/lib/anglerfish/downloads
+data_path = /opt/cowrie/data
+
+# Banner emitted to attackers — kept generic.
+ssh_version_string = SSH-2.0-OpenSSH_8.9p1 Debian-1ubuntu1
+banner_file =
+
+# Connection limits.
+auth_class = AuthRandom
+auth_class_parameters = 2, 5, 10
+
+[ssh]
+enabled = true
+listen_endpoints = tcp:${ANGLERFISH_COWRIE__SSH_LISTEN_PORT}:interface=0.0.0.0
+sftp_enabled = false
+forwarding = false
+forward_redirect = false
+forward_tunnel = false
+
+[telnet]
+enabled = true
+listen_endpoints = tcp:${ANGLERFISH_COWRIE__TELNET_LISTEN_PORT}:interface=0.0.0.0
+
+[output_anglerfish]
+# Anglerfish output plugin (lives in the anglerfish-ai package).
+enabled = true
+
+[output_jsonlog]
+enabled = true
+logfile = ${ANGLERFISH_COWRIE__LOG_PATH}
+epoch_timestamp = false
+
+[shell]
+# The Anglerfish AI integration intercepts unknown commands and routes
+# them through the bridge HTTP API. See cowrie/README.md for details.
+filesystem = share/cowrie/fs.pickle
+processes = share/cowrie/cmdoutput.json

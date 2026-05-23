@@ -1,0 +1,34 @@
+[Unit]
+Description=Cowrie SSH/Telnet honeypot (Anglerfish AI flavour)
+Documentation=https://github.com/cowrie/cowrie
+After=network-online.target anglerfish-bridge.service
+Wants=network-online.target anglerfish-bridge.service
+
+[Service]
+Type=exec
+User=cowrie
+Group=cowrie
+WorkingDirectory=/opt/cowrie
+EnvironmentFile=/etc/anglerfish/anglerfish.env
+ExecStart=/opt/cowrie/bin/cowrie start --nodaemon
+Restart=on-failure
+RestartSec=3s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallFilter=@system-service
+ReadWritePaths=/opt/cowrie/var /var/log/cowrie
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

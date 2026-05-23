@@ -1,0 +1,286 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anglerfish-ai"
+version = "0.1.0"
+description = "AI-powered SSH honeypot — lures attackers into a convincing LLM-driven fake shell, scores threats with MITRE ATT&CK mapping, and ships intelligence to Splunk."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Anglerfish AI contributors" }]
+keywords = [
+    "honeypot",
+    "ssh",
+    "security",
+    "threat-intelligence",
+    "llm",
+    "ai",
+    "mitre-attack",
+    "splunk",
+    "cowrie",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: No Input/Output (Daemon)",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.2,<3",
+    "httpx>=0.27,<1",
+    "structlog>=24.1,<26",
+    "typer>=0.12,<1",
+    "rich>=13.7,<15",
+    "anyio>=4.3,<5",
+]
+
+[project.optional-dependencies]
+dashboard = [
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.29,<1",
+    "websockets>=12.0,<14",
+    "jinja2>=3.1,<4",
+    "itsdangerous>=2.0,<3",
+    "bcrypt>=4.0,<6",
+]
+geo = [
+    "maxminddb>=2.6,<3",
+]
+credentials = [
+    "cryptography>=46.0.7,<47",
+]
+all = [
+    "anglerfish-ai[dashboard,geo,credentials]",
+]
+dev = [
+    # Test toolchain
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1.0,<2",
+    "pytest-cov>=5.0,<8",
+    "pip-audit>=2.7,<3",
+    "bandit[toml]>=1.7,<2",
+    # Lint / type-check
+    "ruff>=0.4.4,<1",
+    "mypy>=1.10,<2",
+    "pre-commit>=3.7,<5",
+    # All runtime extras flattened in for full test coverage.
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.29,<1",
+    "websockets>=12.0,<14",
+    "jinja2>=3.1,<4",
+    "itsdangerous>=2.0,<3",
+    "bcrypt>=4.0,<6",
+    "maxminddb>=2.6,<3",
+    "cryptography>=46.0.7,<47",
+]
+
+[project.scripts]
+anglerfish = "anglerfish.cli.__main__:app"
+anglerfish-wizard = "anglerfish.wizard.__main__:app"
+
+[project.urls]
+Homepage = "https://github.com/retr0verride/Anglerfish-AI"
+Repository = "https://github.com/retr0verride/Anglerfish-AI"
+Issues = "https://github.com/retr0verride/Anglerfish-AI/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["anglerfish*"]
+
+[tool.setuptools.package-data]
+anglerfish = [
+    "py.typed",
+    "dashboard/templates/*.html",
+    "dashboard/static/*.css",
+    "dashboard/static/*.js",
+    "dashboard/static/*.png",
+    "dashboard/static/*.svg",
+    "dashboard/static/*.webp",
+    "dashboard/static/*.ico",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["iso", "cowrie", "systemd", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "S",        # bandit
+    "BLE",      # blind-except
+    "A",        # builtins-shadowing
+    "C4",       # comprehensions
+    "DTZ",      # datetime-without-timezone
+    "ERA",      # eradicate (no commented-out code)
+    "PIE",
+    "PT",       # pytest style
+    "Q",        # quotes
+    "RET",      # return rules
+    "RSE",      # raise rules
+    "RUF",      # ruff-specific
+    "SIM",      # simplify
+    "SLF",      # private-member-access
+    "TCH",      # type-checking imports
+    "TID",      # tidy imports
+    "ASYNC",    # async sins
+    "ARG",      # unused arguments
+    "PERF",     # perf anti-patterns
+]
+ignore = [
+    "E501",    # line length — formatter handles it
+    "RUF012",  # mutable class attrs — pydantic patterns rely on these
+    "S105",    # hardcoded password — model fields are not passwords
+    "S106",
+    # TC rules push type-only imports under `if TYPE_CHECKING:`. Every
+    # source file uses `from __future__ import annotations`, so this is
+    # purely stylistic — the benefit is import-cost, which is irrelevant
+    # for a systemd-resident daemon. Enabling them adds ~90 lines of
+    # churn across the test suite with no runtime payoff.
+    "TC001",
+    "TC002",
+    "TC003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # use of assert is the whole point in tests
+    "S104",   # "0.0.0.0" in assertions is not a bind
+    "S105",
+    "S106",
+    "S108",   # /tmp path literals in tests are not file operations
+    "SLF001", # tests probe internals
+    "ARG001", # unused fixtures
+    "PT011",  # broad pytest.raises is sometimes legitimate
+    "PLR2004",
+]
+"src/anglerfish/cli/banner.py" = [
+    "RUF001", # ASCII art uses unicode lookalikes intentionally
+    "RUF003",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["anglerfish"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+disallow_any_unimported = true
+no_implicit_reexport = true
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+files = ["src/anglerfish", "tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = [
+    "maxminddb",
+    "maxminddb.*",
+    "cowrie",
+    "cowrie.*",
+    "uvicorn",
+]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=anglerfish",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+    "--cov-fail-under=90",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:pydantic.*",
+    "ignore::DeprecationWarning:pydantic_core.*",
+    "ignore::DeprecationWarning:websockets.*",
+    "ignore::DeprecationWarning:starlette.*",
+    # Sync-test setup that briefly opens an asyncio.run loop sometimes
+    # gets reported as a leaked event loop by Python 3.13's __del__ —
+    # cosmetic, not a real resource leak.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore::ResourceWarning",
+]
+markers = [
+    "slow: tests that take more than a second to run",
+    "integration: tests that touch the network or filesystem outside of tmp_path",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["anglerfish"]
+parallel = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+    "@abstractmethod",
+]
+
+# ---------------------------------------------------------------------------
+# Bandit — static security scanner. Ruff `S` rules cover the common cases;
+# bandit adds a couple of additional checks (deserialisation, SQL string
+# concatenation, weak random). Tests use asserts as type-narrowing and have
+# /tmp paths in fixtures, both of which bandit flags noisily — skip them.
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = ["tests", "build", "dist", "iso", "cowrie", "systemd"]
+skips = [
+    "B101",  # assert_used — we use asserts for type narrowing and invariants
+]
+

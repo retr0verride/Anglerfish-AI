@@ -1,0 +1,39 @@
+#!/bin/sh
+# Install the anglerfish-ai Python package into an isolated venv at
+# /opt/anglerfish/venv, owned by root. Every systemd unit invokes the
+# venv's entry points directly (no PATH dependence). The system
+# Python is not touched — no --break-system-packages.
+#
+# The package is expected to have been copied into /tmp/anglerfish-ai
+# by the surrounding build orchestration. If absent the hook falls
+# back to PyPI.
+
+set -e
+
+VENV=/opt/anglerfish/venv
+
+install -d -o root -g root -m 0755 /opt/anglerfish
+
+python3 -m venv "${VENV}"
+
+# Upgrade pip inside the venv. Use the venv's own pip; never touch
+# the system site-packages.
+"${VENV}/bin/pip" install --no-cache-dir --upgrade pip wheel
+
+if [ -d /tmp/anglerfish-ai ]; then
+    "${VENV}/bin/pip" install --no-cache-dir "/tmp/anglerfish-ai[all]"
+else
+    "${VENV}/bin/pip" install --no-cache-dir "anglerfish-ai[all]"
+fi
+
+# Verify the entry points landed inside the venv.
+test -x "${VENV}/bin/anglerfish"
+test -x "${VENV}/bin/anglerfish-wizard"
+test -x "${VENV}/bin/uvicorn"
+
+# Convenience wrappers in /usr/local/bin so operators dropping to the
+# console can run `anglerfish` without sourcing the venv. The systemd
+# units bypass these and call the venv directly.
+for entry in anglerfish anglerfish-wizard; do
+    ln -sfn "${VENV}/bin/${entry}" "/usr/local/bin/${entry}"
+done

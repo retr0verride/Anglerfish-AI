@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Anglerfish AI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="lure">
+    <span class="lure__sigil-wrap">
+      <img class="lure__sigil" src="/static/anglerfish-logo.png" alt="Anglerfish AI" />
+    </span>
+    <h1 class="lure__title">ANGLERFISH AI</h1>
+    <p class="lure__subtitle">Deep-sea SSH honeypot · v{{ version }}</p>
+    <div class="lure__status" id="ws-status" aria-live="polite">connecting…</div>
+  </header>
+
+  <main>
+    <section class="cards" aria-label="Statistics">
+      <article class="card" data-stat="active_sessions">
+        <h2>Active sessions</h2>
+        <p class="card__value">—</p>
+      </article>
+      <article class="card" data-stat="total_commands_observed">
+        <h2>Commands observed</h2>
+        <p class="card__value">—</p>
+      </article>
+      <article class="card" data-stat="total_threat_assessments">
+        <h2>Threat assessments</h2>
+        <p class="card__value">—</p>
+      </article>
+      <article class="card card--alert" data-stat="high_severity_count">
+        <h2>High-severity</h2>
+        <p class="card__value">—</p>
+      </article>
+      <article class="card card--alert" data-stat="persistence_attempt_count">
+        <h2>Persistence attempts</h2>
+        <p class="card__value">—</p>
+      </article>
+    </section>
+
+    <section class="panel" aria-label="Live commands">
+      <h2 class="panel__title">Live command stream</h2>
+      <ol class="stream" id="command-stream" aria-live="polite"></ol>
+    </section>
+
+    <section class="panel" aria-label="Recent threats">
+      <h2 class="panel__title">Recent threat assessments</h2>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Score</th>
+            <th>Persistence</th>
+            <th>Techniques</th>
+          </tr>
+        </thead>
+        <tbody id="threat-table"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" aria-label="Credentials">
+      <h2 class="panel__title">Credential intelligence</h2>
+      <div id="credentials-meta" class="meta"></div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Source IP</th>
+            <th>Username</th>
+            <th>Password</th>
+            <th>Attempts</th>
+            <th>Last seen</th>
+          </tr>
+        </thead>
+        <tbody id="credentials-table"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>
+      Anglerfish AI · <a href="https://github.com/retr0verride/Anglerfish-AI">github</a> ·
+      For authorised research use only.
+    </p>
+  </footer>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

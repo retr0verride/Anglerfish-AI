@@ -1,0 +1,34 @@
+[Unit]
+Description=Anglerfish AI first-boot configuration wizard
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+After=network-online.target
+ConditionPathExists=!/etc/anglerfish/anglerfish.env
+DefaultDependencies=no
+Before=anglerfish-bridge.service anglerfish-dashboard.service multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+ExecStart=/opt/anglerfish/venv/bin/anglerfish-wizard --env /etc/anglerfish/anglerfish.env
+
+# Re-enable getty@tty1 once the wizard completes successfully so the
+# operator can log in on the console for diagnostics. The chroot hook
+# masks getty@tty1 at image-build time so the wizard owns the tty on
+# first boot; we undo that mask here. Only runs when ExecStart returned
+# 0 (Type=oneshot's success contract).
+ExecStartPost=/bin/systemctl unmask getty@tty1.service
+ExecStartPost=/bin/systemctl start getty@tty1.service
+
+# Schedule the MaxMind GeoLite2 update once the wizard has written the
+# license key into the env file. The fetch unit no-ops if the key is
+# absent (operator skipped that prompt).
+ExecStartPost=/bin/systemctl start anglerfish-geo-update.service
+
+[Install]
+WantedBy=multi-user.target

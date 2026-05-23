@@ -1,0 +1,68 @@
+#!/usr/sbin/nft -f
+# Anglerfish AI firewall rules.
+#
+# Two interfaces:
+#   * bait    — attacker-facing, hosts Cowrie's listener
+#   * service — operator-facing, hosts dashboard + outbound to Ollama/Splunk
+#
+# Egress on the service interface is restricted to the three ports we
+# actually need: 11434 (Ollama), 8088 (Splunk HEC), and the configured
+# dashboard port. Egress on the bait interface is denied entirely so a
+# compromised honeypot cannot reach back to the operator network.
+#
+# Interface names are templated via the wizard and injected at install
+# time by `envsubst`.
+
+flush ruleset
+
+table inet anglerfish {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        # Allow established / related on all interfaces.
+        ct state established,related accept
+
+        # Loopback.
+        iifname "lo" accept
+
+        # Cowrie listeners on the bait NIC.
+        iifname "${ANGLERFISH_BAIT_INTERFACE}" tcp dport { 2222, 2223 } accept
+
+        # Operator-facing dashboard on the service NIC.
+        iifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport ${ANGLERFISH_DASHBOARD__PORT} accept
+
+        # SSH for administration on the service NIC.
+        iifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport 22 accept
+
+        # ICMP for diagnostics.
+        ip protocol icmp accept
+        ip6 nexthdr icmpv6 accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+
+        # Loopback.
+        oifname "lo" accept
+
+        # Established / related.
+        ct state established,related accept
+
+        # Outbound from the bait NIC — DENY everything except DNS so a
+        # compromised honeypot cannot pivot anywhere.
+        oifname "${ANGLERFISH_BAIT_INTERFACE}" udp dport 53 accept
+        oifname "${ANGLERFISH_BAIT_INTERFACE}" drop
+
+        # Outbound from the service NIC — only the three service ports.
+        oifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport 11434 accept
+        oifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport 8088 accept
+        oifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport ${ANGLERFISH_DASHBOARD__PORT} accept
+
+        # Allow DNS + NTP outbound on the service NIC for system upkeep.
+        oifname "${ANGLERFISH_SERVICE_INTERFACE}" udp dport { 53, 123 } accept
+    }
+}

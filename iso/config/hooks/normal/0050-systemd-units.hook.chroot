@@ -1,0 +1,40 @@
+#!/bin/sh
+# Copy systemd units into place and enable the first-boot stack.
+#
+# getty@tty1 is masked here so the first-boot wizard owns the console
+# on initial boot. The wizard's ExecStartPost unmasks + starts
+# getty@tty1 once it has successfully written the env file, so the
+# operator gets their console login back on second boot (and on every
+# boot thereafter).
+
+set -e
+
+UNIT_SRC=/tmp/anglerfish-ai/systemd
+
+UNITS="anglerfish-bridge.service anglerfish-dashboard.service \
+       anglerfish-firstboot.service anglerfish-firewall.service \
+       anglerfish-geo-update.service anglerfish-geo-update.timer \
+       cowrie.service"
+
+for unit in ${UNITS}; do
+    if [ -f "${UNIT_SRC}/${unit}" ]; then
+        install -o root -g root -m 0644 "${UNIT_SRC}/${unit}" \
+            "/etc/systemd/system/${unit}"
+    fi
+done
+
+# Geo database directory must be writable by the anglerfish user; the
+# fetcher unit runs as that user.
+install -d -o anglerfish -g anglerfish -m 0750 /var/lib/anglerfish/geo
+
+systemctl enable anglerfish-firewall.service
+systemctl enable anglerfish-firstboot.service
+systemctl enable anglerfish-bridge.service
+systemctl enable anglerfish-dashboard.service
+systemctl enable cowrie.service
+systemctl enable anglerfish-geo-update.timer
+
+# First-boot wizard owns tty1 until it completes (it unmasks getty in
+# ExecStartPost). Mask the unit so getty doesn't race the wizard for
+# the same tty.
+systemctl mask getty@tty1.service

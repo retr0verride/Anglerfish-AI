@@ -1,0 +1,7 @@
+#!/bin/sh
+# live-build auto/clean — invoked by `lb clean`.
+
+set -e
+
+lb clean noauto "${@}"
+rm -rf binary chroot cache live-image-*.hybrid.iso

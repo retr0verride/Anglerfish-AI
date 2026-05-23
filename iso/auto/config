@@ -1,0 +1,18 @@
+#!/bin/sh
+# live-build auto/config — invoked by `lb config`. Sets distribution
+# parameters, image format, and component selection.
+
+set -e
+
+lb config noauto \
+    --distribution bookworm \
+    --architectures amd64 \
+    --binary-images iso-hybrid \
+    --bootloaders syslinux \
+    --linux-flavours amd64 \
+    --image-name "anglerfish-ai" \
+    --debian-installer false \
+    --memtest none \
+    --apt-recommends false \
+    --bootappend-live "boot=live components quiet splash" \
+    "${@}"

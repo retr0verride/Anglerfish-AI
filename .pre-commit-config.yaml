@@ -1,0 +1,66 @@
+# Anglerfish AI pre-commit configuration.
+#
+# Install once with:  pre-commit install --install-hooks
+# Manually run with:  pre-commit run --all-files
+#
+# The pytest+coverage gate is in the pre-push stage to keep commits fast.
+default_language_version:
+  python: python3.11
+
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - "pydantic>=2.6,<3"
+          - "pydantic-settings>=2.2,<3"
+          - "httpx>=0.27,<1"
+          - "structlog>=24.1,<26"
+          - "typer>=0.12,<1"
+          - "anyio>=4.3,<5"
+          - "fastapi>=0.110,<1"
+          - "jinja2>=3.1,<4"
+          - "cryptography>=46.0.7,<47"
+        args: ["--config-file=pyproject.toml"]
+        files: ^(src/anglerfish|tests)/.*\.py$
+
+  - repo: local
+    hooks:
+      - id: pytest-coverage-gate
+        name: pytest with coverage gate (>=90%)
+        entry: pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: pip-audit
+        name: pip-audit (known-CVE scan against installed deps)
+        entry: pip-audit --skip-editable --strict
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

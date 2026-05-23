@@ -1,0 +1,11 @@
+#!/bin/sh
+# Drop the Anglerfish output plugin into Cowrie's tree so it is
+# discovered by Cowrie's plugin loader.
+
+set -e
+
+if [ -f /tmp/anglerfish-ai/cowrie/output_anglerfish.py ]; then
+    install -o cowrie -g cowrie -m 0644 \
+        /tmp/anglerfish-ai/cowrie/output_anglerfish.py \
+        /opt/cowrie/src/cowrie/output/anglerfish.py
+fi

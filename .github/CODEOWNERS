@@ -1,0 +1,12 @@
+# Default review for everything.
+*                              @retr0verride
+
+# Security-critical surfaces — flagged here so once additional reviewers
+# come on board they can be added per-path without restructuring.
+/src/anglerfish/credentials/   @retr0verride
+/src/anglerfish/bridge/        @retr0verride
+/src/anglerfish/config/        @retr0verride
+/cowrie/nftables/              @retr0verride
+/systemd/                      @retr0verride
+/iso/                          @retr0verride
+/.github/workflows/            @retr0verride

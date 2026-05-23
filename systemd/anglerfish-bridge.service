@@ -1,0 +1,42 @@
+[Unit]
+Description=Anglerfish AI bridge — LLM middleware for Cowrie
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=anglerfish
+Group=anglerfish
+EnvironmentFile=/etc/anglerfish/anglerfish.env
+ExecStart=/opt/anglerfish/venv/bin/anglerfish bridge serve --host 127.0.0.1 --port 8421
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=10s
+
+# Hardening — the bridge is reachable from Cowrie (also on bait host)
+# and processes attacker-controlled content; lock it down accordingly.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/anglerfish /var/log/anglerfish
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

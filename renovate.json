@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard",
+    "schedule:weekly"
+  ],
+  "timezone": "UTC",
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": false
+  },
+  "packageRules": [
+    {
+      "description": "Group patch updates; auto-merge if CI passes.",
+      "matchUpdateTypes": ["patch"],
+      "groupName": "patch updates",
+      "automerge": true,
+      "automergeType": "branch",
+      "automergeStrategy": "squash"
+    },
+    {
+      "description": "Group minor updates for review.",
+      "matchUpdateTypes": ["minor"],
+      "groupName": "minor updates"
+    },
+    {
+      "description": "Majors of security-critical libraries require dashboard approval.",
+      "matchPackageNames": [
+        "cryptography",
+        "pydantic",
+        "pydantic-settings",
+        "fastapi",
+        "starlette",
+        "httpx",
+        "uvicorn"
+      ],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true,
+      "labels": ["dependencies", "needs-review"]
+    },
+    {
+      "description": "GitHub Actions: keep digests pinned via Renovate, weekly cadence.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "groupName": "github-actions"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "dependencies"]
+  },
+  "osvVulnerabilityAlerts": true
+}

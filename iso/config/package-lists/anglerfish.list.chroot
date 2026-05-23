@@ -1,0 +1,32 @@
+# Packages installed into the chroot.
+# One package per line; comments are stripped by live-build.
+
+# Runtime
+python3
+python3-venv
+python3-pip
+nftables
+openssh-server
+ca-certificates
+curl
+wget
+gpg
+
+# Cowrie's runtime dependencies
+authbind
+libssl-dev
+libffi-dev
+build-essential
+git
+
+# Diagnostics
+htop
+less
+vim-tiny
+net-tools
+iproute2
+tcpdump
+
+# Console first-boot wizard needs a usable TTY
+console-setup
+keyboard-configuration

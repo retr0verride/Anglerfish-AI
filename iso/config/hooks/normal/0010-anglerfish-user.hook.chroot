@@ -1,0 +1,18 @@
+#!/bin/sh
+# Create the unprivileged `anglerfish` and `cowrie` users used by the
+# systemd units.
+
+set -e
+
+addgroup --system anglerfish
+adduser  --system --ingroup anglerfish --home /var/lib/anglerfish \
+         --no-create-home --shell /usr/sbin/nologin anglerfish
+
+addgroup --system cowrie
+adduser  --system --ingroup cowrie --home /opt/cowrie \
+         --no-create-home --shell /usr/sbin/nologin cowrie
+
+install -d -o anglerfish -g anglerfish -m 0750 /var/lib/anglerfish
+install -d -o anglerfish -g anglerfish -m 0750 /var/log/anglerfish
+install -d -o root       -g root       -m 0755 /etc/anglerfish
+install -d -o root       -g root       -m 0755 /etc/anglerfish/nftables

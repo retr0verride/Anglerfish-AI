@@ -1,0 +1,15 @@
+[Unit]
+Description=Anglerfish AI — weekly refresh of MaxMind GeoLite2 databases
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+
+[Timer]
+# MaxMind updates GeoLite2 twice a week. A weekly Wednesday pull keeps
+# the operator's geo enrichment recent without thrashing their account
+# rate limit.
+OnCalendar=Wed 03:30
+Persistent=yes
+RandomizedDelaySec=30m
+Unit=anglerfish-geo-update.service
+
+[Install]
+WantedBy=timers.target

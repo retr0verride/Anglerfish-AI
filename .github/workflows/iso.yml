@@ -1,0 +1,78 @@
+name: Build ISO
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      include_ollama:
+        description: "Bundle Ollama in the ISO (adds ~5 GB)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # for Release uploads
+  id-token: write   # for cosign keyless signing
+
+jobs:
+  build:
+    name: live-build ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install live-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            live-build debootstrap squashfs-tools xorriso \
+            isolinux syslinux-common dpkg-dev mtools
+
+      - name: Stage repo into chroot include path
+        run: |
+          sudo mkdir -p /tmp/anglerfish-ai
+          sudo cp -r . /tmp/anglerfish-ai
+
+      - name: Build
+        run: |
+          sudo ./iso/build.sh ${{ inputs.include_ollama && '' || '--without-ollama' }}
+
+      - name: Compute provenance metadata
+        id: meta
+        run: |
+          iso=$(ls iso/build/anglerfish-ai-*.iso | head -1)
+          echo "iso=$iso" >> "$GITHUB_OUTPUT"
+          echo "sha=$(sha256sum "$iso" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "version=$(echo "$iso" | sed -E 's|.*anglerfish-ai-(.*)\.iso|\1|')" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign ISO (keyless OIDC)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${{ steps.meta.outputs.iso }}.sig" \
+            --output-certificate "${{ steps.meta.outputs.iso }}.cert" \
+            "${{ steps.meta.outputs.iso }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anglerfish-ai-${{ steps.meta.outputs.version }}
+          path: |
+            iso/build/anglerfish-ai-*.iso
+            iso/build/anglerfish-ai-*.iso.sha256
+            iso/build/anglerfish-ai-*.iso.sig
+            iso/build/anglerfish-ai-*.iso.cert
+          retention-days: 30
+
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            iso/build/anglerfish-ai-*.iso
+            iso/build/anglerfish-ai-*.iso.sha256
+            iso/build/anglerfish-ai-*.iso.sig
+            iso/build/anglerfish-ai-*.iso.cert
