@@ -1,10 +1,12 @@
-"""Strip the white background from ``assets/anglerfish.png``.
+"""Strip the white background from ``assets/anglerfish.png`` and
+recolour the white interior details to match the bioluminescent palette.
 
 Floods the outer-white region from each corner with a sentinel colour,
 then builds an alpha mask where flooded pixels are transparent and
-everything else is opaque. White pixels *inside* the silhouette (the
-eye and teeth-gap detailing) are preserved because they are not
-connected to the corners.
+everything else is opaque. White pixels *inside* the silhouette (eye,
+teeth-gap detailing) are not connected to the corners, so they survive
+the flood — and then get recoloured to ``--bioluminescence-soft`` so
+the artwork is monochromatic-cyan instead of mixed cyan+white.
 
 Overwrites the source file in place.
 
@@ -27,6 +29,10 @@ SENTINEL = (255, 0, 255)
 # JPEG-style off-white edge pixels (252-254), tight enough to stop at
 # the cyan glow's outer halo.
 FLOOD_THRESH = 12
+# --bioluminescence-soft from the dashboard palette. White interior
+# details (eye, teeth-gaps) are repainted in this colour so the artwork
+# is monochromatic-cyan.
+BIO_SOFT = (103, 232, 249)
 
 
 def strip_white_background(img: Image.Image) -> Image.Image:
@@ -76,6 +82,17 @@ def strip_white_background(img: Image.Image) -> Image.Image:
             ap[x, y] = 0 if rgbp[x, y] == SENTINEL else 255
     result = img.convert("RGBA").copy()
     result.putalpha(alpha)
+    # Recolour interior white details (eye + teeth-gaps) to the cyan
+    # palette colour so the artwork is monochromatic.
+    rp = result.load()
+    assert rp is not None
+    for y in range(h):
+        for x in range(w):
+            if ap[x, y] == 0:
+                continue
+            r, g, b = src_p[x, y]
+            if min(r, g, b) > 200 and (max(r, g, b) - min(r, g, b)) < 12:
+                rp[x, y] = (*BIO_SOFT, 255)
     return result
 
 
