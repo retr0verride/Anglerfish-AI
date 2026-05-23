@@ -125,6 +125,7 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 | [`docs/INSTALL.md`](docs/INSTALL.md)             | Prerequisites, ISO + Proxmox/QEMU deployment, wizard walkthrough       |
 | [`docs/proxmox.md`](docs/proxmox.md)             | Proxmox-specific bridge prep, VM config, snapshots                     |
 | [`docs/proxmox-lab.md`](docs/proxmox-lab.md)     | Strict-lab variant: air-gapped bait bridge, PCAP capture, snapshot/reset workflow |
+| [`docs/PRE_DEPLOY_CHECKLIST.md`](docs/PRE_DEPLOY_CHECKLIST.md) | Top-to-bottom verification before exposing to attacker traffic         |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md)             | Day-2 ops — credentials rotation, geo updates, 7 recovery scenarios    |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)   | STRIDE table, trust boundaries, crypto inventory, known limitations    |
 | [`SECURITY.md`](SECURITY.md)                     | Vulnerability disclosure policy, supported versions, scope             |
