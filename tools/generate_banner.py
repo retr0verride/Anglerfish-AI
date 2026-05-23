@@ -37,13 +37,19 @@ TEXT_DIM = (148, 168, 192)
 BORDER = (34, 211, 238, 46)       # rgba(34,211,238,0.18)
 ESCA_CORE = (180, 248, 255)       # warm-white core of the throb
 
-# Esca centroid in the sigil (matches CSS .lure__sigil-wrap::after position).
-ESCA_X_PCT = 0.776
-ESCA_Y_PCT = 0.325
+# Esca centroid in the sigil. Measured directly from the bulb-tip pixels —
+# the dashboard CSS uses (0.776, 0.325) which targets the stem joint instead;
+# good enough for the CSS overlay's wide bloom, wrong for a tight static glow.
+ESCA_X_PCT = 0.838
+ESCA_Y_PCT = 0.348
 # Radius (as fraction of sigil width) of the bulb-area patch we erase in the
-# source artwork before painting the throbbing glow. The original PNG fills
-# the bulb with a stylized cyan/dark mesh; we replace it with a clean disc.
-ESCA_PATCH_RADIUS_PCT = 0.14
+# source artwork before painting the glow. The original PNG surrounds the
+# bulb with a dotted cyan/dark halo that reads as a checkerboard at any
+# zoom; this mask wipes it so the painted glow can own that region.
+ESCA_PATCH_RADIUS_PCT = 0.21
+# Glow disc diameter as a fraction of sigil width. Sized to roughly match
+# the bulb tip + a soft halo — not the full lure span like the CSS overlay.
+ESCA_GLOW_DIAMETER_PCT = 0.26
 
 # Layout: 48px outer padding, sigil ~ 224px tall, 32px gap to text block.
 PAD = 48
@@ -262,7 +268,7 @@ def compose_static_base(version: str) -> tuple[Image.Image, tuple[int, int], int
 
     esca_cx = sigil_x + round(sigil.width * ESCA_X_PCT)
     esca_cy = sigil_y + round(SIGIL_H * ESCA_Y_PCT)
-    glow_diameter = round(sigil.width * 0.5)
+    glow_diameter = round(sigil.width * ESCA_GLOW_DIAMETER_PCT)
     return base, (esca_cx, esca_cy), glow_diameter
 
 
