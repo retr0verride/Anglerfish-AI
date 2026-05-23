@@ -389,7 +389,7 @@ def prompt_for_answers(
 
     ollama_model = prompt(
         "Ollama model tag",
-        defaults.ollama_model if defaults is not None else "deepseek-coder:6.7b",
+        defaults.ollama_model if defaults is not None else "qwen3:14b",
     ).strip()
 
     fake_hostname = prompt(

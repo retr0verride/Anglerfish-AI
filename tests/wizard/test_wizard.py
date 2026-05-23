@@ -28,7 +28,7 @@ def _answers(**overrides: object) -> WizardAnswers:
         "bait_interface": "eth0",
         "service_interface": "eth1",
         "ollama_endpoint": HttpUrl("http://127.0.0.1:11434/"),
-        "ollama_model": "deepseek-coder:6.7b",
+        "ollama_model": "qwen3:14b",
         "splunk_enabled": False,
         "fake_hostname": "srv-prod-01",
         "fake_username": "root",
@@ -265,7 +265,7 @@ def test_prompt_for_answers_happy_path_dhcp() -> None:
         "admin",  # dashboard_admin_username
         "",  # dashboard_admin_password (blank → open mode)
         "http://127.0.0.1:11434/",  # ollama_endpoint
-        "deepseek-coder:6.7b",  # ollama_model
+        "qwen3:14b",  # ollama_model
         "srv-prod-01",  # fake_hostname
         "root",  # fake_username
         "",  # webhook
@@ -299,7 +299,7 @@ def test_prompt_for_answers_static_network() -> None:
         "admin",  # dashboard admin user
         "",  # dashboard password (open mode)
         "http://127.0.0.1:11434/",
-        "deepseek-coder:6.7b",
+        "qwen3:14b",
         "srv-prod-01",
         "root",
         "",
@@ -433,7 +433,7 @@ def test_prompt_for_answers_splunk_enabled_collects_url_and_token() -> None:
         "admin",
         "",
         "http://127.0.0.1:11434/",
-        "deepseek-coder:6.7b",
+        "qwen3:14b",
         "srv-prod-01",
         "root",
         "https://splunk.test:8088/services/collector/event",
@@ -464,7 +464,7 @@ def test_prompt_for_answers_remote_ollama_with_trusted_host() -> None:
         "",
         "http://10.0.0.5:11434/",
         "10.0.0.5",
-        "deepseek-coder:6.7b",
+        "qwen3:14b",
         "srv-prod-01",
         "root",
         "",
@@ -491,7 +491,7 @@ def test_prompt_for_answers_invalid_webhook_raises() -> None:
         "admin",
         "",
         "http://127.0.0.1:11434/",
-        "deepseek-coder:6.7b",
+        "qwen3:14b",
         "srv-prod-01",
         "root",
         "not a url",

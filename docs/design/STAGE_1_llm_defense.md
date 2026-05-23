@@ -69,7 +69,7 @@ class ModelIntegrity:
         layers[*].digest  for layers[*].mediaType ==
             "application/vnd.ollama.image.model"
 
-    A tag like `deepseek-coder:6.7b` could be silently re-pointed at a
+    A tag like `qwen3:14b` could be silently re-pointed at a
     different blob by an attacker with write access to the Ollama
     install. Pinning the layer digest defends against that.
 

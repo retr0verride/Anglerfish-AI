@@ -35,11 +35,11 @@ async def test_chat_returns_assistant_content() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/chat"
         body = request.read()
-        assert b"deepseek-coder" in body
+        assert b"qwen3" in body
         return httpx.Response(
             200,
             json={
-                "model": "deepseek-coder:6.7b",
+                "model": "qwen3:14b",
                 "message": {"role": "assistant", "content": "drwxr-xr-x 2 root root 4096"},
                 "done": True,
             },

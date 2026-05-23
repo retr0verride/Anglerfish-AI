@@ -159,7 +159,7 @@ QEMU's `-nographic`). The full prompt list:
 | 9    | Dashboard admin password                              | Blank ⇒ open mode (only safe on a fully-isolated NIC).       |
 | 10   | Ollama endpoint URL                                   | `http://127.0.0.1:11434/` (on-host) or `http://<gpu-host>:11434/`. |
 | 11   | Trusted remote Ollama IP                              | Only if the URL is not loopback. Must match the URL's host.  |
-| 12   | Ollama model tag                                      | Default `deepseek-coder:6.7b`. The bridge `ollama pull`s lazily. |
+| 12   | Ollama model tag                                      | Default `qwen3:14b` (Apache-2.0, Hugging Face). The bridge `ollama pull`s lazily. |
 | 13   | Fake hostname for the AI shell                        | Default `srv-prod-01` — what the attacker sees in `hostname`. |
 | 14   | Fake username for the AI shell                        | Default `root`.                                              |
 | 15   | Splunk HEC                                            | `n` to skip; otherwise prompts for URL + token.              |

@@ -29,7 +29,7 @@ _HAPPY_PATH_INPUTS = (
             "admin",  # dashboard admin user
             "",  # dashboard password (open mode)
             "http://127.0.0.1:11434/",  # ollama URL
-            "deepseek-coder:6.7b",  # model
+            "qwen3:14b",  # model
             "srv-prod-01",  # fake host
             "root",  # fake user
             "n",  # splunk disabled

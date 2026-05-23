@@ -45,7 +45,7 @@ def test_log_level_members() -> None:
 def test_ollama_defaults_are_loopback() -> None:
     cfg = OllamaConfig()
     assert cfg.base_url.host == "127.0.0.1"
-    assert cfg.model == "deepseek-coder:6.7b"
+    assert cfg.model == "qwen3:14b"
     assert cfg.trusted_remote_host is None
 
 

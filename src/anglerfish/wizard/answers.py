@@ -111,7 +111,7 @@ class WizardAnswers(BaseModel):
     # AI inference
     ollama_endpoint: HttpUrl
     ollama_trusted_remote_host: IPvAnyAddress | None = None
-    ollama_model: str = Field(default="deepseek-coder:6.7b", min_length=1, max_length=128)
+    ollama_model: str = Field(default="qwen3:14b", min_length=1, max_length=128)
 
     # Honeypot persona
     fake_hostname: str = Field(default="srv-prod-01", min_length=1, max_length=63)

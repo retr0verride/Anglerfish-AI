@@ -119,9 +119,12 @@ management (eliminate cold-start latency).
 * `src/anglerfish/llm/` — new module replacing
   `src/anglerfish/bridge/client.py`.
 * Multi-model config: `ANGLERFISH_LLM__FAST_MODEL` (default
-  `deepseek-coder:1.3b`-class), `ANGLERFISH_LLM__DEEP_MODEL` (default
-  `deepseek-coder:6.7b`-class), `ANGLERFISH_LLM__EMBED_MODEL` (default
-  `nomic-embed-text`).
+  `qwen3:14b`-class), `ANGLERFISH_LLM__DEEP_MODEL` (default
+  `phi-4` or similar 14B+ reasoning model),
+  `ANGLERFISH_LLM__EMBED_MODEL` (default `nomic-embed-text`).
+  Deepseek family avoided in defaults — third-party security reviews
+  flagged CCP-aligned content moderation that surfaces in shell
+  honeypot contexts. See `docs/MODEL_SETUP.md`.
 * Streaming response API.
 * Structured-output mode (JSON schema validation).
 * Per-session token budget tracking surfaced in dashboard.

@@ -23,7 +23,7 @@ def _answers(**overrides: object) -> WizardAnswers:
         "bait_interface": "eth0",
         "service_interface": "eth1",
         "ollama_endpoint": HttpUrl("http://127.0.0.1:11434/"),
-        "ollama_model": "deepseek-coder:6.7b",
+        "ollama_model": "qwen3:14b",
         "splunk_enabled": False,
         "fake_hostname": "srv-prod-01",
         "fake_username": "root",

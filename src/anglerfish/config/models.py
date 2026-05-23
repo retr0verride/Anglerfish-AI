@@ -97,10 +97,17 @@ class OllamaConfig(BaseModel):
         ),
     )
     model: str = Field(
-        default="deepseek-coder:6.7b",
+        default="qwen3:14b",
         min_length=1,
         max_length=128,
-        description="Ollama model tag.",
+        description=(
+            "Ollama model tag. Default is qwen3:14b — Apache-2.0 "
+            "licensed, Hugging Face-distributed, 14B params fits in "
+            "12GB VRAM at Q4. Avoid deepseek-coder for production "
+            "deployments: third-party security reviews have flagged "
+            "CCP-aligned content moderation that surfaces in shell "
+            "honeypot contexts. See docs/MODEL_SETUP.md."
+        ),
     )
     request_timeout_s: float = Field(default=45.0, gt=0.0, le=600.0)
     connect_timeout_s: float = Field(default=5.0, gt=0.0, le=60.0)

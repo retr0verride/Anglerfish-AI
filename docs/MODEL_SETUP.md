@@ -14,7 +14,7 @@ rationale (resilience against upstream LLM compromise).
 
 | Tier | Purpose | When it runs | Recommended pick |
 |------|---------|--------------|------------------|
-| **Fast** | Per-command shell responses | Every attacker turn (hot path) | `qwen2.5-coder:7b-instruct` |
+| **Fast** | Per-command shell responses | Every attacker turn (hot path) | `qwen3:14b` |
 | **Deep** | Intent extraction, session summaries | Once per session end (Stage 5+) | `phi-4` |
 | **Embed** | Behavioural clustering | Per session (Stage 6+) | `nomic-embed-text` |
 
@@ -35,10 +35,10 @@ class — RTX 3060, 4070, etc.). Adjust as needed:
 | GPU class | Fast model | Deep model | Embed model |
 |-----------|-----------|-----------|-------------|
 | **CPU only** (no GPU) | `phi-3:3.8b` (slow but works) | reuse fast model | `nomic-embed-text` |
-| **8GB VRAM** (RTX 3050) | `qwen2.5-coder:7b-instruct` (Q4) | `phi-3.5:3.8b` | `nomic-embed-text` |
-| **12GB VRAM** (RTX 3060) — **recommended** | `qwen2.5-coder:7b-instruct` (Q4_K_M) | `phi-4:14b` (Q4_K_M) | `nomic-embed-text` |
-| **16GB VRAM** (RTX 4080) | `qwen2.5-coder:7b-instruct` (Q5) | `phi-4:14b` (Q5) | `mxbai-embed-large` |
-| **24GB+ VRAM** (RTX 3090/4090) | `qwen2.5-coder:7b-instruct` | `qwen2.5:32b` | `mxbai-embed-large` |
+| **8GB VRAM** (RTX 3050) | `qwen3:14b` (Q4) | `phi-3.5:3.8b` | `nomic-embed-text` |
+| **12GB VRAM** (RTX 3060) — **recommended** | `qwen3:14b` (Q4_K_M) | `phi-4:14b` (Q4_K_M) | `nomic-embed-text` |
+| **16GB VRAM** (RTX 4080) | `qwen3:14b` (Q5) | `phi-4:14b` (Q5) | `mxbai-embed-large` |
+| **24GB+ VRAM** (RTX 3090/4090) | `qwen3:14b` | `qwen2.5:32b` | `mxbai-embed-large` |
 
 The rest of this guide assumes the **12GB VRAM (recommended)** row.
 
@@ -167,7 +167,7 @@ Total download is ~13GB; takes 5-20 minutes depending on your internet.
 
 ```bash
 # Fast tier — ~4.4GB
-ollama pull qwen2.5-coder:7b-instruct
+ollama pull qwen3:14b
 
 # Deep tier — ~8.5GB
 ollama pull phi-4
@@ -181,7 +181,7 @@ Verify all three are present:
 ```bash
 ollama list
 # NAME                                 ID            SIZE
-# qwen2.5-coder:7b-instruct            ...           4.4 GB
+# qwen3:14b            ...           4.4 GB
 # phi-4:latest                         ...           8.5 GB
 # nomic-embed-text:latest              ...           274 MB
 ```
@@ -192,7 +192,7 @@ ollama list
 
 ```bash
 # Fast tier — should respond in 1-2s
-ollama run qwen2.5-coder:7b-instruct "explain ls -la output"
+ollama run qwen3:14b "explain ls -la output"
 
 # Deep tier — should respond in 10-30s
 ollama run phi-4 "summarize: an SSH attacker tried 47 common passwords against root, then ran wget to download a script. what are they probably doing?"
@@ -232,7 +232,7 @@ sudo apt install -y jq
 MANIFEST_ROOT=~/.ollama/models/manifests/registry.ollama.ai/library
 
 FAST_HASH=$(jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
-    "$MANIFEST_ROOT/qwen2.5-coder/7b-instruct")
+    "$MANIFEST_ROOT/qwen3/14b")
 DEEP_HASH=$(jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
     "$MANIFEST_ROOT/phi-4/latest")
 EMBED_HASH=$(jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
@@ -262,7 +262,7 @@ Set or update these lines:
 ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/
 
 # Fast-tier model (the only one Stage 1 needs; Stage 3 adds the multi-model layer)
-ANGLERFISH_OLLAMA__MODEL=qwen2.5-coder:7b-instruct
+ANGLERFISH_OLLAMA__MODEL=qwen3:14b
 
 # Stage 1 defense — pin the fast model's layer hash
 ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
@@ -330,11 +330,11 @@ To roll an update intentionally:
 
 ```bash
 # 1. Update the model
-ollama pull qwen2.5-coder:7b-instruct
+ollama pull qwen3:14b
 
 # 2. Capture the new hash
 jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
-    ~/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5-coder/7b-instruct
+    ~/.ollama/models/manifests/registry.ollama.ai/library/qwen3/14b
 
 # 3. Update the env file
 sudo nano /etc/anglerfish/anglerfish.env
@@ -373,15 +373,25 @@ Every model update is intentional and audited.
 See [`PRODUCT.md`](PRODUCT.md) §"Why these specifically" for the full
 reasoning. Short version:
 
-* **Qwen2.5-Coder over Deepseek-Coder** — surpassed it in late 2024 on
-  shell/code generation; Apache 2.0; actively maintained. The known
-  markdown-drift quirk is *exactly* what the Stage 1 `markdown_formatting`
-  detector targets.
+* **Qwen3:14b over Deepseek-Coder** — Apache-2.0 licensed, distributed
+  via Hugging Face, 14B params fits in 12GB VRAM at Q4. **Deepseek
+  family deliberately avoided in production defaults**: third-party
+  security reviews have flagged CCP-aligned content moderation that
+  surfaces in shell honeypot contexts (LLM occasionally refuses or
+  re-frames responses in ways that don't match a real Linux shell,
+  breaking the deception). Qwen3 is independent of those concerns.
+  The known markdown-drift quirk is *exactly* what the Stage 1
+  `markdown_formatting` detector targets.
 * **Phi-4 over Qwen2.5:32B** — 14B parameters that punch like 30B for
   summarization, and fits in 12GB VRAM where 32B doesn't.
 * **Nomic-Embed over MiniLM** — Better semantic representation, fast
   enough that we can re-embed sessions cheaply when the model is
   swapped.
+
+**Operator override is one env var.** Nothing about Stage 1's defense
+layer is model-specific; if you have an internal preference (an
+in-house fine-tune, a different upstream you trust) just set
+`ANGLERFISH_OLLAMA__MODEL` and capture the new hash per step 6.
 
 If a future model meaningfully beats one of these on the relevant axis
 (shell knowledge, summarization quality, embedding cluster purity),
