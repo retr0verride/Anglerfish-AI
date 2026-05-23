@@ -1,7 +1,7 @@
 """Generate the README banner from the bioluminescent dashboard palette.
 
-Output: ``assets/anglerfish-banner.png`` — animated APNG (1280x320) whose
-layout, palette, glow and esca-throb match the dashboard ``.lure`` header
+Output: ``assets/anglerfish-banner.png`` — static PNG (1280x320) whose
+layout, palette, glow and lit esca match the dashboard ``.lure`` header
 in ``src/anglerfish/dashboard/static/style.css``.
 
 Re-run after editing dashboard styles or bumping the version so the
@@ -61,8 +61,10 @@ PILL_SIZE = 18
 TITLE_TRACK = 11   # ~ 0.18em at 64px
 PILL_TRACK = 2
 
-ANIM_FRAMES = 11
-ANIM_DURATION_MS = 200   # 11 * 200ms = 2.2s loop (matches CSS keyframes)
+# Static esca: somewhere between the CSS keyframes' mid and peak, so the bulb
+# reads as lit on a still page without being blown out.
+ESCA_SCALE = 1.05
+ESCA_OPACITY = 0.9
 
 
 def read_version() -> str:
@@ -264,29 +266,15 @@ def compose_static_base(version: str) -> tuple[Image.Image, tuple[int, int], int
     return base, (esca_cx, esca_cy), glow_diameter
 
 
-def throb_frame(
-    base: Image.Image,
-    centre: tuple[int, int],
-    base_diameter: int,
-    phase: float,
-) -> Image.Image:
-    """One frame of the esca throb. Phase 0..1 traverses one full cycle.
-
-    Matches the CSS @keyframes esca-throb: opacity 0.55→1.0→0.55,
-    scale 0.85→1.25→0.85 across the cycle.
-    """
-    angle = phase * math.tau
-    sine = (1 - math.cos(angle)) / 2  # 0 → 1 → 0
-    opacity = 0.55 + sine * (1.0 - 0.55)
-    scale = 0.85 + sine * (1.25 - 0.85)
-    diameter = max(2, round(base_diameter * scale))
-    glow = radial_glow(diameter, opacity)
-    frame = base.copy()
+def paint_esca(base: Image.Image, centre: tuple[int, int], base_diameter: int) -> Image.Image:
+    """Screen-blend the lit esca glow onto the sigil. Same intent as
+    ``mix-blend-mode: screen`` on the dashboard ``.lure__sigil-wrap::after``."""
+    diameter = max(2, round(base_diameter * ESCA_SCALE))
+    glow = radial_glow(diameter, ESCA_OPACITY)
+    out = base.copy()
     cx, cy = centre
     pos = (cx - diameter // 2, cy - diameter // 2)
-    # Screen-blend the glow over the sigil so it brightens the bulb pixels
-    # instead of obscuring them — same intent as `mix-blend-mode: screen` in CSS.
-    region = frame.crop((pos[0], pos[1], pos[0] + diameter, pos[1] + diameter))
+    region = out.crop((pos[0], pos[1], pos[0] + diameter, pos[1] + diameter))
     blended = Image.new("RGBA", region.size, (0, 0, 0, 0))
     rp = region.load()
     gp = glow.load()
@@ -305,8 +293,8 @@ def throb_frame(
             out_b = round(rb + (255 - rb) * (gb / 255) * ga_n)
             out_a = max(ra, ga)
             bp[x, y] = (out_r, out_g, out_b, out_a)
-    frame.paste(blended, pos)
-    return frame
+    out.paste(blended, pos)
+    return out
 
 
 def main() -> int:
@@ -316,22 +304,11 @@ def main() -> int:
     version = read_version()
     print(f"rendering banner for v{version}")
     base, centre, glow_d = compose_static_base(version)
-    frames = [
-        throb_frame(base, centre, glow_d, phase=i / ANIM_FRAMES)
-        for i in range(ANIM_FRAMES)
-    ]
+    banner = paint_esca(base, centre, glow_d)
     BANNER_OUT.parent.mkdir(parents=True, exist_ok=True)
-    frames[0].save(
-        BANNER_OUT,
-        save_all=True,
-        append_images=frames[1:],
-        duration=ANIM_DURATION_MS,
-        loop=0,
-        disposal=2,
-        optimize=False,
-    )
+    banner.save(BANNER_OUT, format="PNG", optimize=True)
     size_kb = BANNER_OUT.stat().st_size / 1024
-    print(f"wrote {BANNER_OUT.relative_to(ROOT)} ({len(frames)} frames, {size_kb:.0f} KB)")
+    print(f"wrote {BANNER_OUT.relative_to(ROOT)} ({size_kb:.0f} KB)")
     return 0
 
 
