@@ -197,34 +197,13 @@ def render_status_pill(version: str, font: ImageFont.FreeTypeFont) -> Image.Imag
     return pill
 
 
-def compose_banner(version: str) -> Image.Image:
-    """Render the full banner: background + sigil + title/subtitle + version pill."""
+def compose_banner() -> Image.Image:
+    """Render the banner: just the deep-sea background and the fish sigil."""
     base = make_background()
     sigil = load_sigil()
-    halo = sigil_halo(sigil)
-
-    sigil_x = PAD
+    sigil_x = (WIDTH - sigil.width) // 2
     sigil_y = (HEIGHT - SIGIL_H) // 2
-    base.alpha_composite(halo, (sigil_x, sigil_y))
     base.alpha_composite(sigil, (sigil_x, sigil_y))
-
-    title_font = ImageFont.truetype(str(FONT_TITLE), TITLE_SIZE)
-    sub_font = ImageFont.truetype(str(FONT_SUB), SUB_SIZE)
-    pill_font = ImageFont.truetype(str(FONT_MONO), PILL_SIZE)
-
-    text_x = sigil_x + sigil.width + GAP
-    title_img = render_title_with_glow("ANGLERFISH AI", title_font)
-    title_y = sigil_y + 38
-    base.alpha_composite(title_img, (text_x - 40, title_y - TITLE_SIZE // 2))
-
-    sub_text = "Deep-sea SSH honeypot · AI-powered threat intelligence"
-    sub_draw = ImageDraw.Draw(base)
-    sub_draw.text((text_x, title_y + TITLE_SIZE + 14), sub_text, font=sub_font, fill=TEXT_DIM)
-
-    pill = render_status_pill(version, pill_font)
-    pill_x = WIDTH - PAD - pill.width
-    pill_y = (HEIGHT - pill.height) // 2
-    base.alpha_composite(pill, (pill_x, pill_y))
     return base
 
 
@@ -232,9 +211,8 @@ def main() -> int:
     if not SIGIL_SRC.exists():
         print(f"missing sigil: {SIGIL_SRC}", file=sys.stderr)
         return 1
-    version = read_version()
-    print(f"rendering banner for v{version}")
-    banner = compose_banner(version)
+    print("rendering banner")
+    banner = compose_banner()
     BANNER_OUT.parent.mkdir(parents=True, exist_ok=True)
     banner.save(BANNER_OUT, format="PNG", optimize=True)
     size_kb = BANNER_OUT.stat().st_size / 1024
