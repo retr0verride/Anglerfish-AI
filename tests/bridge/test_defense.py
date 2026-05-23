@@ -2,21 +2,25 @@
 
 Stage 1.2 — DefenseVerdict + ModelIntegrityError data types.
 Stage 1.3 — OutputFilter, InjectionScorer, load_pattern_overrides.
+Stage 1.4 — ModelIntegrity (Ollama manifest layer-digest pinning).
 
 Integration tests with the bridge request flow land in Stage 1.5.
 """
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from anglerfish.bridge.defense import (
     DefenseVerdict,
     InjectionScorer,
+    ModelIntegrity,
     ModelIntegrityError,
     OutputFilter,
     load_pattern_overrides,
@@ -530,3 +534,323 @@ def test_injection_scorer_snippet_truncated_at_120() -> None:
     verdict = s.score(long_input)
     assert verdict.fired is True
     assert len(verdict.snippet) <= 120
+
+
+# ---------------------------------------------------------------------------
+# ModelIntegrity
+# ---------------------------------------------------------------------------
+
+
+# A real-looking sha256 for the "expected" side; doesn't need to match
+# anything in particular since we control the test manifest content.
+_EXPECTED_HASH = "abcdef0123456789" * 4  # 64 hex chars
+_OTHER_HASH = "fedcba9876543210" * 4
+
+
+class _MockAuditLog:
+    """Captures audit-log writes for assertion. Stand-in for AuditLog."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def record(self, event_type: str, **fields: Any) -> None:
+        self.events.append((event_type, fields))
+
+
+def _make_manifest(
+    tmp_path: Path,
+    model: str,
+    tag: str,
+    digest: str,
+    *,
+    extra_layers: list[dict[str, Any]] | None = None,
+    body_override: object | None = None,
+) -> Path:
+    """Write a fake Ollama manifest file at the expected location.
+
+    Returns the manifest_root that should be passed to ModelIntegrity.
+    """
+    manifest_root = tmp_path / "manifests"
+    manifest_path = manifest_root / "registry.ollama.ai" / "library" / model / tag
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    if body_override is not None:
+        manifest_path.write_text(
+            body_override if isinstance(body_override, str) else json.dumps(body_override),
+            encoding="utf-8",
+        )
+    else:
+        layers = [
+            {
+                "mediaType": "application/vnd.ollama.image.model",
+                "digest": digest,
+                "size": 4_400_000_000,
+            },
+        ]
+        if extra_layers:
+            layers = extra_layers + layers  # model layer NOT first
+        manifest_path.write_text(
+            json.dumps({"schemaVersion": 2, "layers": layers}),
+            encoding="utf-8",
+        )
+    return manifest_root
+
+
+def _integrity_config(
+    *,
+    expected_hash: str | None,
+    manifest_dir: Path | None,
+) -> DefenseConfig:
+    return DefenseConfig(
+        model_expected_hash=SecretStr(expected_hash) if expected_hash else None,
+        ollama_manifest_dir=manifest_dir,
+    )
+
+
+async def test_model_integrity_skipped_when_hash_unset(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    cfg = _integrity_config(expected_hash=None, manifest_dir=None)
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+        manifest_root=tmp_path,
+    )
+    await integrity.verify()  # must not raise
+    assert len(audit.events) == 1
+    event_type, fields = audit.events[0]
+    assert event_type == "bridge.model_integrity_skipped"
+    assert fields["model"] == "qwen2.5-coder:7b-instruct"
+    assert "MODEL_EXPECTED_HASH" in fields["reason"]
+
+
+async def test_model_integrity_passes_on_match(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=root)
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    await integrity.verify()  # must not raise
+    assert len(audit.events) == 1
+    event_type, fields = audit.events[0]
+    assert event_type == "bridge.model_integrity_verified"
+    assert fields["model"] == "qwen2.5-coder:7b-instruct"
+    assert "sha256:" in fields["verified_hash"]
+
+
+async def test_model_integrity_raises_on_hash_mismatch(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        f"sha256:{_OTHER_HASH}",  # manifest has DIFFERENT hash
+    )
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=root)
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ModelIntegrityError, match="does not match expected"):
+        await integrity.verify()
+    assert len(audit.events) == 1
+    event_type, fields = audit.events[0]
+    assert event_type == "bridge.model_integrity_failed"
+    assert fields["reason"] == "hash mismatch"
+
+
+async def test_model_integrity_raises_on_missing_manifest(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=tmp_path)
+    integrity = ModelIntegrity(
+        cfg,
+        "no-such-model:tag",
+        audit,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ModelIntegrityError, match="could not read manifest"):
+        await integrity.verify()
+    assert len(audit.events) == 1
+    event_type, fields = audit.events[0]
+    assert event_type == "bridge.model_integrity_failed"
+    assert "could not read" in fields["reason"]
+
+
+async def test_model_integrity_raises_on_malformed_json(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        digest="ignored",
+        body_override="not valid json {{",
+    )
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=root)
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ModelIntegrityError, match="could not read manifest"):
+        await integrity.verify()
+    assert audit.events[-1][0] == "bridge.model_integrity_failed"
+
+
+async def test_model_integrity_raises_on_manifest_with_no_model_layer(
+    tmp_path: Path,
+) -> None:
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        digest="ignored",
+        body_override={
+            "schemaVersion": 2,
+            "layers": [
+                {
+                    "mediaType": "application/vnd.ollama.image.license",
+                    "digest": "sha256:" + ("a" * 64),
+                },
+                {
+                    "mediaType": "application/vnd.ollama.image.template",
+                    "digest": "sha256:" + ("b" * 64),
+                },
+            ],
+        },
+    )
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=root)
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ModelIntegrityError, match="could not read manifest"):
+        await integrity.verify()
+    assert audit.events[-1][0] == "bridge.model_integrity_failed"
+
+
+async def test_model_integrity_accepts_hash_with_prefix(tmp_path: Path) -> None:
+    """Expected hash supplied as 'sha256:xxx...' normalizes the same as bare hex."""
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    cfg = _integrity_config(
+        expected_hash=f"sha256:{_EXPECTED_HASH}",  # prefix
+        manifest_dir=root,
+    )
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    await integrity.verify()
+    assert audit.events[-1][0] == "bridge.model_integrity_verified"
+
+
+async def test_model_integrity_case_insensitive_match(tmp_path: Path) -> None:
+    """Manifest digest lowercase, expected hash uppercase — must match."""
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        f"sha256:{_EXPECTED_HASH}",  # lowercase
+    )
+    cfg = _integrity_config(
+        expected_hash=_EXPECTED_HASH.upper(),
+        manifest_dir=root,
+    )
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    await integrity.verify()
+    assert audit.events[-1][0] == "bridge.model_integrity_verified"
+
+
+async def test_model_integrity_defaults_tag_to_latest(tmp_path: Path) -> None:
+    """Model name without :tag should default to :latest per Ollama convention."""
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "phi-4",
+        "latest",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=root)
+    integrity = ModelIntegrity(
+        cfg,
+        "phi-4",  # no :tag
+        audit,  # type: ignore[arg-type]
+    )
+    await integrity.verify()
+    assert audit.events[-1][0] == "bridge.model_integrity_verified"
+
+
+async def test_model_integrity_finds_model_layer_among_others(tmp_path: Path) -> None:
+    """Manifest with template + license layers before model layer still works."""
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        f"sha256:{_EXPECTED_HASH}",
+        extra_layers=[
+            {
+                "mediaType": "application/vnd.ollama.image.license",
+                "digest": "sha256:" + ("c" * 64),
+            },
+            {
+                "mediaType": "application/vnd.ollama.image.template",
+                "digest": "sha256:" + ("d" * 64),
+            },
+        ],
+    )
+    cfg = _integrity_config(expected_hash=_EXPECTED_HASH, manifest_dir=root)
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+    )
+    await integrity.verify()
+    assert audit.events[-1][0] == "bridge.model_integrity_verified"
+    assert audit.events[-1][1]["verified_hash"].startswith("sha256:")
+
+
+async def test_model_integrity_manifest_root_override_takes_precedence(
+    tmp_path: Path,
+) -> None:
+    """The manifest_root constructor arg overrides config.ollama_manifest_dir."""
+    audit = _MockAuditLog()
+    # Build manifest under tmp_path; point config at a NON-existent dir.
+    root = _make_manifest(
+        tmp_path,
+        "qwen2.5-coder",
+        "7b-instruct",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    cfg = _integrity_config(
+        expected_hash=_EXPECTED_HASH,
+        manifest_dir=Path("/nonexistent/manifests"),
+    )
+    integrity = ModelIntegrity(
+        cfg,
+        "qwen2.5-coder:7b-instruct",
+        audit,  # type: ignore[arg-type]
+        manifest_root=root,  # override
+    )
+    await integrity.verify()  # should succeed via override path
+    assert audit.events[-1][0] == "bridge.model_integrity_verified"

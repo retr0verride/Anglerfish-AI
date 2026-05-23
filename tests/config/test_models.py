@@ -405,6 +405,7 @@ def test_defense_defaults() -> None:
     assert cfg.injection_threshold == pytest.approx(0.7)
     assert cfg.model_expected_hash is None
     assert cfg.pattern_overrides_path is None
+    assert cfg.ollama_manifest_dir is None
 
 
 def test_defense_threshold_in_range() -> None:
@@ -426,14 +427,25 @@ def test_defense_filters_can_be_disabled() -> None:
     assert cfg.injection_filter_enabled is False
 
 
+# A manifest dir for hash-accept tests; the value never has to exist
+# since the cross-field validator only requires the field be set.
+_MANIFEST_DIR = Path("/usr/share/ollama/.ollama/models/manifests")
+
+
 def test_defense_model_hash_accepts_bare_sha256() -> None:
-    cfg = DefenseConfig(model_expected_hash=SecretStr(_VALID_SHA256))
+    cfg = DefenseConfig(
+        model_expected_hash=SecretStr(_VALID_SHA256),
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
     assert cfg.model_expected_hash is not None
     assert cfg.model_expected_hash.get_secret_value() == _VALID_SHA256
 
 
 def test_defense_model_hash_accepts_sha256_prefix() -> None:
-    cfg = DefenseConfig(model_expected_hash=SecretStr(_VALID_SHA256_PREFIXED))
+    cfg = DefenseConfig(
+        model_expected_hash=SecretStr(_VALID_SHA256_PREFIXED),
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
     assert cfg.model_expected_hash is not None
     # The validator preserves the raw form; downstream code normalizes.
     assert cfg.model_expected_hash.get_secret_value() == _VALID_SHA256_PREFIXED
@@ -460,7 +472,10 @@ def test_defense_model_hash_accepts_uppercase_normalized() -> None:
     # accepted. Operators who paste from `jq` get lowercase by default;
     # accepting both prevents copy-paste friction with no security loss
     # (the underlying hash is the same value either way).
-    cfg = DefenseConfig(model_expected_hash=SecretStr("A" * 64))
+    cfg = DefenseConfig(
+        model_expected_hash=SecretStr("A" * 64),
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
     assert cfg.model_expected_hash is not None
 
 
@@ -472,6 +487,32 @@ def test_defense_model_hash_rejects_empty() -> None:
 def test_defense_pattern_overrides_path_optional() -> None:
     cfg = DefenseConfig(pattern_overrides_path=Path("/etc/anglerfish/overrides.toml"))
     assert cfg.pattern_overrides_path == Path("/etc/anglerfish/overrides.toml")
+
+
+def test_defense_ollama_manifest_dir_optional_alone() -> None:
+    """Setting only the manifest dir (no hash) is fine."""
+    cfg = DefenseConfig(
+        ollama_manifest_dir=Path("/usr/share/ollama/.ollama/models/manifests"),
+    )
+    assert cfg.ollama_manifest_dir == Path(
+        "/usr/share/ollama/.ollama/models/manifests",
+    )
+    assert cfg.model_expected_hash is None
+
+
+def test_defense_hash_requires_manifest_dir() -> None:
+    """Cross-field invariant: if hash is set, manifest dir must be too."""
+    with pytest.raises(ValidationError, match="ollama_manifest_dir"):
+        DefenseConfig(model_expected_hash=SecretStr(_VALID_SHA256))
+
+
+def test_defense_hash_with_manifest_dir_accepted() -> None:
+    cfg = DefenseConfig(
+        model_expected_hash=SecretStr(_VALID_SHA256),
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
+    assert cfg.model_expected_hash is not None
+    assert cfg.ollama_manifest_dir == _MANIFEST_DIR
 
 
 def test_defense_frozen() -> None:

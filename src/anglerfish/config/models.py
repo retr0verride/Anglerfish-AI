@@ -468,6 +468,18 @@ class DefenseConfig(BaseModel):
             "docs/design/STAGE_1_llm_defense.md for the schema."
         ),
     )
+    ollama_manifest_dir: Path | None = Field(
+        default=None,
+        description=(
+            "Filesystem path to Ollama's `models/manifests` directory. "
+            "Required when model_expected_hash is set. Common values: "
+            "/usr/share/ollama/.ollama/models/manifests (Linux, official "
+            "installer running as `ollama` user); ~/.ollama/models/manifests "
+            "(user-installed Ollama). The bridge reads the layer digest from "
+            "<manifest_dir>/registry.ollama.ai/library/<model>/<tag> at "
+            "startup."
+        ),
+    )
 
     @field_validator("model_expected_hash")
     @classmethod
@@ -486,6 +498,23 @@ class DefenseConfig(BaseModel):
                 "'sha256:'. Got: " + (raw[:80] + "..." if len(raw) > 80 else raw),
             )
         return v
+
+    @model_validator(mode="after")
+    def _validate_integrity_requires_manifest_dir(self) -> Self:
+        # Enforce the cross-field invariant: if the operator is asking
+        # for integrity verification, they must also tell us where the
+        # Ollama manifest lives — otherwise the check would silently
+        # fail to find anything and produce a confusing FileNotFoundError
+        # at startup. Fail loudly at config time instead.
+        if self.model_expected_hash is not None and self.ollama_manifest_dir is None:
+            raise ValueError(
+                "defense.model_expected_hash is set but defense.ollama_manifest_dir "
+                "is not. Set ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR to the path "
+                "of Ollama's models/manifests directory (commonly "
+                "/usr/share/ollama/.ollama/models/manifests for systemd installs "
+                "or ~/.ollama/models/manifests for user installs).",
+            )
+        return self
 
 
 class GeoConfig(BaseModel):

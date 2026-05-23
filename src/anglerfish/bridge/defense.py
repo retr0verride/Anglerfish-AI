@@ -15,7 +15,7 @@ Stage 1 of the roadmap. Three defenses:
   model's blob layer digest matches an operator-supplied expected
   SHA256. Defends against silent tag re-pointing and supply-chain
   swaps. Opt-in; when unset, a loud structured warning + audit
-  entry surfaces the unverified state. *Lands in Stage 1.4.*
+  entry surfaces the unverified state.
 
 See ``docs/design/STAGE_1_llm_defense.md`` for the architecture, the
 threat-model delta, and the test plan.
@@ -23,10 +23,14 @@ threat-model delta, and the test plan.
 
 from __future__ import annotations
 
+import asyncio
+import hmac
+import json
+import logging
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,13 +42,26 @@ from anglerfish.bridge.defense_patterns import (
 )
 from anglerfish.config.models import DefenseConfig
 
+if TYPE_CHECKING:
+    from anglerfish.audit import AuditLog
+
 __all__ = [
     "DefenseVerdict",
     "InjectionScorer",
+    "ModelIntegrity",
     "ModelIntegrityError",
     "OutputFilter",
     "load_pattern_overrides",
 ]
+
+
+_logger = logging.getLogger(__name__)
+
+# Ollama's media-type identifier for the model blob inside a manifest's
+# layers array. Other layer types (template, license, params, system)
+# exist but don't carry the actual weights — pinning against the wrong
+# layer would silently let a weight-swap through.
+_MODEL_BLOB_MEDIA_TYPE = "application/vnd.ollama.image.model"
 
 
 class DefenseVerdict(BaseModel):
@@ -351,3 +368,184 @@ class InjectionScorer:
             snippet=snippet,
             score=severity,
         )
+
+
+# ---------------------------------------------------------------------------
+# ModelIntegrity
+# ---------------------------------------------------------------------------
+
+
+def _normalize_hash(raw: str) -> str:
+    """Normalise a hash for constant-time comparison.
+
+    Strips the optional ``sha256:`` prefix (jq emits it from the
+    manifest, operators sometimes copy the bare hex) and lowercases.
+    Returns the bare-hex form.
+    """
+    return raw.removeprefix("sha256:").lower()
+
+
+class ModelIntegrity:
+    """Verifies the Ollama model's blob layer digest at bridge startup.
+
+    Pins against the SHA256 of the ``application/vnd.ollama.image.model``
+    layer in Ollama's local manifest. Defends against:
+
+    * **Silent tag re-pointing** — the operator pulled
+      ``qwen2.5-coder:7b-instruct`` once and pinned the hash; if anyone
+      later re-pulls it and the upstream re-points the tag at a
+      different blob, the hash mismatches and the bridge refuses to
+      start. Tag names alone don't catch this.
+    * **Supply-chain blob swap** — an attacker with write access to
+      Ollama's blob store could replace the model file. Same defence.
+    * **Local corruption** — disk bit-rot that touches the blob shows
+      up as a hash mismatch.
+
+    Construct once at bridge startup and call :meth:`verify` once. Do
+    not call again at runtime; integrity verification is a
+    startup-only contract.
+    """
+
+    def __init__(
+        self,
+        config: DefenseConfig,
+        ollama_model: str,
+        audit_log: AuditLog,
+        *,
+        manifest_root: Path | None = None,
+    ) -> None:
+        """Build the checker.
+
+        ``ollama_model`` is the model tag from
+        :attr:`OllamaConfig.model` (e.g. ``"qwen2.5-coder:7b-instruct"``).
+        Models without an explicit ``:tag`` default to ``:latest`` per
+        Ollama convention.
+
+        ``manifest_root`` overrides
+        :attr:`DefenseConfig.ollama_manifest_dir` — primarily for tests
+        that point at a tmp_path fixture. Production code should leave
+        it ``None`` and let the config govern.
+        """
+        self._config = config
+        self._ollama_model = ollama_model
+        self._audit_log = audit_log
+        if manifest_root is not None:
+            self._manifest_root = manifest_root
+        else:
+            self._manifest_root = config.ollama_manifest_dir or Path()
+
+    async def verify(self) -> None:
+        """Run the check once. Emits exactly one audit event per call.
+
+        Behaviour:
+
+        * If ``model_expected_hash`` is unset: emit
+          ``bridge.model_integrity_skipped`` + log a loud structured
+          warning. Return cleanly. (Default behaviour for fresh
+          installs — running unverified is opt-out, but the audit
+          trail surfaces it on every startup.)
+        * On match: emit ``bridge.model_integrity_verified``. Return.
+        * On mismatch or read failure: emit
+          ``bridge.model_integrity_failed`` and raise
+          :class:`ModelIntegrityError`. The bridge must exit non-zero.
+        """
+        expected = self._config.model_expected_hash
+        if expected is None:
+            _logger.warning(
+                "bridge starting WITHOUT model integrity check "
+                "(ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH unset). "
+                "Backdoored/swapped models will not be detected. "
+                "Set the expected SHA256 in production to enable "
+                "verification.",
+            )
+            self._audit_log.record(
+                "bridge.model_integrity_skipped",
+                reason="ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH unset",
+                model=self._ollama_model,
+            )
+            return
+
+        try:
+            actual_raw = await asyncio.to_thread(self._read_manifest_layer_digest)
+        except (FileNotFoundError, ValueError) as exc:
+            # ValueError catches json.JSONDecodeError too (subclass).
+            self._audit_log.record(
+                "bridge.model_integrity_failed",
+                reason=f"could not read manifest layer digest: {exc}",
+                model=self._ollama_model,
+                manifest_root=str(self._manifest_root),
+            )
+            raise ModelIntegrityError(
+                f"model integrity check failed: could not read manifest "
+                f"layer digest for {self._ollama_model!r}: {exc}",
+            ) from exc
+
+        expected_n = _normalize_hash(expected.get_secret_value())
+        actual_n = _normalize_hash(actual_raw)
+
+        if not hmac.compare_digest(expected_n, actual_n):
+            self._audit_log.record(
+                "bridge.model_integrity_failed",
+                reason="hash mismatch",
+                model=self._ollama_model,
+                expected_hash=f"sha256:{expected_n[:8]}...{expected_n[-8:]}",
+                actual_hash=f"sha256:{actual_n[:8]}...{actual_n[-8:]}",
+            )
+            raise ModelIntegrityError(
+                f"model integrity check failed for {self._ollama_model!r}: "
+                f"manifest layer digest does not match expected hash. "
+                f"(Expected starts {expected_n[:8]}..., got {actual_n[:8]}...)",
+            )
+
+        self._audit_log.record(
+            "bridge.model_integrity_verified",
+            model=self._ollama_model,
+            verified_hash=f"sha256:{actual_n[:8]}...{actual_n[-8:]}",
+        )
+
+    def _read_manifest_layer_digest(self) -> str:
+        """Synchronous filesystem read of the layer digest. Wrapped in
+        :func:`asyncio.to_thread` from :meth:`verify` to keep async
+        callers non-blocking.
+
+        Raises:
+            FileNotFoundError: manifest file is missing.
+            json.JSONDecodeError: manifest file is not valid JSON.
+            ValueError: manifest has no model-blob layer entry.
+        """
+        manifest_path = self._resolve_manifest_path()
+        with manifest_path.open("rb") as fp:
+            manifest = json.load(fp)
+        layers = manifest.get("layers", [])
+        if not isinstance(layers, list):
+            raise ValueError(
+                f"manifest at {manifest_path} has invalid 'layers' field "
+                f"(expected list, got {type(layers).__name__})",
+            )
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            if layer.get("mediaType") == _MODEL_BLOB_MEDIA_TYPE:
+                digest = layer.get("digest")
+                if not isinstance(digest, str) or not digest:
+                    raise ValueError(
+                        f"manifest at {manifest_path} has a model-blob layer with no digest",
+                    )
+                return digest
+        raise ValueError(
+            f"manifest at {manifest_path} has no layer with mediaType {_MODEL_BLOB_MEDIA_TYPE!r}",
+        )
+
+    def _resolve_manifest_path(self) -> Path:
+        """Build the per-model manifest file path under the root.
+
+        Ollama stores manifests at
+        ``<root>/registry.ollama.ai/library/<name>/<tag>``. A model
+        reference without an explicit ``:tag`` defaults to
+        ``:latest`` per Ollama convention.
+        """
+        if ":" in self._ollama_model:
+            name, tag = self._ollama_model.split(":", 1)
+        else:
+            name, tag = self._ollama_model, "latest"
+        return self._manifest_root / "registry.ollama.ai" / "library" / name / tag
