@@ -1,0 +1,1 @@
+echo "ssh -i ~/.ssh/key.pem root@host"

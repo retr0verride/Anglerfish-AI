@@ -1,0 +1,1 @@
+I am a small open-source language model running locally on your hardware.

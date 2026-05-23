@@ -68,21 +68,21 @@ def compile_pattern(spec: PatternSpec) -> re.Pattern[str]:
 OUTPUT_PATTERNS: Final[list[PatternSpec]] = [
     # --- ai_self_disclosure ---
     # Direct admissions the model is an AI / language model. The
-    # `(?:\w+\s+)?` slot allows one optional adjective (large, small,
+    # `(?:[\w-]+\s+){0,3}` slot allows one optional adjective (large, small,
     # generative, conversational, etc.) between the article and the
     # noun phrase — caught real-world phrasings the corpus surfaced.
     {
-        "pattern": r"\bas\s+an?\s+(?:\w+\s+)?(?:ai|artificial\s+intelligence|language\s+model)\b",
+        "pattern": r"\bas\s+an?\s+(?:[\w-]+\s+){0,3}(?:ai|artificial\s+intelligence|language\s+model)\b",
         "category": "ai_self_disclosure",
         "severity": 1.0,
     },
     {
-        "pattern": r"\bi\s+am\s+(?:an?\s+)?(?:\w+\s+)?(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
+        "pattern": r"\bi\s+am\s+(?:an?\s+)?(?:[\w-]+\s+){0,3}(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
         "category": "ai_self_disclosure",
         "severity": 1.0,
     },
     {
-        "pattern": r"\bi'?m\s+(?:an?\s+)?(?:\w+\s+)?(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
+        "pattern": r"\bi'?m\s+(?:an?\s+)?(?:[\w-]+\s+){0,3}(?:ai|artificial\s+intelligence|language\s+model|chatbot|assistant|llm)\b",
         "category": "ai_self_disclosure",
         "severity": 1.0,
     },
@@ -114,7 +114,7 @@ OUTPUT_PATTERNS: Final[list[PatternSpec]] = [
     {
         # Allows i'm contractions AND an adjective slot before the target
         # noun ("Linux shell", "fake terminal", etc.).
-        "pattern": r"\bi(?:\s+am|'?m)\s+(?:pretending|simulating|emulating|imitating)\s+(?:to\s+be\s+)?(?:a\s+)?(?:\w+\s+)?(?:shell|terminal|server|system|computer|response)\b",
+        "pattern": r"\bi(?:\s+am|'?m)\s+(?:pretending|simulating|emulating|imitating)\s+(?:to\s+be\s+)?(?:a\s+)?(?:[\w-]+\s+){0,3}(?:shell|terminal|server|system|computer|response)\b",
         "category": "honeypot_self_disclosure",
         "severity": 1.0,
     },
@@ -249,6 +249,19 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
         "category": "encoding_evasion",
         "severity": 1.0,
     },
+    {
+        # Standalone base64-looking blob (≥80 chars of base64 alphabet
+        # with the typical = padding). A blob that long with no
+        # surrounding shell context is overwhelmingly an injection
+        # payload — legitimate `echo -n hello | base64` produces an
+        # 8-char output well below the threshold. Real-world legit
+        # base64 in attacker commands (cert payloads, etc.) is rare on
+        # interactive shells; if it false-positives the operator can
+        # whitelist via pattern_overrides_path.
+        "pattern": r"\b[A-Za-z0-9+/]{80,}={0,2}\b",
+        "category": "encoding_evasion",
+        "severity": 1.0,
+    },
     # --- language_evasion ---
     # Attempts to bypass English-only output filters by switching language.
     {
@@ -272,15 +285,31 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
     # --- override_instructions ---
     # Classic jailbreak opener.
     {
-        # The optional `(?:\w+\s+)?` slot allows one adjective between the
-        # temporal word and the target noun (e.g. "previous SAFETY
+        # The optional `(?:[\w-]+\s+){0,3}` slot allows 0-3 adjectives between
+        # the temporal word and the target noun (e.g. "previous SAFETY
         # guidelines", "prior SYSTEM instructions").
-        "pattern": r"\b(?:ignore|disregard|forget|override|bypass)\s+(?:all|any|the|your)?\s*(?:previous|prior|earlier|above|preceding|original)\s+(?:\w+\s+)?(?:instructions?|prompts?|rules?|guidelines?|commands?|safety|filters?|restrictions?)\b",
+        "pattern": r"\b(?:ignore|disregard|forget|override|bypass)\s+(?:all|any|the|your)?\s*(?:previous|prior|earlier|above|preceding|original)\s+(?:[\w-]+\s+){0,3}(?:instructions?|prompts?|rules?|guidelines?|commands?|safety|filters?|restrictions?)\b",
+        "category": "override_instructions",
+        "severity": 1.0,
+    },
+    {
+        # Anchorless variant — "ignore your instructions" without a
+        # temporal word. Requires the verb + a possessive/article +
+        # the target noun. Catches "ignore your rules", "disregard my
+        # guidelines", "bypass the filters", etc.
+        "pattern": r"\b(?:ignore|disregard|override|bypass)\s+(?:your|all|any|the|my)\s+(?:[\w-]+\s+){0,3}(?:instructions?|prompts?|rules?|guidelines?|filters?|restrictions?|safety)\b",
         "category": "override_instructions",
         "severity": 1.0,
     },
     {
         "pattern": r"\bforget\s+(?:what|everything)\s+(?:you\s+)?(?:were|was|are)\s+(?:told|instructed|programmed|trained)\b",
+        "category": "override_instructions",
+        "severity": 1.0,
+    },
+    {
+        # "forget that you have any rules", "forget you were given
+        # instructions" — covers the "forget + assertion" framing.
+        "pattern": r"\bforget\s+(?:that\s+)?(?:you\s+)?(?:have|had|were\s+given|got|are\s+bound\s+by)\s+(?:any\s+)?(?:[\w-]+\s+){0,3}(?:rules?|restrictions?|instructions?|guidelines?|filters?|limits?)\b",
         "category": "override_instructions",
         "severity": 1.0,
     },
@@ -298,6 +327,15 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
     },
     {
         "pattern": r"\b(?:act|behave|respond|reply)\s+as\s+(?:if\s+)?(?:you\s+(?:are|were))?\s*(?:a|an|the)\s+\S",
+        "category": "persona_switch",
+        "severity": 1.0,
+    },
+    {
+        # Article-less variant for specific privileged-role nouns:
+        # "act as root", "behave as admin", "act as sudo". Doesn't
+        # over-fire on benign "act as proxy" / "act as buffer" etc.
+        # because the noun set is small and admin-specific.
+        "pattern": r"\b(?:act|behave|respond|reply)\s+as\s+(?:root|admin|administrator|superuser|sudo|kernel|sysadmin|operator)\b",
         "category": "persona_switch",
         "severity": 1.0,
     },
