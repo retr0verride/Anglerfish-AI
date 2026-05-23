@@ -1,12 +1,13 @@
 """Generate the README banner from the bioluminescent dashboard palette.
 
 Output: ``assets/anglerfish-banner.png`` — static PNG (1280x320) with
-the cleaned fish sigil centred on the deep-sea radial gradient that
-matches the dashboard ``body`` + ``.lure`` background in
+the cleaned fish sigil on the left and a glowing 'ANGLERFISH AI' title
++ tagline to its right, all on the deep-sea radial gradient that
+mirrors the dashboard ``body`` + ``.lure`` background in
 ``src/anglerfish/dashboard/static/style.css``.
 
-Source: ``assets/anglerfish.png`` (already background-stripped by
-``tools/clean_logo.py``).
+Source: ``assets/anglerfish.png`` (already background-stripped and
+recoloured by ``tools/clean_logo.py``).
 
     python tools/generate_banner.py
 """
@@ -17,7 +18,7 @@ import math
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGIL_SRC = ROOT / "assets" / "anglerfish.png"
@@ -29,10 +30,28 @@ WIDTH, HEIGHT = 1280, 320
 ABYSS = (2, 6, 15, 255)
 ABYSS_2 = (5, 11, 29, 255)
 ABYSS_3 = (10, 21, 48, 255)
+BIO = (34, 211, 238)              # --bioluminescence
+BIO_SOFT = (103, 232, 249)        # --bioluminescence-soft
+TEXT_DIM = (148, 168, 192)        # --text-dim
 BORDER = (34, 211, 238, 46)       # rgba(34,211,238,0.18)
 
-# Sigil height in banner pixels — leaves ~24px breathing room top/bottom.
-SIGIL_H = 272
+# Layout.
+PAD = 64
+SIGIL_H = 140
+GAP = 56
+
+# Fonts — Segoe UI ships with Windows and is the closest match to the
+# Inter stack the dashboard uses.
+WIN_FONTS = Path("C:/Windows/Fonts")
+FONT_TITLE = WIN_FONTS / "segoeuib.ttf"   # Segoe UI Bold
+FONT_SUB = WIN_FONTS / "segoeui.ttf"      # Segoe UI Regular
+
+TITLE_SIZE = 88
+SUB_SIZE = 28
+TITLE_TRACK = 14  # ~0.16em letter-spacing at 88px
+
+TITLE_TEXT = "ANGLERFISH AI"
+SUB_TEXT = "Deep-sea SSH honeypot · AI-powered threat intelligence"
 
 
 def make_background() -> Image.Image:
@@ -64,23 +83,78 @@ def make_background() -> Image.Image:
 
 
 def load_sigil() -> Image.Image:
-    """Open the source, crop to its alpha bounding box, and scale to SIGIL_H."""
+    """Open the source, crop to its alpha bounding box, scale to SIGIL_H."""
     sigil = Image.open(SIGIL_SRC).convert("RGBA")
     bbox = sigil.getbbox()
     if bbox is None:
         raise RuntimeError(f"{SIGIL_SRC} has no opaque pixels")
     sigil = sigil.crop(bbox)
     ratio = SIGIL_H / sigil.height
-    new_w = round(sigil.width * ratio)
-    return sigil.resize((new_w, SIGIL_H), Image.LANCZOS)
+    return sigil.resize((round(sigil.width * ratio), SIGIL_H), Image.LANCZOS)
+
+
+def tracked_width(text: str, font: ImageFont.FreeTypeFont, track: int) -> int:
+    if not text:
+        return 0
+    total = 0
+    for ch in text:
+        bbox = font.getbbox(ch)
+        total += (bbox[2] - bbox[0]) + track
+    return total - track
+
+
+def draw_tracked(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    fill: tuple[int, int, int] | tuple[int, int, int, int],
+    track: int,
+) -> None:
+    x, y = xy
+    for ch in text:
+        draw.text((x, y), ch, font=font, fill=fill)
+        bbox = font.getbbox(ch)
+        x += (bbox[2] - bbox[0]) + track
+
+
+def render_title(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
+    """Title with a soft cyan glow underneath, matching CSS text-shadow."""
+    text_w = tracked_width(text, font, TITLE_TRACK)
+    pad = 40
+    w = text_w + pad * 2
+    h = TITLE_SIZE * 2
+    glow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw_tracked(ImageDraw.Draw(glow_layer), (pad, h // 4), text, font, (*BIO, 200), TITLE_TRACK)
+    glow = glow_layer.filter(ImageFilter.GaussianBlur(6))
+    fg = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw_tracked(ImageDraw.Draw(fg), (pad, h // 4), text, font, (*BIO_SOFT, 255), TITLE_TRACK)
+    glow.alpha_composite(fg)
+    return glow
 
 
 def compose_banner() -> Image.Image:
     base = make_background()
     sigil = load_sigil()
-    sigil_x = (WIDTH - sigil.width) // 2
+    sigil_x = PAD
     sigil_y = (HEIGHT - SIGIL_H) // 2
     base.alpha_composite(sigil, (sigil_x, sigil_y))
+
+    title_font = ImageFont.truetype(str(FONT_TITLE), TITLE_SIZE)
+    sub_font = ImageFont.truetype(str(FONT_SUB), SUB_SIZE)
+    title_img = render_title(TITLE_TEXT, title_font)
+
+    text_x = sigil_x + sigil.width + GAP
+    # Vertically centre the title+subtitle block as a unit.
+    sub_gap = 18
+    block_h = TITLE_SIZE + sub_gap + SUB_SIZE
+    block_y = (HEIGHT - block_h) // 2
+    # title_img has the glyphs at h//4 with TITLE_SIZE*2 canvas, so the
+    # glyph top sits at TITLE_SIZE//2 from the layer's top.
+    base.alpha_composite(title_img, (text_x - 40, block_y - TITLE_SIZE // 2))
+
+    sub_y = block_y + TITLE_SIZE + sub_gap
+    ImageDraw.Draw(base).text((text_x, sub_y), SUB_TEXT, font=sub_font, fill=TEXT_DIM)
     return base
 
 
