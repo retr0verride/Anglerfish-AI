@@ -1,8 +1,12 @@
 """Generate the README banner from the bioluminescent dashboard palette.
 
 Output: ``assets/anglerfish-banner.png`` — static PNG (1280x320) whose
-layout, palette, glow and lit esca match the dashboard ``.lure`` header
-in ``src/anglerfish/dashboard/static/style.css``.
+layout, palette and sigil halo match the dashboard ``.lure`` header in
+``src/anglerfish/dashboard/static/style.css``.
+
+The source artwork surrounds the bulb with a dotted cyan/dark mesh that
+reads as a checkerboard at any zoom; we wipe that ring before
+compositing while preserving the clean cyan bulb disc itself.
 
 Re-run after editing dashboard styles or bumping the version so the
 README banner stays in sync.
@@ -29,27 +33,20 @@ WIDTH, HEIGHT = 1280, 320
 ABYSS = (2, 6, 15, 255)
 ABYSS_2 = (5, 11, 29, 255)
 ABYSS_3 = (10, 21, 48, 255)
-KELP = (15, 40, 73, 255)
 BIO = (34, 211, 238)              # --bioluminescence
 BIO_SOFT = (103, 232, 249)        # --bioluminescence-soft
-TEXT = (226, 243, 255)
 TEXT_DIM = (148, 168, 192)
 BORDER = (34, 211, 238, 46)       # rgba(34,211,238,0.18)
-ESCA_CORE = (180, 248, 255)       # warm-white core of the throb
 
-# Esca centroid in the sigil. Measured directly from the bulb-tip pixels —
-# the dashboard CSS uses (0.776, 0.325) which targets the stem joint instead;
-# good enough for the CSS overlay's wide bloom, wrong for a tight static glow.
-ESCA_X_PCT = 0.838
-ESCA_Y_PCT = 0.348
-# Radius (as fraction of sigil width) of the bulb-area patch we erase in the
-# source artwork before painting the glow. The original PNG surrounds the
-# bulb with a dotted cyan/dark halo that reads as a checkerboard at any
-# zoom; this mask wipes it so the painted glow can own that region.
-ESCA_PATCH_RADIUS_PCT = 0.21
-# Glow disc diameter as a fraction of sigil width. Sized to roughly match
-# the bulb tip + a soft halo — not the full lure span like the CSS overlay.
-ESCA_GLOW_DIAMETER_PCT = 0.26
+# Where to wipe and where to repaint. The source artwork's halo is centered
+# slightly left of the bulb disc, so a single circular erase covers both,
+# then we paint a clean cyan disc back at the bulb's actual position.
+ESCA_ERASE_X_PCT = 0.83        # erase mask centre — covers halo + disc
+ESCA_ERASE_Y_PCT = 0.34
+ESCA_ERASE_RADIUS_PCT = 0.18
+ESCA_DISC_X_PCT = 0.889        # painted bulb centre — actual disc position
+ESCA_DISC_Y_PCT = 0.344
+ESCA_DISC_RADIUS_PCT = 0.048
 
 # Layout: 48px outer padding, sigil ~ 224px tall, 32px gap to text block.
 PAD = 48
@@ -66,11 +63,6 @@ SUB_SIZE = 22
 PILL_SIZE = 18
 TITLE_TRACK = 11   # ~ 0.18em at 64px
 PILL_TRACK = 2
-
-# Static esca: somewhere between the CSS keyframes' mid and peak, so the bulb
-# reads as lit on a still page without being blown out.
-ESCA_SCALE = 1.05
-ESCA_OPACITY = 0.9
 
 
 def read_version() -> str:
@@ -109,19 +101,18 @@ def make_background() -> Image.Image:
 
 
 def load_sigil() -> Image.Image:
-    """Load the silhouette and wipe the bulb-mesh pixels so the glow can own that area."""
+    """Load the silhouette, wipe the bulb/halo region, paint a clean bulb back."""
     sigil = Image.open(SIGIL_SRC).convert("RGBA")
     ratio = SIGIL_H / sigil.height
     new_w = round(sigil.width * ratio)
     sigil = sigil.resize((new_w, SIGIL_H), Image.LANCZOS)
-    cx = round(new_w * ESCA_X_PCT)
-    cy = round(SIGIL_H * ESCA_Y_PCT)
-    r = round(new_w * ESCA_PATCH_RADIUS_PCT)
-    # Build a soft mask so the erase fades at the bulb edge — no hard circle.
+    # Wipe the entire bulb-area circle (halo + original disc).
+    ex = round(new_w * ESCA_ERASE_X_PCT)
+    ey = round(SIGIL_H * ESCA_ERASE_Y_PCT)
+    er = round(new_w * ESCA_ERASE_RADIUS_PCT)
     mask = Image.new("L", sigil.size, 255)
-    mdraw = ImageDraw.Draw(mask)
-    mdraw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=0)
-    mask = mask.filter(ImageFilter.GaussianBlur(2))
+    ImageDraw.Draw(mask).ellipse((ex - er, ey - er, ex + er, ey + er), fill=0)
+    mask = mask.filter(ImageFilter.GaussianBlur(0.6))
     alpha = sigil.split()[3]
     new_alpha = Image.new("L", sigil.size)
     ap = alpha.load()
@@ -132,6 +123,12 @@ def load_sigil() -> Image.Image:
         for x in range(sigil.size[0]):
             np_[x, y] = (ap[x, y] * mp[x, y]) // 255
     sigil.putalpha(new_alpha)
+    # Paint a clean cyan disc at the bulb's actual location.
+    dx = round(new_w * ESCA_DISC_X_PCT)
+    dy = round(SIGIL_H * ESCA_DISC_Y_PCT)
+    dr = round(new_w * ESCA_DISC_RADIUS_PCT)
+    disc_draw = ImageDraw.Draw(sigil)
+    disc_draw.ellipse((dx - dr, dy - dr, dx + dr, dy + dr), fill=(*BIO_SOFT, 255))
     return sigil
 
 
@@ -200,45 +197,8 @@ def render_status_pill(version: str, font: ImageFont.FreeTypeFont) -> Image.Imag
     return pill
 
 
-def radial_glow(diameter: int, alpha: float) -> Image.Image:
-    """Radial-gradient disc that fades to transparent — the throbbing esca."""
-    img = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
-    px = img.load()
-    assert px is not None
-    radius = diameter / 2
-    for y in range(diameter):
-        for x in range(diameter):
-            dx = x - radius
-            dy = y - radius
-            d = math.sqrt(dx * dx + dy * dy) / radius
-            if d >= 1:
-                continue
-            # Stops modeled on the CSS radial-gradient on .lure__sigil-wrap::after.
-            if d < 0.25:
-                a = 0.95
-                r, g, b = ESCA_CORE
-            elif d < 0.55:
-                t = (d - 0.25) / 0.30
-                a = 0.95 + (0.55 - 0.95) * t
-                r = round(ESCA_CORE[0] + (BIO_SOFT[0] - ESCA_CORE[0]) * t)
-                g = round(ESCA_CORE[1] + (BIO_SOFT[1] - ESCA_CORE[1]) * t)
-                b = round(ESCA_CORE[2] + (BIO_SOFT[2] - ESCA_CORE[2]) * t)
-            elif d < 0.75:
-                t = (d - 0.55) / 0.20
-                a = 0.55 + (0.18 - 0.55) * t
-                r = round(BIO_SOFT[0] + (BIO[0] - BIO_SOFT[0]) * t)
-                g = round(BIO_SOFT[1] + (BIO[1] - BIO_SOFT[1]) * t)
-                b = round(BIO_SOFT[2] + (BIO[2] - BIO_SOFT[2]) * t)
-            else:
-                t = (d - 0.75) / 0.25
-                a = 0.18 * (1 - t)
-                r, g, b = BIO
-            px[x, y] = (r, g, b, max(0, min(255, round(255 * a * alpha))))
-    return img
-
-
-def compose_static_base(version: str) -> tuple[Image.Image, tuple[int, int], int]:
-    """Return the base banner (no esca glow), plus esca centre + glow diameter."""
+def compose_banner(version: str) -> Image.Image:
+    """Render the full banner: background + sigil + title/subtitle + version pill."""
     base = make_background()
     sigil = load_sigil()
     halo = sigil_halo(sigil)
@@ -265,42 +225,7 @@ def compose_static_base(version: str) -> tuple[Image.Image, tuple[int, int], int
     pill_x = WIDTH - PAD - pill.width
     pill_y = (HEIGHT - pill.height) // 2
     base.alpha_composite(pill, (pill_x, pill_y))
-
-    esca_cx = sigil_x + round(sigil.width * ESCA_X_PCT)
-    esca_cy = sigil_y + round(SIGIL_H * ESCA_Y_PCT)
-    glow_diameter = round(sigil.width * ESCA_GLOW_DIAMETER_PCT)
-    return base, (esca_cx, esca_cy), glow_diameter
-
-
-def paint_esca(base: Image.Image, centre: tuple[int, int], base_diameter: int) -> Image.Image:
-    """Screen-blend the lit esca glow onto the sigil. Same intent as
-    ``mix-blend-mode: screen`` on the dashboard ``.lure__sigil-wrap::after``."""
-    diameter = max(2, round(base_diameter * ESCA_SCALE))
-    glow = radial_glow(diameter, ESCA_OPACITY)
-    out = base.copy()
-    cx, cy = centre
-    pos = (cx - diameter // 2, cy - diameter // 2)
-    region = out.crop((pos[0], pos[1], pos[0] + diameter, pos[1] + diameter))
-    blended = Image.new("RGBA", region.size, (0, 0, 0, 0))
-    rp = region.load()
-    gp = glow.load()
-    bp = blended.load()
-    assert rp is not None and gp is not None and bp is not None
-    for y in range(diameter):
-        for x in range(diameter):
-            rr, rg, rb, ra = rp[x, y]
-            gr, gg, gb, ga = gp[x, y]
-            if ga == 0:
-                bp[x, y] = (rr, rg, rb, ra)
-                continue
-            ga_n = ga / 255
-            out_r = round(rr + (255 - rr) * (gr / 255) * ga_n)
-            out_g = round(rg + (255 - rg) * (gg / 255) * ga_n)
-            out_b = round(rb + (255 - rb) * (gb / 255) * ga_n)
-            out_a = max(ra, ga)
-            bp[x, y] = (out_r, out_g, out_b, out_a)
-    out.paste(blended, pos)
-    return out
+    return base
 
 
 def main() -> int:
@@ -309,8 +234,7 @@ def main() -> int:
         return 1
     version = read_version()
     print(f"rendering banner for v{version}")
-    base, centre, glow_d = compose_static_base(version)
-    banner = paint_esca(base, centre, glow_d)
+    banner = compose_banner(version)
     BANNER_OUT.parent.mkdir(parents=True, exist_ok=True)
     banner.save(BANNER_OUT, format="PNG", optimize=True)
     size_kb = BANNER_OUT.stat().st_size / 1024
