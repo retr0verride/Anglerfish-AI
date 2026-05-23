@@ -84,6 +84,94 @@ async def test_record_attempt_dedupes_per_source_ip(tmp_path: Path) -> None:
     assert len(records) == 2
 
 
+async def test_record_attempt_enforces_per_source_ip_cap(tmp_path: Path) -> None:
+    """Once a source IP hits the unique-credentials cap, new pairs are dropped."""
+    db = tmp_path / "creds.db"
+    sid = uuid4()
+    ts = datetime(2026, 5, 22, tzinfo=UTC)
+    config = CredentialsConfig(
+        database_path=db,
+        encryption_key=SecretStr(base64.b64encode(b"\x07" * 32).decode("ascii")),
+        max_unique_per_source_ip=3,
+    )
+    async with CredentialStore(config) as store:
+        # 3 distinct pairs from the same IP — all accepted.
+        for i in range(3):
+            assert (
+                await store.record_attempt(
+                    source_ip="203.0.113.7",
+                    username=f"u{i}",
+                    password=f"p{i}",
+                    session_id=sid,
+                    timestamp=ts,
+                )
+                is True
+            )
+        # 4th unique pair from same IP — dropped (returns False).
+        assert (
+            await store.record_attempt(
+                source_ip="203.0.113.7",
+                username="overflow",
+                password="x",
+                session_id=sid,
+                timestamp=ts,
+            )
+            is False
+        )
+        # Existing pair on the same IP still increments — the cap is on
+        # *unique* inserts, not on attempt counting.
+        assert (
+            await store.record_attempt(
+                source_ip="203.0.113.7",
+                username="u0",
+                password="p0",
+                session_id=sid,
+                timestamp=ts,
+            )
+            is False
+        )
+        # Different source IP still gets its own quota.
+        assert (
+            await store.record_attempt(
+                source_ip="203.0.113.8",
+                username="root",
+                password="hunter2",
+                session_id=sid,
+                timestamp=ts,
+            )
+            is True
+        )
+        records = await store.query()
+    assert len(records) == 4  # 3 from .7 + 1 from .8
+    by_ip = {r.source_ip: r for r in records if r.source_ip == "203.0.113.7"}
+    assert by_ip["203.0.113.7"].attempt_count == 2  # u0/p0 was hit twice
+
+
+async def test_record_attempt_cap_zero_disables_limit(tmp_path: Path) -> None:
+    db = tmp_path / "creds.db"
+    sid = uuid4()
+    ts = datetime(2026, 5, 22, tzinfo=UTC)
+    config = CredentialsConfig(
+        database_path=db,
+        encryption_key=SecretStr(base64.b64encode(b"\x07" * 32).decode("ascii")),
+        max_unique_per_source_ip=0,
+    )
+    async with CredentialStore(config) as store:
+        for i in range(50):
+            assert (
+                await store.record_attempt(
+                    source_ip="203.0.113.7",
+                    username=f"u{i}",
+                    password="p",
+                    session_id=sid,
+                    timestamp=ts,
+                )
+                is True
+            )
+        records = await store.query(limit=1000)
+    assert len(records) == 50
+
+
 async def test_query_filters_by_source_ip(tmp_path: Path) -> None:
     db = tmp_path / "creds.db"
     sid = uuid4()

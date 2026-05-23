@@ -30,5 +30,16 @@ ExecStartPost=/bin/systemctl start getty@tty1.service
 # absent (operator skipped that prompt).
 ExecStartPost=/bin/systemctl start anglerfish-geo-update.service
 
+# Lock the audit log to append-only at the filesystem level. The wizard
+# has just written its first record so the file exists. `chattr +a` only
+# works on ext2/3/4, btrfs and xfs; on other filesystems the command
+# fails harmlessly and the audit log remains append-only by convention.
+# Once set, the attribute persists in the inode across reboots — this
+# only needs to fire on first boot.
+#
+# Leading `-` makes the whole step non-fatal: an unsupported filesystem
+# or chmod failure must not abort firstboot.
+ExecStartPost=-/bin/sh -c 'install -d -m 0750 -o anglerfish -g anglerfish /var/log/anglerfish && touch /var/log/anglerfish/audit.jsonl && chown anglerfish:anglerfish /var/log/anglerfish/audit.jsonl && chmod 0640 /var/log/anglerfish/audit.jsonl && chattr +a /var/log/anglerfish/audit.jsonl 2>/dev/null || true'
+
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,64 @@
+[Unit]
+Description=Anglerfish AI lab — continuous PCAP capture on bait bridge
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+# Wait for the bridge to exist; tcpdump exits immediately if the
+# interface is missing.
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/sys/class/net/vmbr-lab
+
+[Service]
+Type=exec
+# Drop privileges as soon as the raw socket is open. tcpdump must
+# start as root (CAP_NET_RAW) but immediately seteuid's down.
+User=root
+Group=root
+
+# -i vmbr-lab   capture on the air-gapped bait bridge
+# -w ...%F-%H%M%S.pcap   per-file timestamp in the name (rotated by -G)
+# -G 3600   roll the file every hour
+# -W 168    keep at most 168 hourly files (= 7 days)
+# -K        don't verify TCP checksums (saves CPU; we want every packet)
+# -n        don't resolve names — DNS lookups would leak outside the lab
+# -s 0      full-packet capture (default is 262144 in recent tcpdump)
+# -Z tcpdump   drop privileges to the `tcpdump` user after socket open
+ExecStartPre=/bin/install -d -m 0750 -o tcpdump -g tcpdump /var/log/anglerfish-lab/pcap
+ExecStart=/usr/bin/tcpdump \
+    -i vmbr-lab \
+    -w /var/log/anglerfish-lab/pcap/cap-%%F-%%H%%M%%S.pcap \
+    -G 3600 \
+    -W 168 \
+    -K \
+    -n \
+    -s 0 \
+    -Z tcpdump
+
+# tcpdump returns 0 on SIGTERM; restart on any other exit.
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+
+# Hardening — tcpdump needs raw network access but nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# CAP_NET_RAW + CAP_NET_ADMIN for the bridge sniffing; CAP_SETUID/GID
+# for the -Z drop. Nothing else.
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+ReadWritePaths=/var/log/anglerfish-lab/pcap
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

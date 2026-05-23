@@ -116,7 +116,7 @@ anglerfish = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["iso", "cowrie", "systemd", "build", "dist"]
+extend-exclude = ["iso", "cowrie", "systemd", "build", "dist", "tools"]
 
 [tool.ruff.lint]
 select = [

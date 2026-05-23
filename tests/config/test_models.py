@@ -276,6 +276,45 @@ def test_threat_threshold_bounds() -> None:
         ThreatConfig(alert_threshold=101)
 
 
+def test_threat_webhook_https_hostname_accepted() -> None:
+    cfg = ThreatConfig(
+        alert_webhook_url=HttpUrl("https://hooks.slack.com/services/T/B/X"),
+    )
+    assert cfg.alert_webhook_url is not None
+    assert cfg.alert_webhook_url.host == "hooks.slack.com"
+
+
+def test_threat_webhook_rejects_http_scheme() -> None:
+    with pytest.raises(ValidationError, match="not 'https'"):
+        ThreatConfig(
+            alert_webhook_url=HttpUrl("http://hooks.slack.com/services/T/B/X"),
+        )
+
+
+def test_threat_webhook_rejects_loopback_ip_literal() -> None:
+    with pytest.raises(ValidationError, match="private/loopback/link-local"):
+        ThreatConfig(alert_webhook_url=HttpUrl("https://127.0.0.1/hook"))
+
+
+def test_threat_webhook_rejects_private_ip_literal() -> None:
+    with pytest.raises(ValidationError, match="private/loopback/link-local"):
+        ThreatConfig(alert_webhook_url=HttpUrl("https://10.0.0.5/hook"))
+    with pytest.raises(ValidationError, match="private/loopback/link-local"):
+        ThreatConfig(alert_webhook_url=HttpUrl("https://192.168.1.1/hook"))
+    with pytest.raises(ValidationError, match="private/loopback/link-local"):
+        ThreatConfig(alert_webhook_url=HttpUrl("https://172.16.0.1/hook"))
+
+
+def test_threat_webhook_rejects_link_local_ip_literal() -> None:
+    with pytest.raises(ValidationError, match="private/loopback/link-local"):
+        ThreatConfig(alert_webhook_url=HttpUrl("https://169.254.169.254/hook"))
+
+
+def test_threat_webhook_rejects_loopback_ipv6_literal() -> None:
+    with pytest.raises(ValidationError, match="private/loopback/link-local"):
+        ThreatConfig(alert_webhook_url=HttpUrl("https://[::1]/hook"))
+
+
 # ---------------------------------------------------------------------------
 # GeoConfig
 # ---------------------------------------------------------------------------

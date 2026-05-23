@@ -174,6 +174,19 @@ class CredentialStore:
         )
         row = cur.fetchone()
         if row is None:
+            cap = self._config.max_unique_per_source_ip
+            if cap > 0:
+                count_cur = self._conn.execute(
+                    "SELECT COUNT(*) FROM attempts WHERE source_ip = ?",
+                    (source_ip,),
+                )
+                (existing_count,) = count_cur.fetchone()
+                if existing_count >= cap:
+                    # Cap reached for this source IP. Drop the new unique
+                    # attempt to bound disk growth — the per-attempt event
+                    # is still emitted to Splunk by the forwarder, so the
+                    # operator can still see what was tried.
+                    return False
             self._conn.execute(
                 """
                 INSERT INTO attempts (

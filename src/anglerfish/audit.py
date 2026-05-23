@@ -5,9 +5,14 @@ operators want to be able to ask "what did the operators do?" without
 the answer being drowned out by captured-attacker noise. The log is
 JSONL — one event per line, ``fsync``\\ ed after each write — and is
 deliberately *append-only* in the sense that the writer never seeks
-or rewrites earlier records. We do not enforce write-once at the
-filesystem level; operators who want that can layer ``chattr +a`` or
-an external WORM store on top.
+or rewrites earlier records.
+
+The first-boot systemd unit sets ``chattr +a`` on the file on
+supported filesystems (ext2/3/4, btrfs, xfs), upgrading the
+convention to a filesystem-level invariant: even root can't truncate
+or rewrite past records without first removing the attribute. The
+file can still be deleted by root; pair with off-host shipping
+(Splunk HEC) for true tamper-evidence.
 
 Events recorded today:
 
