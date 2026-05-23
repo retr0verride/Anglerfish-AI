@@ -116,6 +116,21 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 
 ---
 
+## Documentation
+
+| Document                                         | What it covers                                                         |
+| ------------------------------------------------ | ---------------------------------------------------------------------- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)   | Module-by-module walkthrough, IPC boundaries, where to look when       |
+| [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Bridge + dashboard REST endpoints, WebSocket protocol, integration examples |
+| [`docs/INSTALL.md`](docs/INSTALL.md)             | Prerequisites, ISO + Proxmox/QEMU deployment, wizard walkthrough       |
+| [`docs/proxmox.md`](docs/proxmox.md)             | Proxmox-specific bridge prep, VM config, snapshots                     |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md)             | Day-2 ops — credentials rotation, geo updates, 7 recovery scenarios    |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)   | STRIDE table, trust boundaries, crypto inventory, known limitations    |
+| [`SECURITY.md`](SECURITY.md)                     | Vulnerability disclosure policy, supported versions, scope             |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)             | Quality gates, branch/commit style, PR checklist                       |
+
+---
+
 ## Quick start (development)
 
 ### Prerequisites
