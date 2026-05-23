@@ -14,7 +14,7 @@ Status legend: `🟦 not started` · `🟨 in design` · `🟩 in progress` · `
 | #   | Stage                          | Status        | Est. effort | Design doc                              | Depends on |
 | --- | ------------------------------ | ------------- | ----------- | --------------------------------------- | ---------- |
 | 0   | Positioning + product spec     | ✅ shipped     | ~2h         | n/a (the docs themselves)               | —          |
-| 1   | LLM defense layer              | 🟦 not started | ~6h         | `design/STAGE_1_llm_defense.md`         | 0          |
+| 1   | LLM defense layer              | ✅ shipped     | ~6h         | `design/STAGE_1_llm_defense.md`         | 0          |
 | 2   | Persistent rich session store  | 🟦 not started | ~8h         | `design/STAGE_2_session_store.md`       | 0          |
 | 3   | Local-LLM leverage layer       | 🟦 not started | ~8h         | `design/STAGE_3_llm_leverage.md`        | 1          |
 | 4   | Capability: active time-wasting | 🟦 not started | ~6h         | `design/STAGE_4_time_wasting.md`        | 1, 3       |
@@ -42,30 +42,47 @@ Deliverables shipped: [`PRODUCT.md`](PRODUCT.md),
 [`design/TEMPLATE.md`](design/TEMPLATE.md), this file, README docs
 index updated.
 
-### Stage 1 — LLM defense layer
+### Stage 1 — LLM defense layer ✅
 
-**Problem.** The bridge today has zero defense against LLM-targeted
-attacks. Jailbreak prompts can extract "I am an AI" confessions.
-Prompt injection can flip persona mid-session. Model degradation
-(corrupt weights, swapped model, Ollama returning garbage) goes
-undetected.
+**Problem.** The bridge had zero defense against LLM-targeted
+attacks. Jailbreak prompts could extract "I am an AI" confessions.
+Prompt injection could flip persona mid-session. Model degradation
+(corrupt weights, swapped tag, backdoored upstream) went undetected.
 
-**Deliverables:**
+**Shipped** in seven slices, each green at commit:
 
-* `src/anglerfish/bridge/defense.py` — output post-filter +
-  prompt-injection scorer + model-integrity check at startup.
-* `tests/llm_defense/` — fixed corpus of jailbreak/injection cases
-  every future stage must defend against.
-* `ANGLERFISH_BRIDGE__MODEL_HASH` config key — expected SHA256 of the
-  Ollama model blob. Bridge refuses to start if mismatch.
-* New audit event types: `bridge.defense_fired`,
-  `bridge.model_integrity_failed`.
+| Slice | Commit  | What                                                   |
+| ----- | ------- | ------------------------------------------------------ |
+| Design | `a58b6d6` | `docs/design/STAGE_1_llm_defense.md`                   |
+| 1.1   | `b6b9efb` | `DefenseConfig` Pydantic model + validation tests     |
+| 1.2   | `e07ba2e` | `defense.py` (DefenseVerdict + ModelIntegrityError) + `defense_patterns.py` (45 patterns across 14 categories) + structural tests |
+| 1.3   | `fb7ef66` | `OutputFilter` + `InjectionScorer` + TOML overrides   |
+| 1.4   | `7d93f79` | `ModelIntegrity` with Ollama layer-digest pinning     |
+| 1.5   | `d8ad066` | Bridge request-flow + startup integration             |
+| 1.6   | `4e5a5d4` | 116-file corpus (35 leak / 20 safe-output / 36 inj / 25 safe-input) + 6 pattern refinements driven by corpus |
+| 1.7   | (this PR) | `.env.example` + `THREAT_MODEL.md` + roadmap flip     |
 
-**Why first** (after spec). Every later stage adds LLM-driven
-behaviors. Building defense once, then layering features on top,
-means each new feature inherits the defense automatically. Building
-features first and bolting on defense later means re-auditing every
-feature.
+**Artifacts the rest of the roadmap depends on:**
+
+* `src/anglerfish/bridge/defense.py` — `OutputFilter`, `InjectionScorer`,
+  `ModelIntegrity`, `DefenseVerdict`, `ModelIntegrityError`,
+  `load_pattern_overrides`.
+* `src/anglerfish/bridge/defense_patterns.py` — in-tree default patterns;
+  every later stage that touches the bridge adds cases to the corpus.
+* `DefenseConfig` under `ANGLERFISH_DEFENSE__*` env vars.
+* Audit events: `bridge.defense_fired`, `bridge.model_integrity_verified`,
+  `bridge.model_integrity_failed`, `bridge.model_integrity_skipped`.
+* Bridge errors: `InjectionDetectedError`, `OutputFilterFiredError`.
+* 116 test-corpus files in `tests/llm_defense/corpus/` — the source of
+  truth for what Stage 1 catches and what it deliberately doesn't.
+
+**Numbers at completion:** 891 tests pass at 92%+ coverage; mypy
+strict clean across 147 source files; ruff lint + format clean.
+
+**Why this ordering.** Every later stage adds LLM-driven behaviour.
+Building defense once, then layering features on top, means each new
+feature inherits the defense automatically. Building features first
+and bolting on defense later means re-auditing every feature.
 
 ### Stage 2 — Persistent rich session store
 
