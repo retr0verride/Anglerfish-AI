@@ -267,6 +267,14 @@ ANGLERFISH_OLLAMA__MODEL=qwen2.5-coder:7b-instruct
 # Stage 1 defense — pin the fast model's layer hash
 ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
 
+# REQUIRED when MODEL_EXPECTED_HASH is set: where to find the manifest.
+# Common values:
+#   /usr/share/ollama/.ollama/models/manifests  (Linux, official systemd installer)
+#   ~/.ollama/models/manifests                  (user-installed Ollama)
+# The bridge cross-field-validates these two together; setting one without
+# the other fails at startup with a clear error.
+ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR=/usr/share/ollama/.ollama/models/manifests
+
 # Stage 1 defense layer tuning (optional — defaults are sensible)
 ANGLERFISH_DEFENSE__OUTPUT_FILTER_ENABLED=true
 ANGLERFISH_DEFENSE__INJECTION_FILTER_ENABLED=true

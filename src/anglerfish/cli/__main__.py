@@ -115,11 +115,13 @@ def bridge_serve(
     This boots a Uvicorn server hosting :func:`anglerfish.bridge.create_bridge_app`.
     Use only with a configured ``.env`` (see ``anglerfish config show``).
     """
+    import asyncio
+
     import uvicorn
 
     from anglerfish.audit import AuditLog
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
-    from anglerfish.bridge.defense import ModelIntegrity
+    from anglerfish.bridge.defense import ModelIntegrity, ModelIntegrityError
 
     try:
         settings = load_settings()
@@ -136,8 +138,33 @@ def bridge_serve(
         settings.ollama.model,
         audit_log,
     )
+
+    # Pre-uvicorn integrity check: run BEFORE uvicorn.run() so any
+    # failure surfaces as a structured Console panel + clean
+    # typer.Exit(2), not a raw traceback in journalctl. The lifespan
+    # path stays available for tests of create_bridge_app in isolation
+    # (we pass integrity=None below so it doesn't double-check).
+    try:
+        asyncio.run(asyncio.wait_for(integrity.verify(), timeout=10.0))
+    except ModelIntegrityError as exc:
+        Console().print(
+            Panel(str(exc), title="[red]Model integrity check failed[/red]"),
+        )
+        raise typer.Exit(code=2) from exc
+    except TimeoutError as exc:
+        Console().print(
+            Panel(
+                f"Model integrity check timed out after 10s. Check that "
+                f"ollama_manifest_dir ({integrity.manifest_root}) is reachable.",
+                title="[red]Model integrity check timed out[/red]",
+            ),
+        )
+        raise typer.Exit(code=2) from exc
+
     service = AIBridgeService(settings, client=ai_client, audit_log=audit_log)
-    application = create_bridge_app(service, integrity=integrity)
+    # integrity=None: we already verified above; passing the instance
+    # would cause a redundant second verify() in the lifespan.
+    application = create_bridge_app(service, integrity=None)
     uvicorn.run(application, host=host, port=port, log_level=settings.log_level.value.lower())
 
 
