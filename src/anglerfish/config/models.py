@@ -448,14 +448,14 @@ class DefenseConfig(BaseModel):
     model_expected_hash: SecretStr | None = Field(
         default=None,
         description=(
-            'Expected SHA256 of the Ollama model\'s blob layer digest. '
-            'When set, bridge verifies at startup and refuses to start '
-            'on mismatch. When unset, bridge logs a loud warning and '
-            'writes a bridge.model_integrity_skipped audit entry on '
-            'every startup. Capture the expected value from the model '
-            'manifest with: jq -r \'.layers[] | '
+            "Expected SHA256 of the Ollama model's blob layer digest. "
+            "When set, bridge verifies at startup and refuses to start "
+            "on mismatch. When unset, bridge logs a loud warning and "
+            "writes a bridge.model_integrity_skipped audit entry on "
+            "every startup. Capture the expected value from the model "
+            "manifest with: jq -r '.layers[] | "
             'select(.mediaType == "application/vnd.ollama.image.model") '
-            '| .digest\' < ~/.ollama/models/manifests/.../<tag>'
+            "| .digest' < ~/.ollama/models/manifests/.../<tag>"
         ),
     )
     pattern_overrides_path: Path | None = Field(
