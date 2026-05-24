@@ -8,7 +8,14 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from anglerfish.config import AnglerfishSettings, load_settings
-from anglerfish.config.models import CredentialsConfig, DashboardConfig, LogLevel
+from anglerfish.config.models import (
+    BridgeConfig,
+    CredentialsConfig,
+    DashboardConfig,
+    DefenseConfig,
+    LogLevel,
+    OllamaConfig,
+)
 
 
 def test_settings_direct_construction(
@@ -71,3 +78,67 @@ def test_load_settings_propagates_validation_errors(
     )
     with pytest.raises(ValidationError):
         load_settings()
+
+
+# ---------------------------------------------------------------------------
+# Stage 1.8.5 cross-field validator: defense.scan_max_chars must be >=
+# both ollama.max_response_chars and bridge.max_input_chars. An operator
+# who raises the I/O caps must remember to raise the scan cap too, or
+# defense silently shrinks to a prefix of long inputs.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_cap_below_response_cap_is_rejected(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    with pytest.raises(ValidationError, match=r"scan_max_chars.*ollama\.max_response_chars"):
+        AnglerfishSettings(
+            dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+            credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+            ollama=OllamaConfig(max_response_chars=16384),
+            defense=DefenseConfig(scan_max_chars=8192),
+        )
+
+
+def test_scan_cap_below_input_cap_is_rejected(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    with pytest.raises(ValidationError, match=r"scan_max_chars.*bridge\.max_input_chars"):
+        AnglerfishSettings(
+            dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+            credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+            bridge=BridgeConfig(max_input_chars=16384),
+            defense=DefenseConfig(scan_max_chars=8192),
+        )
+
+
+def test_scan_cap_equal_to_both_caps_accepted(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """Equality satisfies the >= invariant — the common upgrade path."""
+    s = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        ollama=OllamaConfig(max_response_chars=16384),
+        bridge=BridgeConfig(max_input_chars=16384),
+        defense=DefenseConfig(scan_max_chars=16384),
+    )
+    assert s.defense.scan_max_chars == 16384
+
+
+def test_scan_cap_above_both_caps_accepted(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """Scan cap can be larger than the I/O caps; defense in depth."""
+    s = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        ollama=OllamaConfig(max_response_chars=2048),
+        bridge=BridgeConfig(max_input_chars=2048),
+        defense=DefenseConfig(scan_max_chars=8192),
+    )
+    assert s.defense.scan_max_chars == 8192

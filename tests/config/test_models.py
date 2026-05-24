@@ -403,9 +403,28 @@ def test_defense_defaults() -> None:
     assert cfg.output_filter_enabled is True
     assert cfg.injection_filter_enabled is True
     assert cfg.injection_threshold == pytest.approx(0.7)
+    assert cfg.scan_max_chars == 8192
     assert cfg.model_expected_hash is None
     assert cfg.pattern_overrides_path is None
     assert cfg.ollama_manifest_dir is None
+
+
+def test_defense_scan_max_chars_bounds() -> None:
+    # Stage 1.8.5: minimum 512 is enough to scan a sensible command;
+    # going below would shrink the scan window past useful range.
+    DefenseConfig(scan_max_chars=512)
+    DefenseConfig(scan_max_chars=65536)
+    with pytest.raises(ValidationError):
+        DefenseConfig(scan_max_chars=511)
+    with pytest.raises(ValidationError):
+        DefenseConfig(scan_max_chars=0)
+    with pytest.raises(ValidationError):
+        DefenseConfig(scan_max_chars=65537)
+
+
+def test_defense_scan_max_chars_accepts_custom() -> None:
+    cfg = DefenseConfig(scan_max_chars=16384)
+    assert cfg.scan_max_chars == 16384
 
 
 def test_defense_threshold_in_range() -> None:

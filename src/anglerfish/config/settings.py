@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anglerfish.config.models import (
@@ -76,6 +77,31 @@ class AnglerfishSettings(BaseSettings):
     geo: GeoConfig = Field(default_factory=GeoConfig)
     fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
     credentials: CredentialsConfig
+
+    @model_validator(mode="after")
+    def _validate_defense_scan_cap_covers_io_caps(self) -> Self:
+        # Stage 1.8.5 invariant: the defense regex scan cap must be at
+        # least as large as both the LLM response cap and the attacker
+        # input cap. If scan_max_chars is smaller, leaks (or injections)
+        # in the unscanned tail pass undetected — a silent defense
+        # bypass with no operator-visible signal. Catch at config-load.
+        if self.defense.scan_max_chars < self.ollama.max_response_chars:
+            raise ValueError(
+                f"defense.scan_max_chars ({self.defense.scan_max_chars}) must be >= "
+                f"ollama.max_response_chars ({self.ollama.max_response_chars}). "
+                "Otherwise the output filter only scans a prefix of long LLM responses "
+                "and leaks in the tail pass undetected. Either raise scan_max_chars "
+                "or lower max_response_chars.",
+            )
+        if self.defense.scan_max_chars < self.bridge.max_input_chars:
+            raise ValueError(
+                f"defense.scan_max_chars ({self.defense.scan_max_chars}) must be >= "
+                f"bridge.max_input_chars ({self.bridge.max_input_chars}). "
+                "Otherwise the injection scorer only scans a prefix of long attacker "
+                "input and injections in the tail pass undetected. Either raise "
+                "scan_max_chars or lower max_input_chars.",
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

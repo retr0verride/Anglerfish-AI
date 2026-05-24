@@ -605,6 +605,142 @@ async def test_handle_command_defense_can_be_disabled_via_config(
     assert defense_events == []
 
 
+# ---------------------------------------------------------------------------
+# Stage 1.8.5 — scan-cap truncation telemetry
+# ---------------------------------------------------------------------------
+
+
+async def test_handle_command_audits_injection_scan_truncation(
+    settings: AnglerfishSettings,
+) -> None:
+    """Stage 1.8.5: when the injection scorer reports truncated=True the
+    service emits ``bridge.defense_scan_truncated`` with kind=injection.
+
+    Trigger via a stub InjectionScorer that unconditionally reports
+    truncated=True. In production the cross-field validator
+    ``scan_max_chars >= max_input_chars`` keeps the normal flow from
+    hitting this — sanitize_command trims input to max_input_chars
+    upstream, and scan_max_chars >= max_input_chars means the scorer
+    never sees a string longer than its cap. The wiring still needs
+    to fire when the verdict says so."""
+    from anglerfish.bridge.defense import DefenseVerdict, InjectionScorer
+
+    class _AlwaysTruncatedScorer(InjectionScorer):
+        def score(self, _attacker_input: str) -> DefenseVerdict:
+            return DefenseVerdict(
+                fired=False,
+                detector="injection:no_match",
+                snippet="",
+                score=0.0,
+                truncated=True,
+            )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        injection_scorer=_AlwaysTruncatedScorer(settings.defense),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        response = await service.handle_command(session, "whoami")
+    finally:
+        await service.aclose()
+
+    # Clean flow: command reaches Ollama, response is returned.
+    assert response.source == ResponseSource.AI
+    # No fire event on the injection side (verdict was no-match).
+    fire_events = [e for e in audit.events if e[0] == "bridge.defense_fired"]
+    assert fire_events == []
+    # Truncation telemetry recorded for the injection scan.
+    trunc_events = [e for e in audit.events if e[0] == "bridge.defense_scan_truncated"]
+    assert len(trunc_events) == 1
+    _, fields = trunc_events[0]
+    assert fields["kind"] == "injection"
+    assert fields["scan_max_chars"] == settings.defense.scan_max_chars
+    assert isinstance(fields["input_length"], int)
+    assert fields["session_id"] == str(session.session_id)
+    assert fields["attacker_ip"] == session.source_ip
+
+
+async def test_handle_command_audits_output_scan_truncation(
+    settings: AnglerfishSettings,
+) -> None:
+    """Stage 1.8.5: when the output filter reports truncated=True the
+    service emits ``bridge.defense_scan_truncated`` with kind=output.
+
+    Trigger via a stub OutputFilter that unconditionally reports
+    truncated=True. In production the cross-field validator
+    ``scan_max_chars >= max_response_chars`` keeps the normal flow
+    from hitting this, but the wiring still needs to fire when the
+    verdict says so (model misbehaviour, future refactor, etc.)."""
+    from anglerfish.bridge.defense import DefenseVerdict, OutputFilter
+
+    class _AlwaysTruncatedFilter(OutputFilter):
+        def check(self, _llm_response: str) -> DefenseVerdict:
+            return DefenseVerdict(
+                fired=False,
+                detector="output_filter:no_match",
+                snippet="",
+                score=0.0,
+                truncated=True,
+            )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        output_filter=_AlwaysTruncatedFilter(settings.defense),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        response = await service.handle_command(session, "whoami")
+    finally:
+        await service.aclose()
+
+    # Clean response flows through (truncated does NOT block the path).
+    assert response.source == ResponseSource.AI
+    # Exactly one truncation event recorded, on the output side.
+    trunc_events = [e for e in audit.events if e[0] == "bridge.defense_scan_truncated"]
+    assert len(trunc_events) == 1
+    _, fields = trunc_events[0]
+    assert fields["kind"] == "output"
+    assert fields["scan_max_chars"] == settings.defense.scan_max_chars
+    assert fields["session_id"] == str(session.session_id)
+    assert fields["attacker_ip"] == session.source_ip
+
+
+async def test_handle_command_no_truncation_audit_when_within_cap(
+    settings: AnglerfishSettings,
+) -> None:
+    """Stage 1.8.5: short clean traffic must not emit the truncation event."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": "root"}})
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    try:
+        await service.handle_command(_make_session(), "whoami")
+    finally:
+        await service.aclose()
+
+    trunc_events = [e for e in audit.events if e[0] == "bridge.defense_scan_truncated"]
+    assert trunc_events == []
+
+
 async def test_handle_command_custom_defense_instance_wins(
     settings: AnglerfishSettings,
 ) -> None:

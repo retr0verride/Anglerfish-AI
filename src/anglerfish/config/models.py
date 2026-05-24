@@ -452,6 +452,23 @@ class DefenseConfig(BaseModel):
             "added in later stages with telemetry."
         ),
     )
+    scan_max_chars: int = Field(
+        default=8192,  # mirrors _DEFAULT_SCAN_MAX_CHARS in bridge.defense
+        ge=512,
+        le=65536,
+        description=(
+            "Hard cap on bytes the defense regex engine scans per input. "
+            "Bounds worst-case ReDoS exposure: regex engines without per-"
+            "pattern timeouts (CPython < 3.13) cannot be allowed to chew "
+            "on multi-MB inputs without pinning the event loop. The cap "
+            "MUST be >= ollama.max_response_chars (otherwise leaks in "
+            "the unscanned tail of a long LLM response pass undetected) "
+            "and >= bridge.max_input_chars (same logic for attacker "
+            "input). AnglerfishSettings enforces both invariants at "
+            "validation time. Increase only if you also raise the "
+            "response/input caps."
+        ),
+    )
     model_expected_hash: SecretStr | None = Field(
         default=None,
         description=(

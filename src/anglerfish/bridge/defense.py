@@ -63,17 +63,15 @@ _logger = logging.getLogger(__name__)
 # layer would silently let a weight-swap through.
 _MODEL_BLOB_MEDIA_TYPE = "application/vnd.ollama.image.model"
 
-# Hard cap on bytes scanned by ANY pattern. Regex engines without per-
-# pattern timeouts (CPython < 3.13) are vulnerable to catastrophic
-# backtracking on crafted inputs; bounding scan length is the cheapest
-# defense that works on every Python version. Set above the bridge's
-# typical attacker-command size (4096 from BridgeConfig.max_input_chars)
-# so the cap rarely fires in normal traffic, but well below the request
-# limit (32768 from CommandRequest.command max_length) so a
-# pathological 32KB injection-stuffed command can't pin the event loop.
-# Output filter uses the smaller of this value and the configured
-# ollama.max_response_chars.
-_DEFENSE_SCAN_MAX_CHARS = 8192
+# Default cap on bytes scanned by ANY pattern when DefenseConfig
+# leaves scan_max_chars at its own default. Kept as a module constant
+# so legacy tests that construct DefenseConfig() get predictable
+# behaviour; production reads from DefenseConfig.scan_max_chars and
+# the AnglerfishSettings cross-field validator (Stage 1.8.5) enforces
+# the >= ollama.max_response_chars and >= bridge.max_input_chars
+# invariants so an operator cannot silently shrink the scan window
+# below the actual I/O sizes.
+_DEFAULT_SCAN_MAX_CHARS = 8192
 
 
 class DefenseVerdict(BaseModel):
@@ -121,6 +119,17 @@ class DefenseVerdict(BaseModel):
             "Confidence/severity in 0.0-1.0. 1.0 for explicit pattern "
             "matches (output filter always uses 1.0 since it's binary). "
             "0.0 for the empty-match case."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the input was longer than the configured "
+            "scan_max_chars and the scan only looked at a prefix. "
+            "Independent of ``fired``: a clean (fired=False) verdict "
+            "with truncated=True means the visible prefix was clean "
+            "but the unscanned tail is an attacker-observable gap the "
+            "bridge audit-logs via ``bridge.defense_scan_truncated``."
         ),
     )
 
@@ -273,12 +282,18 @@ class OutputFilter:
         order they were registered). When the filter is disabled or
         no pattern matches, ``fired=False``.
 
-        Input is truncated to ``_DEFENSE_SCAN_MAX_CHARS`` before
+        Input is truncated to ``config.scan_max_chars`` before
         scanning — a misbehaving model emitting megabytes (or an
         attacker who manipulated context into pushing the cap) cannot
         cause the regex engine to chew on megabytes of input and pin
-        the event loop. The cap is generous enough that legitimate
-        responses (typically <2KB) are never affected.
+        the event loop. The AnglerfishSettings cross-field validator
+        (Stage 1.8.5) enforces ``scan_max_chars >= ollama.max_response_chars``
+        so a real LLM response never silently exceeds the scan window
+        in a well-formed config; when it does (operator override at
+        runtime, or model misbehaviour producing more chars than the
+        OllamaClient cap), the returned verdict carries
+        ``truncated=True`` and the bridge service audit-logs
+        ``bridge.defense_scan_truncated``.
         """
         if not self._config.output_filter_enabled:
             return DefenseVerdict(
@@ -286,8 +301,11 @@ class OutputFilter:
                 detector="output_filter:disabled",
                 snippet="",
                 score=0.0,
+                truncated=False,
             )
-        scan_target = llm_response[:_DEFENSE_SCAN_MAX_CHARS]
+        cap = self._config.scan_max_chars
+        scan_target = llm_response[:cap]
+        truncated = len(llm_response) > cap
         for spec, pattern in self._compiled:
             match = pattern.search(scan_target)
             if match is not None:
@@ -297,12 +315,14 @@ class OutputFilter:
                     detector=f"output_filter:{spec['category']}",
                     snippet=snippet,
                     score=spec["severity"],
+                    truncated=truncated,
                 )
         return DefenseVerdict(
             fired=False,
             detector="output_filter:no_match",
             snippet="",
             score=0.0,
+            truncated=truncated,
         )
 
 
@@ -357,13 +377,15 @@ class InjectionScorer:
         the max severity, the matching pattern's category, and the
         matched snippet truncated to 120 chars.
 
-        Input is truncated to ``_DEFENSE_SCAN_MAX_CHARS`` before
+        Input is truncated to ``config.scan_max_chars`` before
         scanning. The bridge's ``BridgeConfig.max_input_chars``
         sanitiser typically caps attacker commands at 4096 chars
-        upstream, but the underlying request body permits 32768; the
-        defense layer's hard cap prevents a pathological 32KB
-        injection-stuffed command from pinning the event loop in the
-        regex engine.
+        upstream, and the AnglerfishSettings cross-field validator
+        enforces ``scan_max_chars >= bridge.max_input_chars`` so a
+        sanitised command never silently exceeds the scan window;
+        when it does (e.g. an injected non-sanitised path), the
+        returned verdict carries ``truncated=True`` and the bridge
+        service audit-logs ``bridge.defense_scan_truncated``.
         """
         if not self._config.injection_filter_enabled:
             return DefenseVerdict(
@@ -371,8 +393,11 @@ class InjectionScorer:
                 detector="injection:disabled",
                 snippet="",
                 score=0.0,
+                truncated=False,
             )
-        scan_target = attacker_input[:_DEFENSE_SCAN_MAX_CHARS]
+        cap = self._config.scan_max_chars
+        scan_target = attacker_input[:cap]
+        truncated = len(attacker_input) > cap
         # Collect all matches; aggregation is max-severity. Stage 1
         # only ships severity 1.0 patterns, but the structure has to
         # support fuzzy heuristics that will land in later stages.
@@ -389,6 +414,7 @@ class InjectionScorer:
                 detector="injection:no_match",
                 snippet="",
                 score=0.0,
+                truncated=truncated,
             )
         severity, category, snippet = max(matches, key=lambda m: m[0])
         return DefenseVerdict(
@@ -396,6 +422,7 @@ class InjectionScorer:
             detector=f"injection:{category}",
             snippet=snippet,
             score=severity,
+            truncated=truncated,
         )
 
 

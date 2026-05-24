@@ -133,6 +133,16 @@ class AIBridgeService:
         # When fired, skip Ollama entirely and use a scripted fallback
         # so the attacker can't tell defense triggered.
         injection_verdict = self._injection_scorer.score(sanitised)
+        # Stage 1.8.5: surface the scan-cap-truncated signal independently
+        # of fired. A clean verdict on a truncated scan means the tail
+        # wasn't inspected — operator-visible gap.
+        if injection_verdict.truncated:
+            self._record_scan_truncated(
+                session,
+                kind="injection",
+                input_length=len(sanitised),
+                verdict=injection_verdict,
+            )
         if injection_verdict.fired:
             start = self._monotonic()
             self._record_defense_fire(session, injection_verdict)
@@ -182,6 +192,18 @@ class AIBridgeService:
                     max_chars=self._settings.ollama.max_response_chars,
                 )
                 output_verdict = self._output_filter.check(text)
+                # Stage 1.8.5: surface scan-cap truncation on the output
+                # path too. Most LLM responses sit well under the cap;
+                # one that exceeds it means either model misbehaviour
+                # or an attacker steering toward a long response to
+                # smuggle a leak past the scan window.
+                if output_verdict.truncated:
+                    self._record_scan_truncated(
+                        session,
+                        kind="output",
+                        input_length=len(text),
+                        verdict=output_verdict,
+                    )
                 if output_verdict.fired:
                     self._record_defense_fire(session, output_verdict)
                     raise OutputFilterFiredError(
@@ -213,6 +235,35 @@ class AIBridgeService:
             detector=verdict.detector,
             score=verdict.score,
             snippet=verdict.snippet,
+            session_id=str(session.session_id),
+            attacker_ip=session.source_ip,
+        )
+
+    def _record_scan_truncated(
+        self,
+        session: SessionContext,
+        *,
+        kind: str,
+        input_length: int,
+        verdict: DefenseVerdict,
+    ) -> None:
+        """Audit-log a defense scan that truncated its input.
+
+        Stage 1.8.5 closes the silent-bypass gap: when scan_max_chars
+        is smaller than the actual input, the regex only sees a prefix.
+        The AnglerfishSettings cross-field validator prevents the
+        common shape of this bug (operator misconfiguration), but
+        runtime occurrences (an LLM response longer than expected, an
+        attacker payload that bypassed sanitisation upstream) still
+        warrant a signal. Operators reviewing audit logs can see
+        exactly how far over the cap the input ran.
+        """
+        self._audit_log.record(
+            "bridge.defense_scan_truncated",
+            kind=kind,
+            scan_max_chars=self._settings.defense.scan_max_chars,
+            input_length=input_length,
+            detector=verdict.detector,
             session_id=str(session.session_id),
             attacker_ip=session.source_ip,
         )
