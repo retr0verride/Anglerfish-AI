@@ -377,23 +377,10 @@ async def test_response_capped_at_ollama_max(settings: AnglerfishSettings) -> No
 # ---------------------------------------------------------------------------
 # Static helpers
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("inp", "out"),
-    [
-        ("/etc", "/etc"),
-        ("/etc/", "/etc"),
-        ("/etc/./foo", "/etc/foo"),
-        ("/etc/../var", "/var"),
-        ("/etc/foo/../bar", "/etc/bar"),
-        ("relative", "/relative"),
-        ("/", "/"),
-        ("/..", "/"),
-    ],
-)
-def test_normalise_path(inp: str, out: str) -> None:
-    assert AIBridgeService._normalise_path(inp) == out
+#
+# Path normalisation moved to anglerfish.bridge.path in Stage 2A so the
+# lure can share it without creating an import cycle. Tests for it live
+# in tests/bridge/test_path.py.
 
 
 @pytest.mark.parametrize(

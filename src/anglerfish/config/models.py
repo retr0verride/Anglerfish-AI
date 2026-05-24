@@ -52,6 +52,13 @@ __all__ = [
     "ThreatConfig",
 ]
 
+# Note: LureConfig is defined in anglerfish.lure.config to keep
+# lure-specific validation next to the code that uses it. It is NOT
+# re-exported from here because doing so would create an import cycle
+# (config.models -> lure.config triggers lure package init -> lure
+# imports bridge -> bridge imports config.models). Callers import it
+# directly from the anglerfish.lure.config module.
+
 
 _LOOPBACK_HOSTNAMES = frozenset({"localhost"})
 _HOSTNAME_RE = re.compile(r"^(?=.{1,63}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$")

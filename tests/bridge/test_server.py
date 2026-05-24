@@ -110,3 +110,50 @@ def test_command_on_unknown_session(client: TestClient) -> None:
 def test_delete_unknown_session_is_silent(client: TestClient) -> None:
     r = client.delete("/api/v1/session/00000000-0000-0000-0000-000000000000")
     assert r.status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Stage 2A: CommandRequest gained an optional fs_context field. The bridge
+# accepts it without rejecting requests that omit it (Cowrie v1 path) and
+# without rejecting requests that include it (lure v2 path).
+# ---------------------------------------------------------------------------
+
+
+def test_command_request_accepts_omitted_fs_context(client: TestClient) -> None:
+    r = client.post("/api/v1/session", json={"source_ip": "1.1.1.1", "username": "root"})
+    sid = r.json()["session_id"]
+    # No fs_context - Cowrie shim shape, still valid.
+    cr = client.post(f"/api/v1/session/{sid}/command", json={"command": "ls"})
+    assert cr.status_code == 200
+
+
+def test_command_request_accepts_fs_context(client: TestClient) -> None:
+    r = client.post("/api/v1/session", json={"source_ip": "1.1.1.1", "username": "root"})
+    sid = r.json()["session_id"]
+    # With fs_context - lure shape.
+    cr = client.post(
+        f"/api/v1/session/{sid}/command",
+        json={"command": "ls", "fs_context": "/etc/passwd: root, daemon"},
+    )
+    assert cr.status_code == 200
+
+
+def test_command_request_rejects_oversize_fs_context(client: TestClient) -> None:
+    r = client.post("/api/v1/session", json={"source_ip": "1.1.1.1", "username": "root"})
+    sid = r.json()["session_id"]
+    cr = client.post(
+        f"/api/v1/session/{sid}/command",
+        json={"command": "ls", "fs_context": "x" * 4097},
+    )
+    assert cr.status_code == 422
+
+
+def test_command_request_rejects_unknown_field(client: TestClient) -> None:
+    r = client.post("/api/v1/session", json={"source_ip": "1.1.1.1", "username": "root"})
+    sid = r.json()["session_id"]
+    # extra="forbid" on the model rejects fields neither protocol defines.
+    cr = client.post(
+        f"/api/v1/session/{sid}/command",
+        json={"command": "ls", "bogus_field": "x"},
+    )
+    assert cr.status_code == 422

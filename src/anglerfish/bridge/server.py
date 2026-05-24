@@ -41,6 +41,7 @@ from anglerfish.bridge.session import SessionContext
 
 __all__ = [
     "PROTOCOL_VERSION",
+    "SUPPORTED_PROTOCOLS",
     "BearerTokenMiddleware",
     "CommandRequest",
     "CommandResponse",
@@ -51,7 +52,15 @@ __all__ = [
 
 
 # Bumped only on breaking changes to the bridge wire protocol.
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
+
+# Versions the server still accepts on incoming requests. Stage 2A
+# bumped the version to "2" to add CommandRequest.fs_context for the
+# lure. The Cowrie shim still ships "1" through the deprecation window;
+# both versions resolve to the same handlers because "2" only adds an
+# optional field. When Cowrie is removed in a later stage, drop "1"
+# from this set.
+SUPPORTED_PROTOCOLS: frozenset[str] = frozenset({"1", "2"})
 
 _PROTOCOL_HEADER = "X-Anglerfish-Protocol"
 _AUTH_HEADER = "Authorization"
@@ -65,8 +74,9 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
     permissive (development mode). In production the wizard always
     generates a secret, so this should be active.
 
-    Also enforces the protocol-version header for clients that send it —
-    a mismatch is a 426 Upgrade Required.
+    Also enforces the protocol-version header for clients that send it.
+    An unrecognised version is a 426 Upgrade Required; the response
+    lists every supported version so the client can pick one.
     """
 
     def __init__(self, app: ASGIApp, *, expected_secret: str | None) -> None:
@@ -78,13 +88,13 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_protocol = request.headers.get(_PROTOCOL_HEADER)
-        if client_protocol is not None and client_protocol != PROTOCOL_VERSION:
+        if client_protocol is not None and client_protocol not in SUPPORTED_PROTOCOLS:
             return JSONResponse(
                 status_code=status.HTTP_426_UPGRADE_REQUIRED,
                 content={
                     "detail": (
-                        f"bridge protocol mismatch: client={client_protocol!r} "
-                        f"server={PROTOCOL_VERSION!r}"
+                        f"bridge protocol unsupported: client={client_protocol!r} "
+                        f"supported={sorted(SUPPORTED_PROTOCOLS)!r}"
                     ),
                 },
             )
@@ -127,6 +137,18 @@ class CommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     command: str = Field(..., max_length=32768)
+    fs_context: str | None = Field(
+        default=None,
+        max_length=4096,
+        description=(
+            "Optional compact summary of the static filesystem layout "
+            "the lure is presenting, passed in protocol v2. The bridge "
+            "prompt builder uses it to keep LLM-invented file contents "
+            "consistent with what the lure already serves natively. "
+            "Cowrie shim (protocol v1) omits the field; older clients "
+            "stay compatible by virtue of the default."
+        ),
+    )
 
 
 class CommandResponse(BaseModel):

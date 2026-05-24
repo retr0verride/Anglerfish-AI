@@ -248,12 +248,13 @@ class LureConfig(BaseModel):
 
     # Per-source-IP rate limit (separate from bridge limiter, which is
     # per-session: lure limit fires before a session is even opened).
-    # Defaults tuned for honeypot use: real attackers driving these
-    # numbers are running aggressive brute force; the cap catches them
-    # without blocking the multi-IP distributed-bruteforce traffic we
-    # actually want to capture across many source IPs.
+    # 3 concurrent stops a single IP from holding every slot while
+    # we keep capacity open for distributed brute force across many
+    # IPs. 30 per minute is generous enough to capture the full
+    # credential list from burst-style brute force tools before the
+    # throttle drops the connection.
     per_ip_max_concurrent_connections: int = Field(default=3, ge=1, le=100)
-    per_ip_max_connections_per_minute: int = Field(default=12, ge=1, le=600)
+    per_ip_max_connections_per_minute: int = Field(default=30, ge=1, le=600)
 
     # Bridge link
     bridge_base_url: HttpUrl = Field(default=HttpUrl("http://127.0.0.1:8421/"))
@@ -386,9 +387,10 @@ every token in the table maps to a callable that returns `str`.
 `cd` is special: it mutates session state, returns `""`, but is
 still a hit (so the bridge isn't called). The implementation
 re-uses the path-normalisation logic from
-[`AIBridgeService._normalise_path`](../../src/anglerfish/bridge/service.py#L269-L282)
-verbatim, we extract it to `anglerfish.lure.commands._normalise_path`
-and let the bridge re-import it from there. (Existing tests in
+[`AIBridgeService._normalise_path`](../../src/anglerfish/bridge/service.py#L321-L333)
+verbatim. Extract it to a neutral module at
+`src/anglerfish/bridge/path.py` so both bridge and lure can import
+it without creating a bridge → lure import cycle. (Existing tests in
 [`tests/bridge/test_service.py`](../../tests/bridge/test_service.py)
 cover the behaviour; we keep them passing.)
 
@@ -1034,11 +1036,13 @@ independently rollback-able:
 ### Commit 2A - Scaffold (config + types + units, no live server)
 
 The complete *static* surface of the lure: everything that doesn't
-need an asyncssh server running. This commit alone is shippable
-behind `ANGLERFISH_LURE__ENABLED=false` (a switch added in this
-commit) and can be merged before the runtime work is done, it
-adds the import surface, the config keys, the wizard prompts, and
-unit tests, with zero behaviour change on disk-already deployments.
+need an asyncssh server running. 2A adds the import surface, the
+config keys, and unit tests. `ANGLERFISH_LURE__ENABLED` defaults to
+`true` (default opt-out: the honeypot listener is the product, not
+an extra to enable). The `lure serve` CLI command lands in 2B and
+that is when the default-on behaviour starts a listener. 2A on its
+own changes no behaviour because no CLI verb exists to start the
+listener yet.
 
 * `LureConfig` Pydantic model + cross-field validators.
 * `LureConfig` wired into `AnglerfishSettings` (`extra="ignore"`
@@ -1380,13 +1384,14 @@ deliberation vs. which came from blind-spot.
   honeypot timing should look like Ollama latency, not like
   instant-return.
 
-* **Per-IP limits were 5/30 in the first draft → 3/12 in this
-  revision.** 5 concurrent SSH sessions from one IP is already a
-  loud signal; 30 attempts per minute is one every two seconds,
-  which is fast-and-loud brute force. The revised defaults (3
-  concurrent, 12/min, one every 5 seconds average) catch the
-  bursty single-IP brute force without blocking the multi-IP
-  distributed brute force we actually want to capture and cluster.
+* **Per-IP limits land at 3 concurrent / 30 per minute.** First
+  draft was 5/30. Self-review proposed 3/12 (5 concurrent felt loud,
+  12/min felt tight). Final call from operator review: 3 concurrent
+  is right (one IP can't hog every slot, distributed brute force
+  still has room across many IPs), but 30 per minute is the right
+  ceiling, not 12: burst-style brute force tools rip credential
+  lists fast and we want to capture the full payload before the
+  throttle drops the connection.
 
 * **The first draft sliced this into 10 commits → revised to 3.**
   Ten commits is review-cost-heavy for what is essentially one

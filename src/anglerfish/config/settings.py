@@ -40,6 +40,7 @@ from anglerfish.config.models import (
     SplunkConfig,
     ThreatConfig,
 )
+from anglerfish.lure.config import LureConfig
 
 __all__ = ["AnglerfishSettings", "load_settings"]
 
@@ -76,6 +77,7 @@ class AnglerfishSettings(BaseSettings):
     defense: DefenseConfig = Field(default_factory=DefenseConfig)
     geo: GeoConfig = Field(default_factory=GeoConfig)
     fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
+    lure: LureConfig = Field(default_factory=LureConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")

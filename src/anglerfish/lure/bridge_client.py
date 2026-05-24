@@ -1,0 +1,229 @@
+"""Async HTTP client the lure uses to reach the bridge.
+
+The bridge is a separate process on the same VM, listening on
+loopback. This client is the lure-side half of the boundary the
+design doc preserves on purpose: privilege separation, crash
+isolation, future-container-ability. See
+``docs/design/STAGE_2_lure_subsystem.md`` "Process topology" for the
+full reasoning.
+
+Every method either returns a typed result or raises
+:class:`BridgeUnavailableError`. Callers always have a single failure
+mode to handle; the network shape stays hidden behind the abstraction.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Self
+from uuid import UUID
+
+import httpx
+from pydantic import HttpUrl
+
+__all__ = [
+    "PROTOCOL_VERSION_HEADER",
+    "BridgeClient",
+    "BridgeUnavailableError",
+]
+
+
+PROTOCOL_VERSION_HEADER = "X-Anglerfish-Protocol"
+_LURE_PROTOCOL_VERSION = "2"
+_DEFAULT_USERNAME_MAX_LEN = 64
+
+
+class BridgeUnavailableError(RuntimeError):
+    """Raised on any failure to reach or parse a response from the bridge.
+
+    Collapses network errors, HTTP 4xx (including 401 auth failure and
+    426 protocol mismatch), HTTP 5xx, and malformed JSON into a single
+    exception type. The lure responds to all of them the same way:
+    fall back to scripted responses and keep the attacker session
+    alive.
+    """
+
+
+class BridgeClient:
+    """Async HTTP client wrapping the bridge's :mod:`bridge.server` API.
+
+    Owns its underlying :class:`httpx.AsyncClient` by default. Tests
+    inject their own so :class:`httpx.MockTransport` can drive
+    deterministic responses. Owned clients close in :meth:`aclose`;
+    injected ones are left to the caller.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: HttpUrl,
+        shared_secret: str | None,
+        request_timeout_s: float,
+        connect_timeout_s: float,
+        http_client: httpx.AsyncClient | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._logger = logger if logger is not None else logging.getLogger(__name__)
+        self._owns_client = http_client is None
+        headers = {
+            PROTOCOL_VERSION_HEADER: _LURE_PROTOCOL_VERSION,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "anglerfish-lure/0.1.0",
+        }
+        if shared_secret:
+            headers["Authorization"] = f"Bearer {shared_secret}"
+        if http_client is None:
+            timeout = httpx.Timeout(
+                request_timeout_s,
+                connect=connect_timeout_s,
+            )
+            self._http = httpx.AsyncClient(
+                base_url=str(base_url),
+                timeout=timeout,
+                headers=headers,
+            )
+        else:
+            self._http = http_client
+            # Update headers in-place so injected clients also send the
+            # right auth + protocol version without forcing tests to
+            # set them up identically.
+            self._http.headers.update(headers)
+
+    async def open_session(self, *, source_ip: str, username: str) -> UUID:
+        """Register a new session with the bridge. Returns the bridge's UUID.
+
+        The bridge enforces ``username`` length <= 64 via Pydantic. The
+        lure trims here so attackers sending oversize usernames see the
+        session open (and get captured by CredentialStore) rather than
+        the bridge rejecting with 422.
+        """
+        if not source_ip:
+            raise ValueError("source_ip cannot be empty")
+        if not username:
+            username = "root"
+        trimmed_username = username[:_DEFAULT_USERNAME_MAX_LEN]
+
+        payload: dict[str, Any] = {
+            "source_ip": source_ip,
+            "username": trimmed_username,
+        }
+        body = await self._post_json("/api/v1/session", payload)
+        sid_raw = body.get("session_id")
+        if not isinstance(sid_raw, str) or not sid_raw:
+            raise BridgeUnavailableError(
+                f"bridge open_session response missing session_id: {body!r}",
+            )
+        try:
+            return UUID(sid_raw)
+        except ValueError as exc:
+            raise BridgeUnavailableError(
+                f"bridge open_session returned non-UUID session_id: {sid_raw!r}",
+            ) from exc
+
+    async def submit_command(
+        self,
+        session_id: UUID,
+        command: str,
+        *,
+        fs_context: str | None = None,
+    ) -> str:
+        """Submit one command and return the response text.
+
+        ``fs_context`` rides through protocol v2 and is the lure's way
+        of telling the bridge prompt builder which paths the lure
+        already serves natively (so LLM-invented content stays
+        consistent with the static fakefs).
+        """
+        payload: dict[str, Any] = {"command": command}
+        if fs_context is not None:
+            payload["fs_context"] = fs_context
+        body = await self._post_json(
+            f"/api/v1/session/{session_id}/command",
+            payload,
+        )
+        text = body.get("text", "")
+        if not isinstance(text, str):
+            raise BridgeUnavailableError(
+                f"bridge submit_command returned non-string text: {body!r}",
+            )
+        return text
+
+    async def close_session(self, session_id: UUID) -> None:
+        """Release the bridge-side state for ``session_id``.
+
+        Idempotent and silent on 404 (already-closed sessions). Other
+        errors propagate as :class:`BridgeUnavailableError`. The lure
+        treats a failed close as "bridge has lost the session anyway"
+        and moves on.
+        """
+        try:
+            response = await self._http.delete(f"/api/v1/session/{session_id}")
+        except httpx.HTTPError as exc:
+            raise BridgeUnavailableError(
+                f"bridge close_session network failure: {type(exc).__name__}: {exc}",
+            ) from exc
+        if response.status_code == 404:
+            return  # already gone, nothing to do
+        if response.status_code >= 400:
+            raise BridgeUnavailableError(
+                f"bridge close_session returned HTTP {response.status_code}",
+            )
+
+    async def _post_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            response = await self._http.post(path, json=payload)
+        except httpx.HTTPError as exc:
+            raise BridgeUnavailableError(
+                f"bridge {path} network failure: {type(exc).__name__}: {exc}",
+            ) from exc
+
+        if response.status_code == 426:
+            self._logger.error(
+                "bridge protocol mismatch at %s: server rejected protocol %s",
+                path,
+                _LURE_PROTOCOL_VERSION,
+            )
+            raise BridgeUnavailableError(
+                f"bridge {path}: protocol mismatch (server returned 426)",
+            )
+        if response.status_code == 401:
+            raise BridgeUnavailableError(
+                f"bridge {path}: authentication rejected (401); "
+                "check ANGLERFISH_BRIDGE__SHARED_SECRET",
+            )
+        if response.status_code >= 500:
+            raise BridgeUnavailableError(
+                f"bridge {path}: server error HTTP {response.status_code}",
+            )
+        if response.status_code >= 400:
+            raise BridgeUnavailableError(
+                f"bridge {path}: client error HTTP {response.status_code}: {response.text[:200]}",
+            )
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise BridgeUnavailableError(
+                f"bridge {path} returned malformed JSON: {exc}",
+            ) from exc
+        if not isinstance(data, dict):
+            raise BridgeUnavailableError(
+                f"bridge {path} returned non-object JSON: {type(data).__name__}",
+            )
+        return data
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client iff this instance owns it."""
+        if self._owns_client:
+            await self._http.aclose()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()

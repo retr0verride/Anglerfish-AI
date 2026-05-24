@@ -42,6 +42,7 @@ from anglerfish.bridge.errors import (
     SessionRateLimitedError,
 )
 from anglerfish.bridge.fallback import fallback_response
+from anglerfish.bridge.path import normalise_path
 from anglerfish.bridge.prompts import build_messages
 from anglerfish.bridge.rate_limit import BridgeRateLimiter
 from anglerfish.bridge.sanitize import cap_output, sanitize_command
@@ -314,23 +315,8 @@ class AIBridgeService:
         else:
             base = session.cwd.rstrip("/") or "/"
             target = f"{base}/{tokens[1]}"
-        session.update_cwd(self._normalise_path(target))
+        session.update_cwd(normalise_path(target))
         return True
-
-    @staticmethod
-    def _normalise_path(path: str) -> str:
-        if not path.startswith("/"):
-            path = "/" + path
-        parts: list[str] = []
-        for piece in path.split("/"):
-            if piece in ("", "."):
-                continue
-            if piece == "..":
-                if parts:
-                    parts.pop()
-                continue
-            parts.append(piece)
-        return "/" + "/".join(parts)
 
     @staticmethod
     def _first_token(command: str) -> str:

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
-from anglerfish.bridge.server import PROTOCOL_VERSION
+from anglerfish.bridge.server import PROTOCOL_VERSION, SUPPORTED_PROTOCOLS
 from anglerfish.config import AnglerfishSettings
 from anglerfish.config.models import (
     BridgeConfig,
@@ -117,7 +117,28 @@ def test_protocol_mismatch_is_426(authed_client: TestClient) -> None:
         },
     )
     assert r.status_code == 426
-    assert "999" in r.json()["detail"]
+    body = r.json()
+    assert "999" in body["detail"]
+    # 426 response lists the supported versions so a misconfigured
+    # client can self-correct without reading the source.
+    assert "1" in body["detail"]
+    assert "2" in body["detail"]
+
+
+@pytest.mark.parametrize("version", sorted(SUPPORTED_PROTOCOLS))
+def test_every_supported_protocol_passes(
+    authed_client: TestClient,
+    version: str,
+) -> None:
+    r = authed_client.post(
+        "/api/v1/session",
+        json={"source_ip": "1.1.1.1", "username": "root"},
+        headers={
+            "Authorization": "Bearer shared-secret-value",
+            "X-Anglerfish-Protocol": version,
+        },
+    )
+    assert r.status_code == 200
 
 
 def test_matching_protocol_passes(authed_client: TestClient) -> None:
@@ -142,4 +163,14 @@ def test_no_secret_configured_means_no_auth_check(open_client: TestClient) -> No
 
 
 def test_protocol_version_constant() -> None:
-    assert PROTOCOL_VERSION == "1"
+    # Stage 2A bumped to "2" to add CommandRequest.fs_context. "1" stays
+    # in SUPPORTED_PROTOCOLS through the Cowrie deprecation window.
+    assert PROTOCOL_VERSION == "2"
+    assert PROTOCOL_VERSION in SUPPORTED_PROTOCOLS
+
+
+def test_supported_protocols_includes_legacy() -> None:
+    # Cowrie shim still ships "1"; removing it from SUPPORTED_PROTOCOLS
+    # waits for the Cowrie-removal stage.
+    assert "1" in SUPPORTED_PROTOCOLS
+    assert "2" in SUPPORTED_PROTOCOLS
