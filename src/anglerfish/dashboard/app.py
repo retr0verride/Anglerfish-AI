@@ -22,6 +22,7 @@ from anglerfish import __version__
 from anglerfish.audit import AuditLog
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.dashboard.auth import build_auth_router
+from anglerfish.dashboard.overrides import build_runtime_overrides
 from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.dashboard.routes import build_router
 from anglerfish.dashboard.state import DashboardState
@@ -88,6 +89,10 @@ def create_app(
     app.state.dashboard_state = state_instance
     app.state.credential_store = credential_store
     app.state.audit = audit_log
+    # Stage 3: in-process mutable overrides the settings endpoints
+    # update. Reset on dashboard restart back to env-file values; see
+    # docs/design/STAGE_3_dashboard_control_plane.md for the boundary.
+    app.state.runtime_overrides = build_runtime_overrides(settings)
 
     templates = Jinja2Templates(directory=str(templates_path))
     app.include_router(
