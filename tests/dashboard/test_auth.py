@@ -12,8 +12,8 @@ from pydantic import SecretStr
 
 from anglerfish.audit import AuditLog
 from anglerfish.config import AnglerfishSettings
-from anglerfish.config.models import CredentialsConfig, DashboardConfig
-from anglerfish.dashboard import DashboardState, create_app
+from anglerfish.config.models import CredentialsConfig, DashboardConfig, SessionStoreConfig
+from anglerfish.dashboard import create_app
 from anglerfish.dashboard.auth import hash_password, verify_password
 from anglerfish.dashboard.csrf import CSRF_HEADER
 from anglerfish.dashboard.rate_limit import LoginRateLimiter
@@ -24,6 +24,7 @@ _PASSWORD = "correct horse battery staple"
 def _settings_with_password(
     session_secret: str,
     encryption_key_b64: str,
+    tmp_path: Path,
     password: str | None = _PASSWORD,
     *,
     username: str = "admin",
@@ -36,6 +37,7 @@ def _settings_with_password(
             admin_password_hash=password_hash,
         ),
         credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        sessions=SessionStoreConfig(database_path=tmp_path / "sessions.db"),
     )
 
 
@@ -43,10 +45,16 @@ def _settings_with_password(
 def open_client(
     session_secret: str,
     encryption_key_b64: str,
+    tmp_path: Path,
 ) -> Iterator[TestClient]:
     """Dashboard with no admin password — open mode."""
-    settings = _settings_with_password(session_secret, encryption_key_b64, password=None)
-    with TestClient(create_app(settings, state=DashboardState())) as c:
+    settings = _settings_with_password(
+        session_secret,
+        encryption_key_b64,
+        tmp_path,
+        password=None,
+    )
+    with TestClient(create_app(settings)) as c:
         yield c
 
 
@@ -57,9 +65,9 @@ def authed_client(
     tmp_path: Path,
 ) -> Iterator[TestClient]:
     """Dashboard with admin password configured — locked mode."""
-    settings = _settings_with_password(session_secret, encryption_key_b64)
+    settings = _settings_with_password(session_secret, encryption_key_b64, tmp_path)
     audit = AuditLog(tmp_path / "audit.jsonl")
-    with TestClient(create_app(settings, state=DashboardState(), audit=audit)) as c:
+    with TestClient(create_app(settings, audit=audit)) as c:
         yield c
 
 
@@ -236,7 +244,7 @@ def test_successful_login_audited(
     encryption_key_b64: str,
     tmp_path: Path,
 ) -> None:
-    settings = _settings_with_password(session_secret, encryption_key_b64)
+    settings = _settings_with_password(session_secret, encryption_key_b64, tmp_path)
     audit_path = tmp_path / "audit.jsonl"
     audit = AuditLog(audit_path)
     with TestClient(create_app(settings, audit=audit)) as c:
@@ -256,7 +264,7 @@ def test_failed_login_audited(
     encryption_key_b64: str,
     tmp_path: Path,
 ) -> None:
-    settings = _settings_with_password(session_secret, encryption_key_b64)
+    settings = _settings_with_password(session_secret, encryption_key_b64, tmp_path)
     audit_path = tmp_path / "audit.jsonl"
     audit = AuditLog(audit_path)
     with TestClient(create_app(settings, audit=audit)) as c:
@@ -274,7 +282,7 @@ def test_login_rate_limit_triggers_429(
     encryption_key_b64: str,
     tmp_path: Path,
 ) -> None:
-    settings = _settings_with_password(session_secret, encryption_key_b64)
+    settings = _settings_with_password(session_secret, encryption_key_b64, tmp_path)
     audit_path = tmp_path / "audit.jsonl"
     audit = AuditLog(audit_path)
     # 2-token bucket → 2 attempts allowed, then 429.
@@ -296,7 +304,7 @@ def test_successful_login_resets_rate_limit(
     encryption_key_b64: str,
     tmp_path: Path,
 ) -> None:
-    settings = _settings_with_password(session_secret, encryption_key_b64)
+    settings = _settings_with_password(session_secret, encryption_key_b64, tmp_path)
     audit = AuditLog(tmp_path / "audit.jsonl")
     limiter = LoginRateLimiter(capacity=2, refill_per_second=0.01)
     with TestClient(

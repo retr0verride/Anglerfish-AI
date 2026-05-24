@@ -12,7 +12,7 @@ from pydantic import SecretStr
 from anglerfish.audit import AuditLog
 from anglerfish.config import AnglerfishSettings
 from anglerfish.config.models import DashboardConfig
-from anglerfish.dashboard import DashboardState, create_app
+from anglerfish.dashboard import create_app
 from anglerfish.dashboard.auth import hash_password
 
 # Tests need an authenticated session AND a CSRF token. Hash a real
@@ -45,7 +45,7 @@ def authed_client(
 ) -> Iterator[TestClient]:
     """Authenticated client with a CSRF token already in the session."""
     audit = AuditLog(tmp_path / "audit.jsonl")
-    app = create_app(_settings_with_auth(settings), state=DashboardState(), audit=audit)
+    app = create_app(_settings_with_auth(settings), audit=audit)
     with TestClient(app) as c:
         login = c.post(
             "/api/login",
@@ -66,7 +66,7 @@ def authed_client_and_audit(
     """Variant that also exposes the audit-log path for assertions."""
     audit_path = tmp_path / "audit.jsonl"
     audit = AuditLog(audit_path)
-    app = create_app(_settings_with_auth(settings), state=DashboardState(), audit=audit)
+    app = create_app(_settings_with_auth(settings), audit=audit)
     with TestClient(app) as c:
         login = c.post(
             "/api/login",
@@ -97,7 +97,7 @@ def test_get_settings_returns_provenance_fields(authed_client: TestClient) -> No
 
 def test_get_settings_requires_auth(settings: AnglerfishSettings) -> None:
     # Use the auth-enabled settings but DON'T log in.
-    app = create_app(_settings_with_auth(settings), state=DashboardState())
+    app = create_app(_settings_with_auth(settings))
     with TestClient(app) as c:
         r = c.get("/api/settings")
         assert r.status_code == 401
@@ -224,7 +224,7 @@ def test_post_feature_flags_rejects_non_bool(authed_client: TestClient) -> None:
 def test_post_bridge_settings_rejects_missing_csrf_header(
     settings: AnglerfishSettings,
 ) -> None:
-    app = create_app(_settings_with_auth(settings), state=DashboardState())
+    app = create_app(_settings_with_auth(settings))
     with TestClient(app) as c:
         login = c.post(
             "/api/login",
@@ -242,7 +242,7 @@ def test_post_bridge_settings_rejects_missing_csrf_header(
 def test_post_bridge_settings_rejects_wrong_csrf_token(
     settings: AnglerfishSettings,
 ) -> None:
-    app = create_app(_settings_with_auth(settings), state=DashboardState())
+    app = create_app(_settings_with_auth(settings))
     with TestClient(app) as c:
         login = c.post(
             "/api/login",
@@ -261,7 +261,7 @@ def test_post_bridge_settings_rejects_wrong_csrf_token(
 def test_post_feature_flags_rejects_missing_csrf(
     settings: AnglerfishSettings,
 ) -> None:
-    app = create_app(_settings_with_auth(settings), state=DashboardState())
+    app = create_app(_settings_with_auth(settings))
     with TestClient(app) as c:
         c.post(
             "/api/login",

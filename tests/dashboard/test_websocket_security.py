@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,8 +12,8 @@ from pydantic import SecretStr
 from starlette.websockets import WebSocketDisconnect
 
 from anglerfish.config import AnglerfishSettings
-from anglerfish.config.models import CredentialsConfig, DashboardConfig
-from anglerfish.dashboard import DashboardState, create_app
+from anglerfish.config.models import CredentialsConfig, DashboardConfig, SessionStoreConfig
+from anglerfish.dashboard import create_app
 from anglerfish.dashboard.auth import hash_password
 
 _PASSWORD = "correct horse battery staple"
@@ -21,6 +22,7 @@ _PASSWORD = "correct horse battery staple"
 def _settings(
     session_secret: str,
     encryption_key_b64: str,
+    tmp_path: Path,
     *,
     password: str | None = _PASSWORD,
     allowed_origins: tuple[str, ...] = (),
@@ -35,6 +37,7 @@ def _settings(
             port=port,
         ),
         credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        sessions=SessionStoreConfig(database_path=tmp_path / "sessions.db"),
     )
 
 
@@ -42,9 +45,10 @@ def _settings(
 def open_client(
     session_secret: str,
     encryption_key_b64: str,
+    tmp_path: Path,
 ) -> Iterator[TestClient]:
-    settings = _settings(session_secret, encryption_key_b64, password=None)
-    with TestClient(create_app(settings, state=DashboardState())) as c:
+    settings = _settings(session_secret, encryption_key_b64, tmp_path, password=None)
+    with TestClient(create_app(settings)) as c:
         yield c
 
 
@@ -52,9 +56,10 @@ def open_client(
 def authed_client(
     session_secret: str,
     encryption_key_b64: str,
+    tmp_path: Path,
 ) -> Iterator[TestClient]:
-    settings = _settings(session_secret, encryption_key_b64)
-    with TestClient(create_app(settings, state=DashboardState())) as c:
+    settings = _settings(session_secret, encryption_key_b64, tmp_path)
+    with TestClient(create_app(settings)) as c:
         yield c
 
 
@@ -105,15 +110,17 @@ def test_default_origin_accepted_in_open_mode(open_client: TestClient) -> None:
 def test_custom_allowed_origin_accepted(
     session_secret: str,
     encryption_key_b64: str,
+    tmp_path: Path,
 ) -> None:
     settings = _settings(
         session_secret,
         encryption_key_b64,
+        tmp_path,
         password=None,
         allowed_origins=("https://dash.example",),
     )
     with (
-        TestClient(create_app(settings, state=DashboardState())) as c,
+        TestClient(create_app(settings)) as c,
         c.websocket_connect(
             "/ws/events",
             headers={"origin": "https://dash.example"},

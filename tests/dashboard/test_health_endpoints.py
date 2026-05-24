@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from anglerfish.audit import AuditLog
 from anglerfish.config import AnglerfishSettings
-from anglerfish.dashboard import DashboardState, create_app
+from anglerfish.dashboard import create_app
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def client(
     audit_path: Path,
 ) -> Iterator[TestClient]:
     audit = AuditLog(audit_path)
-    app = create_app(settings, state=DashboardState(), audit=audit)
+    app = create_app(settings, audit=audit)
     with TestClient(app) as c:
         yield c
 

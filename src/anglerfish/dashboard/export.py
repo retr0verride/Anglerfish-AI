@@ -2,21 +2,22 @@
 
 Two endpoints sit on top of these helpers:
 
-* ``GET /api/export/sessions`` returns the in-memory session
-  snapshots within the supplied range, in JSON or CSV.
+* ``GET /api/export/sessions`` returns persisted session snapshots
+  within the supplied range, in JSON or CSV.
 * ``GET /api/export/audit`` returns audit log entries within the
   range, JSON only (audit events have variable fields per
   ``event_type`` so flattening to CSV would be lossy).
 
 Both endpoints enforce a 7-day maximum per request. The cap exists
-because the dashboard's in-memory store rotates well under a week
-of activity at any reasonable session rate; larger windows become
-streamable from SQLite once the Stage 4 session store lands. Until
-then, large exports would either OOM the dashboard process or
-truncate silently.
+to bound response size; the session store could serve longer
+windows, but the SPA renders the response in one go and a multi-
+month dump would lock up the browser tab.
 
 The CSV path uses a streaming response so a maxed-out 7-day request
 on a busy honeypot does not materialise the full payload in memory.
+Sessions come from :class:`anglerfish.sessions.SessionStore` via
+``DashboardState.store.get_sessions_in_range`` so the export sees
+historical sessions, not just those still resident in memory.
 """
 
 from __future__ import annotations
@@ -85,8 +86,7 @@ def parse_range(
     if span > timedelta(days=MAX_EXPORT_WINDOW_DAYS):
         raise ExportRangeError(
             f"export range: span exceeds {MAX_EXPORT_WINDOW_DAYS}-day cap "
-            f"({span.days} days requested). Narrow the range or wait for "
-            "the persistent session store (Stage 4) to enable streaming.",
+            f"({span.days} days requested). Narrow the range.",
         )
     return start, end
 
@@ -186,31 +186,12 @@ async def _sessions_in_range(
     start: datetime,
     end: datetime,
 ) -> list[dict[str, Any]]:
-    """Pull every session known to DashboardState and filter by range."""
-    sessions = await dashboard_state.get_active_sessions()
-    selected: list[dict[str, Any]] = []
-    for session in sessions:
-        payload = session.model_dump(mode="json")
-        started = _parse_optional_iso(payload.get("started_at"))
-        if started is None:
-            continue
-        if started < start or started > end:
-            continue
-        selected.append(payload)
-    return selected
-
-
-def _parse_optional_iso(value: object) -> datetime | None:
-    """Tolerant ISO parser for the session-snapshot ``started_at`` field."""
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    """Query the session store for sessions started in [start, end]."""
+    sessions = await dashboard_state.store.get_sessions_in_range(
+        start=start,
+        end=end,
+    )
+    return [session.model_dump(mode="json") for session in sessions]
 
 
 def _csv_row(cells: Iterable[object]) -> bytes:

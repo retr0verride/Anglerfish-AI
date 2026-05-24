@@ -50,8 +50,8 @@ def audit_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def state() -> DashboardState:
-    return DashboardState()
+def state(dashboard_state: DashboardState) -> DashboardState:
+    return dashboard_state
 
 
 @pytest.fixture

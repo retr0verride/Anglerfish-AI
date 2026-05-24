@@ -48,6 +48,7 @@ __all__ = [
     "LogLevel",
     "OllamaConfig",
     "RateLimitConfig",
+    "SessionStoreConfig",
     "SplunkConfig",
     "ThreatConfig",
 ]
@@ -650,3 +651,30 @@ class CredentialsConfig(BaseModel):
                 f"credentials.encryption_key must decode to exactly 32 bytes, got {len(decoded)}.",
             )
         return v
+
+
+class SessionStoreConfig(BaseModel):
+    """Persistent session store (SQLite). Stage 4 - see
+    ``docs/design/STAGE_4_session_store.md`` for the full design.
+
+    No encryption key. Session content is operator-readable by
+    design (commands, responses, source IPs, threat assessments);
+    filesystem permissions (mode 0600, dir 0700) carry the
+    confidentiality. Operators needing encryption-at-rest get it
+    via the host filesystem (LUKS), not at the application layer.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    database_path: Path = Field(default=Path("/var/lib/anglerfish/sessions.db"))
+    max_active_sessions_returned: int = Field(
+        default=500,
+        ge=1,
+        le=10_000,
+        description=(
+            "Soft cap on the size of /api/sessions and "
+            "DashboardState.get_active_sessions responses. "
+            "Date-range exports use their own 7-day cap from "
+            "the export module; this knob bounds the active-list view."
+        ),
+    )

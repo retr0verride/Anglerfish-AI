@@ -47,8 +47,8 @@ def _turn(cmd: str) -> CommandTurn:
 
 
 @pytest.fixture
-def app_state(settings: AnglerfishSettings) -> DashboardState:
-    return DashboardState()
+def app_state(dashboard_state: DashboardState) -> DashboardState:
+    return dashboard_state
 
 
 @pytest.fixture
@@ -56,6 +56,8 @@ def client(
     settings: AnglerfishSettings,
     app_state: DashboardState,
 ) -> Iterator[TestClient]:
+    # state owns the session store via the dashboard_state fixture;
+    # create_app sees state is provided and skips opening its own store.
     app = create_app(settings, state=app_state)
     with TestClient(app) as c:
         yield c
@@ -116,10 +118,12 @@ def test_get_session_200(client: TestClient, app_state: DashboardState) -> None:
 
 
 def test_threats(client: TestClient, app_state: DashboardState) -> None:
-    sid = uuid4()
+    # The threats FK requires the session row exist before recording.
+    snap = _snapshot()
+    _portal(client).call(app_state.update_session, snap)
     _portal(client).call(
         app_state.record_threat,
-        ThreatAssessment(session_id=sid, score=85),
+        ThreatAssessment(session_id=snap.session_id, score=85),
     )
     r = client.get("/api/threats")
     assert r.status_code == 200

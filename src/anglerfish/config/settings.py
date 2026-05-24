@@ -37,6 +37,7 @@ from anglerfish.config.models import (
     LogLevel,
     OllamaConfig,
     RateLimitConfig,
+    SessionStoreConfig,
     SplunkConfig,
     ThreatConfig,
 )
@@ -78,6 +79,7 @@ class AnglerfishSettings(BaseSettings):
     geo: GeoConfig = Field(default_factory=GeoConfig)
     fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
     lure: LureConfig = Field(default_factory=LureConfig)
+    sessions: SessionStoreConfig = Field(default_factory=SessionStoreConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")

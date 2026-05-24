@@ -7,13 +7,19 @@ Two autouse fixtures keep tests hermetic:
   variable in the developer's shell cannot influence config loading.
 * :func:`_reset_load_settings_cache` clears the LRU cache around
   :func:`anglerfish.config.load_settings` between tests.
+
+The :func:`session_store` and :func:`dashboard_state` fixtures provide
+a per-test SQLite-backed :class:`SessionStore` rooted in ``tmp_path``
+and a :class:`DashboardState` wired through it. These replace the
+pre-Stage-4 in-memory ``DashboardState()`` no-arg constructor.
 """
 
 from __future__ import annotations
 
 import base64
 import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
@@ -23,7 +29,10 @@ from anglerfish.config import (
     CredentialsConfig,
     DashboardConfig,
 )
+from anglerfish.config.models import SessionStoreConfig
 from anglerfish.config.settings import load_settings
+from anglerfish.dashboard.state import DashboardState
+from anglerfish.sessions import SessionStore
 
 
 @pytest.fixture(autouse=True)
@@ -53,9 +62,28 @@ def encryption_key_b64() -> str:
 
 
 @pytest.fixture
-def settings(session_secret: str, encryption_key_b64: str) -> AnglerfishSettings:
+def settings(
+    session_secret: str,
+    encryption_key_b64: str,
+    tmp_path: Path,
+) -> AnglerfishSettings:
     """A fully-validated :class:`AnglerfishSettings` for use in tests."""
     return AnglerfishSettings(
         dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
         credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        sessions=SessionStoreConfig(database_path=tmp_path / "sessions.db"),
     )
+
+
+@pytest.fixture
+async def session_store(tmp_path: Path) -> AsyncIterator[SessionStore]:
+    """An opened :class:`SessionStore` rooted in a per-test tmp file."""
+    config = SessionStoreConfig(database_path=tmp_path / "sessions.db")
+    async with SessionStore(config) as store:
+        yield store
+
+
+@pytest.fixture
+async def dashboard_state(session_store: SessionStore) -> DashboardState:
+    """A :class:`DashboardState` wired to the test session store."""
+    return DashboardState(session_store)

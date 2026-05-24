@@ -27,6 +27,7 @@ from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.dashboard.routes import build_router
 from anglerfish.dashboard.state import DashboardState
 from anglerfish.dashboard.websocket import build_websocket_router
+from anglerfish.sessions import SessionStore
 
 __all__ = ["create_app", "default_static_dir", "default_templates_dir"]
 
@@ -43,26 +44,52 @@ def create_app(
     settings: AnglerfishSettings,
     *,
     state: DashboardState | None = None,
+    session_store: SessionStore | None = None,
     credential_store: Any | None = None,
     audit: AuditLog | None = None,
     login_rate_limiter: LoginRateLimiter | None = None,
     templates_dir: Path | None = None,
     static_dir: Path | None = None,
 ) -> FastAPI:
-    """Build a FastAPI app for the dashboard."""
+    """Build a FastAPI app for the dashboard.
+
+    Either ``state`` or ``session_store`` may be passed; if neither is
+    supplied a new :class:`SessionStore` is constructed from
+    ``settings.sessions`` and opened in the lifespan. The store is
+    closed on shutdown only when ``create_app`` owns it (the caller
+    keeps ownership when it passes one in).
+    """
     templates_path = templates_dir if templates_dir is not None else default_templates_dir()
     static_path = static_dir if static_dir is not None else default_static_dir()
     if not templates_path.is_dir():
         raise FileNotFoundError(f"templates directory not found: {templates_path}")
 
-    state_instance = state if state is not None else DashboardState()
+    owns_session_store = False
+    if state is not None:
+        state_instance = state
+        store_instance = state.store
+    else:
+        if session_store is None:
+            session_store = SessionStore(settings.sessions)
+            owns_session_store = True
+        store_instance = session_store
+        state_instance = DashboardState(
+            store_instance,
+            max_active_sessions=settings.sessions.max_active_sessions_returned,
+        )
     audit_log = audit if audit is not None else AuditLog()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        yield
-        if credential_store is not None:
-            await credential_store.aclose()
+        if owns_session_store:
+            await store_instance.open()
+        try:
+            yield
+        finally:
+            if owns_session_store:
+                await store_instance.aclose()
+            if credential_store is not None:
+                await credential_store.aclose()
 
     app = FastAPI(
         title="Anglerfish AI",

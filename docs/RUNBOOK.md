@@ -366,6 +366,46 @@ Schema and config defaults are intentionally backward-compatible
 within a minor version. Always read the release notes first; a major
 bump can require a wizard `--reconfigure` to pick up new fields.
 
+### Import old forwarder JSONL into the session store
+
+The Stage 4 session store backs `/var/lib/anglerfish/sessions.db`.
+Operators upgrading from a release that wrote sessions as JSONL into
+`/var/lib/anglerfish/sessions.jsonl` (the Splunk forwarder fallback)
+can replay that file into the store one-time:
+
+```bash
+sudo systemctl stop anglerfish-bridge.service anglerfish-dashboard.service
+
+sudo /opt/anglerfish/venv/bin/python -c "
+import asyncio
+from pathlib import Path
+from anglerfish.config.settings import load_settings
+from anglerfish.sessions import SessionStore, import_jsonl_into_store
+
+async def main():
+    settings = load_settings()
+    async with SessionStore(settings.sessions) as store:
+        n = await import_jsonl_into_store(
+            Path('/var/lib/anglerfish/sessions.jsonl'),
+            store,
+        )
+        print(f'imported {n} sessions')
+
+asyncio.run(main())
+"
+
+sudo systemctl start anglerfish-bridge.service anglerfish-dashboard.service
+```
+
+The import is idempotent on `session_id` (re-running it overwrites
+the same rows) but each Cowrie session-id is mapped to a fresh
+UUID, so re-running against the same JSONL file produces a second
+set of imported sessions. Move or compress the JSONL after a
+successful run to avoid that.
+
+Malformed lines (truncated mid-write, non-JSON) are logged and
+skipped; a partial corpus is better than refusing to import.
+
 ### Decommission
 
 ```bash
