@@ -269,6 +269,14 @@ class _LureSSHServer(asyncssh.SSHServer):
         if state.rate_slot_held:
             self._container.limiter.release(state.source_ip)
         duration_s = (datetime.now(tz=UTC) - state.started_at).total_seconds()
+        # session_id is included only when the shell loop reached the
+        # point of constructing the lure_session; connections that died
+        # earlier (auth-stage disconnect, rate-limited) get a close
+        # record without a session_id and the Stage 4.2 tailer ignores
+        # them (no SessionStore row was ever opened).
+        close_extras: dict[str, Any] = {}
+        if state.lure_session is not None:
+            close_extras["session_id"] = str(state.lure_session.session_id)
         self._container.audit.record(
             "lure.session_closed",
             source_ip=state.source_ip,
@@ -276,6 +284,7 @@ class _LureSSHServer(asyncssh.SSHServer):
             duration_seconds=duration_s,
             command_count=state.lure_session.command_count() if state.lure_session else 0,
             error=type(exc).__name__ if exc else None,
+            **close_extras,
         )
         if state.bridge_uuid is not None:
             self._container.spawn_background(
@@ -497,6 +506,7 @@ async def _process_handler(
             source_ip=state.source_ip,
             username=state.username,
             client_version=conn.get_extra_info("client_version"),
+            session_id=str(lure_session.session_id),
         )
         state.open_audited = True
 
@@ -578,6 +588,7 @@ async def _handle_one_command(
             "lure.command_native",
             source_ip=session.source_ip,
             command=sanitised[:200],
+            session_id=str(session.session_id),
         )
         return native.text, native.close_after
 
@@ -599,6 +610,7 @@ async def _handle_one_command(
             source_ip=session.source_ip,
             command=sanitised[:200],
             latency_ms=latency_ms,
+            session_id=str(session.session_id),
         )
         # Bridge responses do not include a trailing prompt; ensure
         # we end with a newline so the prompt sits on its own line.
@@ -611,6 +623,7 @@ async def _handle_one_command(
             source_ip=session.source_ip,
             reason="submit_command_failed",
             error_type=type(exc).__name__,
+            session_id=str(session.session_id),
         )
         scripted = fallback_with_default(
             sanitised,
@@ -624,6 +637,7 @@ async def _handle_one_command(
             source_ip=session.source_ip,
             command=sanitised[:200],
             reason=type(exc).__name__,
+            session_id=str(session.session_id),
         )
         if scripted and not scripted.endswith("\n"):
             scripted = scripted + "\n"

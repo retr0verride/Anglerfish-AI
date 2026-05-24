@@ -79,7 +79,7 @@ class AIBridgeService:
         # about its existence. Production code may pass explicit
         # instances to share them across services or pre-load operator
         # overrides at startup.
-        self._audit_log = audit_log if audit_log is not None else AuditLog()
+        self._audit_log = audit_log if audit_log is not None else AuditLog(settings.audit.log_path)
         self._output_filter = (
             output_filter if output_filter is not None else OutputFilter(settings.defense)
         )

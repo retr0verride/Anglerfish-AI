@@ -66,10 +66,9 @@ async def run_lure(settings: AnglerfishSettings) -> None:
     rsa_pem, ed25519_pem = load_host_keys(settings.lure.host_key_dir)
 
     # Single AuditLog instance is shared across the bridge, the lure,
-    # and the rest of Anglerfish. Constructed at module-default path
-    # so audit events land in the same JSONL the rest of the stack
-    # writes to.
-    audit_log = AuditLog()
+    # and the rest of Anglerfish. Path comes from settings.audit so
+    # the writer and the Stage 4.2 dashboard tailer agree on it.
+    audit_log = AuditLog(settings.audit.log_path)
 
     # CredentialStore must be opened before we hand it to LureServer
     # (the lure's validate_password awaits record_attempt on every

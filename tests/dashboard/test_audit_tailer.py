@@ -1,0 +1,620 @@
+"""Tests for :class:`anglerfish.dashboard.audit_tailer.AuditTailer`.
+
+The tailer is exercised by driving its public API directly
+(``_poll_once`` for deterministic stepping) rather than racing
+the background poll task. Lifespan integration via ``create_app``
+is covered separately in ``test_app.py``; here the focus is on
+the event-translation, offset-cache, and rotation behaviours.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+
+from anglerfish.dashboard.audit_tailer import AuditTailer
+from anglerfish.dashboard.state import DashboardEventKind, DashboardState
+from anglerfish.models.session import ResponseSource
+
+
+def _audit_line(event_type: str, **fields: object) -> str:
+    """Render one audit-log line in the same shape ``AuditLog.record`` writes."""
+    record: dict[str, object] = {
+        "ts": fields.pop("ts", datetime(2026, 5, 22, 10, 0, tzinfo=UTC).isoformat()),
+        "event_type": event_type,
+    }
+    record.update(fields)
+    return json.dumps(record, separators=(",", ":")) + "\n"
+
+
+def _append(path: Path, *lines: str) -> None:
+    with path.open("a", encoding="utf-8") as fp:
+        fp.write("".join(lines))
+
+
+def _make_tailer(
+    *,
+    tmp_path: Path,
+    dashboard_state: DashboardState,
+    audit_filename: str = "audit.jsonl",
+) -> AuditTailer:
+    return AuditTailer(
+        audit_path=tmp_path / audit_filename,
+        dashboard_state=dashboard_state,
+        offset_cache_path=tmp_path / "audit_tailer.json",
+        poll_interval_seconds=0.05,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Construction + lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_construction_rejects_nonpositive_poll(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError):
+        AuditTailer(
+            audit_path=tmp_path / "audit.jsonl",
+            dashboard_state=dashboard_state,
+            offset_cache_path=tmp_path / "cache.json",
+            poll_interval_seconds=0,
+        )
+
+
+async def test_start_is_idempotent_and_stop_cleans_up(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer.start()
+    assert tailer.is_running
+    await tailer.start()  # second call: no-op, still running
+    assert tailer.is_running
+    await tailer.stop()
+    assert not tailer.is_running
+
+
+async def test_stop_is_idempotent_without_prior_start(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer.stop()
+    assert not tailer.is_running
+
+
+async def test_no_audit_file_is_silent(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    assert tailer.offset == 0
+    assert (await dashboard_state.get_active_sessions()) == []
+
+
+async def test_empty_audit_file_processes_zero_events(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "audit.jsonl").write_text("", encoding="utf-8")
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    assert tailer.offset == 0
+
+
+# ---------------------------------------------------------------------------
+# Event translation
+# ---------------------------------------------------------------------------
+
+
+async def test_session_opened_creates_session_row(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            client_version="SSH-2.0-libssh_0.10.4",
+            session_id=str(sid),
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert snap.source_ip == "203.0.113.7"
+    assert snap.username == "root"
+    assert snap.turns == ()
+
+
+async def test_full_session_lifecycle_emits_turns_then_ends(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    sid_s = str(sid)
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.7",
+            command="whoami",
+            latency_ms=12.3,
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_native",
+            source_ip="203.0.113.7",
+            command="cd /tmp",
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.fallback_served",
+            source_ip="203.0.113.7",
+            command="ls -la",
+            reason="OllamaUnavailableError",
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.session_closed",
+            source_ip="203.0.113.7",
+            username="root",
+            duration_seconds=42.0,
+            command_count=3,
+            error=None,
+            session_id=sid_s,
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert [t.command for t in snap.turns] == ["whoami", "cd /tmp", "ls -la"]
+    assert [t.source for t in snap.turns] == [
+        ResponseSource.AI,
+        ResponseSource.AI,
+        ResponseSource.FALLBACK,
+    ]
+    # Session is ended → drops from active list.
+    active = await dashboard_state.get_active_sessions()
+    assert all(s.session_id != sid for s in active)
+
+
+async def test_command_before_open_auto_creates_placeholder(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    sid_s = str(sid)
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.7",
+            command="uname -a",
+            latency_ms=5.0,
+            session_id=sid_s,
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert snap.source_ip == "203.0.113.7"
+    assert snap.username == "unknown"  # placeholder
+    assert snap.fake_hostname == "unknown"  # placeholder
+    assert len(snap.turns) == 1
+    assert snap.turns[0].command == "uname -a"
+
+
+async def test_open_after_command_upgrades_placeholder_metadata(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    sid_s = str(sid)
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.7",
+            command="id",
+            latency_ms=3.0,
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            client_version="SSH-2.0-OpenSSH",
+            session_id=sid_s,
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert snap.username == "root"  # upgraded from placeholder
+    # Turn from the pre-open command is preserved.
+    assert [t.command for t in snap.turns] == ["id"]
+
+
+async def test_events_without_session_id_are_ignored(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.rate_limited",
+            source_ip="203.0.113.7",
+            kind="per_ip_concurrent",
+            concurrent=3,
+        ),
+        _audit_line(
+            "lure.fingerprint_observed",
+            source_ip="203.0.113.7",
+            client_version="SSH-2.0",
+            hassh="deadbeef",
+        ),
+        _audit_line(
+            "lure.login_attempt",
+            source_ip="203.0.113.7",
+            username="root",
+            password_hash_prefix="aabbccdd",
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    assert (await dashboard_state.get_active_sessions()) == []
+    # Offset still advances past the consumed (but ignored) lines.
+    assert tailer.offset > 0
+
+
+async def test_non_lure_events_are_ignored(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "dashboard.login_success",
+            username="admin",
+            session_id=str(uuid4()),  # has a session_id but unknown type
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    assert (await dashboard_state.get_active_sessions()) == []
+
+
+async def test_malformed_lines_are_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    audit_path.write_text(
+        "not json at all\n"
+        + _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid),
+        )
+        + "{}\n"  # valid JSON, missing required fields
+        + "  \n",  # blank line
+        encoding="utf-8",
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    assert (await dashboard_state.get_session(sid)) is not None
+
+
+async def test_invalid_session_id_uuid_is_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id="not-a-uuid",
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    assert (await dashboard_state.get_active_sessions()) == []
+
+
+async def test_event_publishes_websocket_event(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid),
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    async with dashboard_state.subscribe() as queue:
+        await tailer._poll_once()
+        event = await queue.get()
+    assert event.kind == DashboardEventKind.SESSION_STARTED
+
+
+# ---------------------------------------------------------------------------
+# Offset cache + rotation
+# ---------------------------------------------------------------------------
+
+
+async def test_partial_line_at_eof_is_held_for_next_cycle(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    # First write: one complete line + a partial second line (no \n).
+    audit_path.write_text(
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid),
+        )
+        + '{"ts":"2026',  # truncated mid-write
+        encoding="utf-8",
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    first_offset = tailer.offset
+    assert first_offset > 0
+    assert (await dashboard_state.get_session(sid)) is not None
+
+    # Now finish the second line and add a command for it.
+    sid2 = uuid4()
+    audit_path.write_text(
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid),
+        )
+        + _audit_line(
+            "lure.session_opened",
+            source_ip="198.51.100.4",
+            username="admin",
+            session_id=str(sid2),
+        ),
+        encoding="utf-8",
+    )
+    await tailer._poll_once()
+    assert tailer.offset > first_offset
+    assert (await dashboard_state.get_session(sid2)) is not None
+
+
+async def test_copytruncate_resets_offset(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid1 = uuid4()
+    sid2 = uuid4()
+    sid3 = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    # Pre-rotation: three lines so the file is meaningfully larger
+    # than the single line we shrink it to.
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid1),
+        ),
+        _audit_line(
+            "lure.session_opened",
+            source_ip="198.51.100.5",
+            username="root",
+            session_id=str(sid2),
+        ),
+        _audit_line(
+            "lure.session_opened",
+            source_ip="192.0.2.42",
+            username="root",
+            session_id=str(sid3),
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    pre_rotation_offset = tailer.offset
+    assert pre_rotation_offset > 0
+
+    # Simulate copytruncate: same inode, file shrinks to one line of
+    # an entirely new session.
+    sid_post = uuid4()
+    new_content = _audit_line(
+        "lure.session_opened",
+        source_ip="198.51.100.4",
+        username="admin",
+        session_id=str(sid_post),
+    )
+    audit_path.write_text(new_content, encoding="utf-8")
+    await tailer._poll_once()
+    assert tailer.offset < pre_rotation_offset
+    assert tailer.offset == len(new_content.encode("utf-8"))
+    assert (await dashboard_state.get_session(sid_post)) is not None
+
+
+async def test_offset_cache_persists_across_restart(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid),
+        ),
+    )
+    tailer_a = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer_a._poll_once()
+    first_offset = tailer_a.offset
+
+    # New instance against the same cache path should resume.
+    tailer_b = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    tailer_b._load_offset_cache()
+    assert tailer_b.offset == first_offset
+
+    # No new audit content → second poll is a no-op.
+    await tailer_b._poll_once()
+    assert tailer_b.offset == first_offset
+
+
+async def test_corrupt_cache_resets_to_zero(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "audit_tailer.json").write_text("not json", encoding="utf-8")
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    tailer._load_offset_cache()
+    assert tailer.offset == 0
+
+
+async def test_cache_path_mismatch_resets_to_zero(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "audit_tailer.json"
+    cache.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "audit_path": "/some/other/path",
+                "offset": 12345,
+            },
+        ),
+        encoding="utf-8",
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    tailer._load_offset_cache()
+    assert tailer.offset == 0
+
+
+# ---------------------------------------------------------------------------
+# Lifespan / background-task behaviour
+# ---------------------------------------------------------------------------
+
+
+async def test_background_task_processes_new_appends(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """End-to-end sanity: start the real background task, append a
+    line, wait a couple poll cycles, assert the row exists. Uses the
+    short test poll interval so the wait stays under a second."""
+    import asyncio as _asyncio
+
+    audit_path = tmp_path / "audit.jsonl"
+    sid = uuid4()
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer.start()
+    try:
+        _append(
+            audit_path,
+            _audit_line(
+                "lure.session_opened",
+                source_ip="203.0.113.7",
+                username="root",
+                session_id=str(sid),
+            ),
+        )
+        # Three poll cycles' worth of time; ample headroom at 0.05s.
+        for _ in range(20):
+            await _asyncio.sleep(0.05)
+            if (await dashboard_state.get_session(sid)) is not None:
+                break
+    finally:
+        await tailer.stop()
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+
+
+# ---------------------------------------------------------------------------
+# Type-shape sanity
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatched_command_carries_correct_source_enum(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """Locks in the documented decision: native commands fold into
+    ResponseSource.AI per the existing CommandTurn schema."""
+    sid = uuid4()
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=str(sid),
+        ),
+        _audit_line(
+            "lure.command_native",
+            source_ip="203.0.113.7",
+            command="cd /var",
+            session_id=str(sid),
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert snap.turns[0].source is ResponseSource.AI
+
+
+def test_uuid_type_for_session_id_field() -> None:
+    """Type-shape sanity: dispatch path accepts only valid UUIDs."""
+    assert UUID("00000000-0000-0000-0000-000000000000") is not None

@@ -137,7 +137,7 @@ def bridge_serve(
 
     # Shared audit log: defense fires (per-request) AND model integrity
     # results (startup) both write to the same JSONL append-only log.
-    audit_log = AuditLog()
+    audit_log = AuditLog(settings.audit.log_path)
     ai_client = OllamaClient(settings.ollama)
     integrity = ModelIntegrity(
         settings.defense,
@@ -251,7 +251,7 @@ def credentials_rotate_key(
         "/etc/anglerfish/anglerfish.env to the new key, then restart "
         "anglerfish-bridge and anglerfish-dashboard.",
     )
-    AuditLog().record(
+    AuditLog(settings.audit.log_path).record(
         "credentials.key_rotated",
         rows_rotated=result.rows_rotated,
         rows_skipped=result.rows_skipped,
@@ -280,7 +280,7 @@ def geo_update() -> None:
         results = fetch_geolite_databases(settings.geo)
     except FetchError as exc:
         console.print(f"[red]Geo update failed: {exc}[/red]")
-        AuditLog().record("geo.update_failed", error=str(exc))
+        AuditLog(settings.audit.log_path).record("geo.update_failed", error=str(exc))
         raise typer.Exit(code=1) from exc
 
     if not results:
@@ -292,7 +292,7 @@ def geo_update() -> None:
             f"[green]{result.edition}[/green] → {result.destination} "
             f"({result.bytes_written:,} bytes, sha256={result.sha256[:12]}…)",
         )
-    AuditLog().record(
+    AuditLog(settings.audit.log_path).record(
         "geo.update_succeeded",
         editions=[r.edition for r in results],
     )

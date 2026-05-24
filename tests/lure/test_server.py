@@ -259,6 +259,76 @@ async def test_audit_records_fingerprint(
     assert re.search(r'"hassh":"[0-9a-f]{32}"', events)
 
 
+async def test_per_session_events_carry_session_id(
+    tmp_path: Path,
+    audit_log: AuditLog,
+) -> None:
+    """Stage 4.2 contract: every per-session lure event carries a
+    UUID-shaped session_id matching the bridge session for that exec.
+
+    Pre-Stage-4.2 the lure never emitted session_id, so the dashboard
+    tailer had no way to correlate rows. Events that fire before the
+    bridge session is allocated (rate_limited, fingerprint_observed,
+    login_attempt) intentionally do NOT carry session_id and are out
+    of scope.
+
+    Test uses a single exec because the lure's connection-scoped
+    open_audited flag means multi-exec on one TCP connection emits
+    one session_opened but multiple bridge_uuids — a pre-existing
+    audit-semantics inconsistency, not a Stage 4.2 regression.
+    """
+    import json as _json
+    import re
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/session":
+            return httpx.Response(200, json={"session_id": str(uuid4())})
+        if request.url.path.endswith("/command"):
+            return httpx.Response(200, json={"text": "ok\n"})
+        return httpx.Response(404)
+
+    server = await _make_lure(tmp_path, audit_log, handler)
+    await server.start()
+    try:
+        async with asyncssh.connect(
+            "127.0.0.1",
+            port=server.get_port(),
+            username="alice",
+            password="x",
+            known_hosts=None,
+        ) as conn:
+            await conn.run("apt-get install hax", timeout=3.0)
+    finally:
+        await server.stop(drain_timeout_s=2.0)
+        await server.bridge_client.aclose()
+        await server.credential_store.aclose()
+
+    lines = [
+        _json.loads(raw)
+        for raw in audit_log.path.read_text(encoding="utf-8").splitlines()
+        if raw.strip()
+    ]
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for line in lines:
+        by_type.setdefault(line.get("event_type", ""), []).append(line)
+
+    uuid_re = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    for kind in ("lure.session_opened", "lure.command_bridge", "lure.session_closed"):
+        assert by_type.get(kind), f"missing {kind} events: {sorted(by_type)}"
+        for event in by_type[kind]:
+            sid = event.get("session_id")
+            assert isinstance(sid, str), f"{kind} missing session_id: {event!r}"
+            assert uuid_re.match(sid), f"{kind} malformed session_id: {event!r}"
+
+    # Single exec: every per-session event shares one UUID.
+    session_ids = {
+        event["session_id"]
+        for kind in ("lure.session_opened", "lure.command_bridge", "lure.session_closed")
+        for event in by_type[kind]
+    }
+    assert len(session_ids) == 1, f"single exec produced multiple session_ids: {session_ids}"
+
+
 # ---------------------------------------------------------------------------
 # Shell loop: native vs bridge dispatch
 # ---------------------------------------------------------------------------

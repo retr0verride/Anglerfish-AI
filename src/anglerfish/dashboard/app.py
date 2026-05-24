@@ -21,6 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from anglerfish import __version__
 from anglerfish.audit import AuditLog
 from anglerfish.config.settings import AnglerfishSettings
+from anglerfish.dashboard.audit_tailer import AuditTailer
 from anglerfish.dashboard.auth import build_auth_router
 from anglerfish.dashboard.overrides import build_runtime_overrides
 from anglerfish.dashboard.rate_limit import LoginRateLimiter
@@ -40,6 +41,31 @@ def default_static_dir() -> Path:
     return Path(__file__).parent / "static"
 
 
+def _resolve_state_and_store(
+    settings: AnglerfishSettings,
+    *,
+    state: DashboardState | None,
+    session_store: SessionStore | None,
+) -> tuple[DashboardState, SessionStore, bool]:
+    """Resolve (state, store, owns_store) from create_app's optional inputs.
+
+    Returns ``owns_store=True`` iff create_app constructed the store
+    itself and is responsible for opening + closing it in the lifespan.
+    """
+    if state is not None:
+        return state, state.store, False
+    if session_store is None:
+        session_store = SessionStore(settings.sessions)
+        owns_store = True
+    else:
+        owns_store = False
+    state_instance = DashboardState(
+        session_store,
+        max_active_sessions=settings.sessions.max_active_sessions_returned,
+    )
+    return state_instance, session_store, owns_store
+
+
 def create_app(
     settings: AnglerfishSettings,
     *,
@@ -47,6 +73,7 @@ def create_app(
     session_store: SessionStore | None = None,
     credential_store: Any | None = None,
     audit: AuditLog | None = None,
+    audit_tailer: AuditTailer | None = None,
     login_rate_limiter: LoginRateLimiter | None = None,
     templates_dir: Path | None = None,
     static_dir: Path | None = None,
@@ -58,34 +85,45 @@ def create_app(
     ``settings.sessions`` and opened in the lifespan. The store is
     closed on shutdown only when ``create_app`` owns it (the caller
     keeps ownership when it passes one in).
+
+    Stage 4.2: an :class:`AuditTailer` is started in the lifespan
+    so the SessionStore actually sees production lure events. Pass
+    ``audit_tailer=None`` (default) to get one wired against
+    ``settings.audit.log_path`` + ``settings.data_dir``. Tests that
+    don't want the background task should pass an explicit tailer
+    constructed with ``poll_interval_seconds`` short enough to
+    drain in TestClient lifespan or a tmp path that never exists.
     """
     templates_path = templates_dir if templates_dir is not None else default_templates_dir()
     static_path = static_dir if static_dir is not None else default_static_dir()
     if not templates_path.is_dir():
         raise FileNotFoundError(f"templates directory not found: {templates_path}")
 
-    owns_session_store = False
-    if state is not None:
-        state_instance = state
-        store_instance = state.store
-    else:
-        if session_store is None:
-            session_store = SessionStore(settings.sessions)
-            owns_session_store = True
-        store_instance = session_store
-        state_instance = DashboardState(
-            store_instance,
-            max_active_sessions=settings.sessions.max_active_sessions_returned,
+    state_instance, store_instance, owns_session_store = _resolve_state_and_store(
+        settings,
+        state=state,
+        session_store=session_store,
+    )
+    audit_log = audit if audit is not None else AuditLog(settings.audit.log_path)
+    tailer_instance = (
+        audit_tailer
+        if audit_tailer is not None
+        else AuditTailer(
+            audit_path=settings.audit.log_path,
+            dashboard_state=state_instance,
+            offset_cache_path=settings.data_dir / "audit_tailer.json",
         )
-    audit_log = audit if audit is not None else AuditLog()
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if owns_session_store:
             await store_instance.open()
+        await tailer_instance.start()
         try:
             yield
         finally:
+            await tailer_instance.stop()
             if owns_session_store:
                 await store_instance.aclose()
             if credential_store is not None:

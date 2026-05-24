@@ -38,6 +38,7 @@ from pydantic import (
 )
 
 __all__ = [
+    "AuditConfig",
     "BridgeConfig",
     "CowrieConfig",
     "CredentialsConfig",
@@ -651,6 +652,21 @@ class CredentialsConfig(BaseModel):
                 f"credentials.encryption_key must decode to exactly 32 bytes, got {len(decoded)}.",
             )
         return v
+
+
+class AuditConfig(BaseModel):
+    """Append-only audit log path.
+
+    Both the writer (``AuditLog`` in bridge / lure / dashboard / CLI)
+    and the Stage 4.2 reader (``AuditTailer`` in the dashboard
+    process) must agree on this path. Parameterizing it here makes
+    that agreement structural rather than coincidental: relocate the
+    log on one side and the other automatically follows.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    log_path: Path = Field(default=Path("/var/log/anglerfish/audit.jsonl"))
 
 
 class SessionStoreConfig(BaseModel):

@@ -27,6 +27,7 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anglerfish.config.models import (
+    AuditConfig,
     BridgeConfig,
     CowrieConfig,
     CredentialsConfig,
@@ -80,6 +81,7 @@ class AnglerfishSettings(BaseSettings):
     fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
     lure: LureConfig = Field(default_factory=LureConfig)
     sessions: SessionStoreConfig = Field(default_factory=SessionStoreConfig)
+    audit: AuditConfig = Field(default_factory=AuditConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")

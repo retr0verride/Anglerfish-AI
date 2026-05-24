@@ -159,6 +159,15 @@ def render_env(
         _line("# ANGLERFISH_SESSIONS__DATABASE_PATH", "/var/lib/anglerfish/sessions.db"),
         _line("# ANGLERFISH_SESSIONS__MAX_ACTIVE_SESSIONS_RETURNED", "500"),
         "",
+        "# --- Audit log (Stage 4.2: writer + tailer share this path) --------------",
+        # log_path is read by every AuditLog construction site (bridge,
+        # lure, dashboard, CLI) AND by the Stage 4.2 AuditTailer that
+        # populates the session store. Relocate carefully: logrotate
+        # must continue to copytruncate this exact file, and the chattr
+        # +a invariant must be re-applied if it moves between
+        # filesystems.
+        _line("# ANGLERFISH_AUDIT__LOG_PATH", "/var/log/anglerfish/audit.jsonl"),
+        "",
         "# --- Geo enrichment (MaxMind GeoLite2) -----------------------------------",
         _line("ANGLERFISH_GEO__CITY_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-City.mmdb"),
         _line("ANGLERFISH_GEO__ASN_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-ASN.mmdb"),
