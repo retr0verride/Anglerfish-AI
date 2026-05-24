@@ -56,7 +56,17 @@ class LureConfig(BaseModel):
             "than silently binding to every interface."
         ),
     )
-    listen_port: int = Field(default=2222, ge=1, le=65535)
+    listen_port: int = Field(
+        default=2222,
+        ge=0,
+        le=65535,
+        description=(
+            "TCP port the SSH listener binds to. 0 means kernel-assigned "
+            "ephemeral; useful for tests and for sysadmins that pin the "
+            "actual port via systemd socket activation. In production use "
+            "22 (with CAP_NET_BIND_SERVICE) or 2222."
+        ),
+    )
 
     # Identity
     hostname: str = Field(default="srv-prod-01", min_length=1, max_length=63)

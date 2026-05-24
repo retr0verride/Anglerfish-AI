@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import stat
-import sys
 from pathlib import Path
 
 import pytest
@@ -126,20 +125,20 @@ def test_module_constants_export_filenames() -> None:
 
 
 def test_keys_module_does_not_import_asyncssh() -> None:
-    """Stage 2A: keys.py must work without asyncssh installed."""
-    # asyncssh is a future Stage 2B dependency; the keys module
-    # stands on cryptography alone so wizard-side key generation can
-    # run before asyncssh lands. Check the actual module symbol table,
-    # not the docstring (which legitimately mentions asyncssh by name).
+    """``keys.py`` must stand on cryptography alone.
+
+    The wizard generates host keys before asyncssh is necessarily
+    importable, so the source of ``lure/keys.py`` should not contain
+    any ``import asyncssh`` / ``from asyncssh`` statement. The sys
+    .modules check used in Stage 2A is no longer reliable because the
+    Stage 2B server module legitimately imports asyncssh and gets
+    loaded by sibling tests, polluting the module set.
+    """
     import anglerfish.lure.keys as keys_mod
 
-    bound_names = {
-        name
-        for name, value in vars(keys_mod).items()
-        if not name.startswith("_") and getattr(value, "__module__", "").startswith("asyncssh")
-    }
-    assert bound_names == set(), f"unexpected asyncssh symbols bound: {bound_names}"
-    # asyncssh must also be absent from the loaded module set under
-    # the keys module's import chain. Re-importing here is a no-op
-    # because the module is cached; check sys.modules directly.
-    assert "asyncssh" not in sys.modules, "asyncssh import detected in module chain"
+    source = Path(keys_mod.__file__).read_text(encoding="utf-8")
+    # Source-level grep, not symbol-table introspection.
+    for line in source.splitlines():
+        stripped = line.lstrip()
+        assert not stripped.startswith("import asyncssh"), line
+        assert not stripped.startswith("from asyncssh"), line

@@ -49,10 +49,16 @@ geo_app = typer.Typer(
     help="MaxMind GeoLite2 database management.",
     no_args_is_help=True,
 )
+lure_app = typer.Typer(
+    name="lure",
+    help="Native SSH lure (Cowrie replacement) commands.",
+    no_args_is_help=True,
+)
 app.add_typer(config_app)
 app.add_typer(bridge_app)
 app.add_typer(credentials_app)
 app.add_typer(geo_app)
+app.add_typer(lure_app)
 
 
 def _version_callback(value: bool) -> None:
@@ -289,6 +295,84 @@ def geo_update() -> None:
     AuditLog().record(
         "geo.update_succeeded",
         editions=[r.edition for r in results],
+    )
+
+
+@lure_app.command("serve")
+def lure_serve() -> None:  # pragma: no cover - exercised in integration
+    """Run the native SSH lure listener.
+
+    Blocks on the asyncio loop until SIGTERM or SIGINT is received.
+    Exits 2 on bait-NIC validation failure, 0 on graceful shutdown.
+    """
+    import asyncio
+    import logging
+
+    from anglerfish.lure.runner import BaitNicError, run_lure
+
+    console = Console()
+    try:
+        settings = load_settings()
+    except ValidationError as exc:
+        console.print(Panel(str(exc), title="[red]Configuration error[/red]"))
+        raise typer.Exit(code=2) from exc
+
+    logging.basicConfig(level=settings.log_level.value)
+    try:
+        asyncio.run(run_lure(settings))
+    except BaitNicError as exc:
+        console.print(
+            Panel(str(exc), title="[red]Lure bait-NIC validation failed[/red]"),
+        )
+        raise typer.Exit(code=2) from exc
+
+
+@lure_app.command("validate-config")
+def lure_validate_config() -> None:
+    """Run the lure's startup checks without binding the listener.
+
+    Loads settings, generates / verifies host keys, and runs the
+    bait-NIC presence check. Exits 0 on success, non-zero with a
+    diagnostic on the first failure. Safe to run on a host that
+    already has the lure listener bound.
+    """
+    from anglerfish.lure.keys import HostKeyPermissionError, ensure_host_keys, load_host_keys
+    from anglerfish.lure.server import BaitNicError, validate_bait_nic
+
+    console = Console()
+    try:
+        settings = load_settings()
+    except ValidationError as exc:
+        console.print(Panel(str(exc), title="[red]Configuration error[/red]"))
+        raise typer.Exit(code=2) from exc
+
+    if not settings.lure.enabled:
+        console.print(
+            "[yellow]lure.enabled is False; the listener would not bind. "
+            "Skipping bait-NIC check.[/yellow]",
+        )
+        raise typer.Exit(code=0)
+
+    try:
+        ensure_host_keys(settings.lure.host_key_dir)
+        load_host_keys(settings.lure.host_key_dir)
+    except (HostKeyPermissionError, OSError) as exc:
+        console.print(
+            Panel(str(exc), title="[red]Lure host-key check failed[/red]"),
+        )
+        raise typer.Exit(code=2) from exc
+
+    try:
+        validate_bait_nic(str(settings.lure.listen_host))
+    except BaitNicError as exc:
+        console.print(
+            Panel(str(exc), title="[red]Lure bait-NIC validation failed[/red]"),
+        )
+        raise typer.Exit(code=2) from exc
+
+    console.print(
+        f"[green]lure config OK[/green] - listener would bind to "
+        f"{settings.lure.listen_host}:{settings.lure.listen_port}",
     )
 
 

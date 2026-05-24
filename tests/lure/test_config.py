@@ -121,10 +121,11 @@ def test_listen_host_accepts_ipv6_literal() -> None:
 
 
 def test_listen_port_must_be_in_tcp_range() -> None:
+    LureConfig(listen_port=0)  # ephemeral / kernel-assigned, allowed
     LureConfig(listen_port=1)
     LureConfig(listen_port=65535)
     with pytest.raises(ValidationError):
-        LureConfig(listen_port=0)
+        LureConfig(listen_port=-1)
     with pytest.raises(ValidationError):
         LureConfig(listen_port=65536)
 
