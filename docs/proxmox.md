@@ -39,7 +39,7 @@ side and reaches Ollama, Splunk HEC, and the dashboard.
 ### 1.1 Create the two Linux bridges
 
 On the Proxmox host, add bridges to `/etc/network/interfaces`. The
-deploy script intentionally refuses to auto-create them — wiring a
+deploy script intentionally refuses to auto-create them, wiring a
 bridge to the wrong physical NIC could put your management plane
 on the attacker side.
 
@@ -75,7 +75,7 @@ ip -br link show vmbr-bait vmbr-service
 
 ### 1.2 Tooling
 
-The deploy script needs `qm`, `pvesm`, `jq`, and `awk` — install if
+The deploy script needs `qm`, `pvesm`, `jq`, and `awk`, install if
 not present:
 
 ```bash
@@ -86,7 +86,7 @@ apt install proxmox-ve jq gawk
 
 Anglerfish runs entirely on a local LLM via Ollama, co-located with
 the bridge for loopback-only inference. That means **the GPU should
-be passed through to the Anglerfish VM**, not to any sibling VM
+be passed through to the Anglerfish VM**: not to any sibling VM
 (Kali, replay VM, etc.).
 
 Three reasons:
@@ -98,13 +98,13 @@ Three reasons:
    when one box can do both.
 2. **Mixed-role hygiene.** Hosting the defender's LLM on the same
    VM as your attacker/replay tooling crosses defender and attacker
-   infrastructure. Even in a lab, that's bad hygiene — if the
+   infrastructure. Even in a lab, that's bad hygiene, if the
    attacker VM is ever compromised by something you replay, your
    honeypot's LLM is on the same box.
 3. **Latency + nftables simplicity.** Loopback is ~0.2ms; cross-VM
    service-net inference is ~1-5ms + TCP overhead. And co-located
    keeps the nftables egress policy at "Splunk + dashboard, nothing
-   else" — no Ollama port to allow.
+   else"; no Ollama port to allow.
 
 A GPU can only be passed through to one VM at a time on Proxmox.
 Switch it to Anglerfish:
@@ -147,7 +147,7 @@ install per [`MODEL_SETUP.md`](MODEL_SETUP.md).
   Anglerfish for the honeypot's hot path.
 * Hardware budget for two GPUs. Not the common case.
 
-None of those apply to a single-honeypot lab — pass the GPU to
+None of those apply to a single-honeypot lab, pass the GPU to
 Anglerfish.
 
 ---
@@ -174,7 +174,7 @@ Optional overrides:
 | `--disk-storage NAME`   | `local-lvm`              | VM disk on a different storage   |
 | `--memory MIB`          | `4096`                   | LLM model + Cowrie need headroom |
 | `--cores N`             | `4`                      | Per LLM throughput needs         |
-| `--dry-run`             | —                        | Print the `qm create` line only  |
+| `--dry-run`             | -                        | Print the `qm create` line only  |
 
 The script:
 
@@ -244,8 +244,8 @@ honeypot is live.
 
 `pve-backup` (the built-in `vzdump`) captures full-VM snapshots
 and is the right tool for disaster recovery. For the smaller
-"replay the operator state" workflow — moving credentials,
-sessions, audit log between VMs — use the included
+"replay the operator state" workflow, moving credentials,
+sessions, audit log between VMs, use the included
 [`proxmox/backup.sh`](../proxmox/backup.sh):
 
 ```bash

@@ -3,12 +3,12 @@
 This guide walks from a fresh ISO download to a running honeypot.
 It covers two install paths:
 
-1. **Proxmox** — production. The honeypot runs as a VM with two
+1. **Proxmox**: production. The honeypot runs as a VM with two
    bridges; the bait NIC is exposed to attacker traffic, the service
    NIC reaches operators + Ollama. Detailed in
    [proxmox.md](proxmox.md); this guide gives the short version and
    the cross-environment steps.
-2. **QEMU smoke** — workstation. Useful for validating the ISO
+2. **QEMU smoke**: workstation. Useful for validating the ISO
    without committing rack space. Same wizard, same services, no
    real attacker traffic. See [`iso/smoke.sh`](../iso/smoke.sh).
 
@@ -23,7 +23,7 @@ the README first. The wizard refuses to proceed until you accept it.
 | Concern         | Requirement                                                       |
 |-----------------|-------------------------------------------------------------------|
 | ISO host        | A linux host with `live-build` (to build the ISO) **or** a release artefact downloaded from GitHub Releases. |
-| LLM             | **Ollama co-located on the Anglerfish VM** (recommended — see [`PRODUCT.md`](PRODUCT.md) and [`MODEL_SETUP.md`](MODEL_SETUP.md)). Trusted-remote Ollama is supported via `trusted_remote_host` but adds operational complexity for no gain on single-honeypot deployments. |
+| LLM             | **Ollama co-located on the Anglerfish VM** (recommended - see [`PRODUCT.md`](PRODUCT.md) and [`MODEL_SETUP.md`](MODEL_SETUP.md)). Trusted-remote Ollama is supported via `trusted_remote_host` but adds operational complexity for no gain on single-honeypot deployments. |
 | GPU             | NVIDIA card with ≥12GB VRAM passed through to the Anglerfish VM. RTX 3060 12GB is the reference. CPU-only works but inference is slow enough to break the deception. See [`proxmox.md`](proxmox.md) §1.3 for passthrough setup. |
 | Operator access | An ED25519 SSH public key. The wizard installs it into the operator account; nothing else gets you back into the VM. |
 | Optional        | A MaxMind licence key for first-boot GeoLite2 fetch. Without it, geo enrichment is empty until you stage `.mmdb` files manually. |
@@ -64,7 +64,7 @@ a refusal to trust the artefact. Stop and ask in #anglerfish.
 
 ### 2.2 Building locally
 
-If you'd rather build from source — and you have a Debian or Ubuntu
+If you'd rather build from source, and you have a Debian or Ubuntu
 host with `live-build`, `debootstrap`, `squashfs-tools`, `xorriso`,
 `isolinux`, and `syslinux-common` installed:
 
@@ -105,7 +105,7 @@ forcing the LLM onto a separate box).
 
 ---
 
-## 3. Install — Proxmox
+## 3. Install - Proxmox
 
 See [proxmox.md](proxmox.md) for the full version. The short
 version, assuming `vmbr-bait` and `vmbr-service` already exist:
@@ -127,7 +127,7 @@ the bridge template in [proxmox.md §1.1](proxmox.md#11-create-the-two-linux-bri
 
 ---
 
-## 4. Install — QEMU smoke
+## 4. Install - QEMU smoke
 
 For a dry-run on your workstation:
 
@@ -160,7 +160,7 @@ QEMU's `-nographic`). The full prompt list:
 | 10   | Ollama endpoint URL                                   | `http://127.0.0.1:11434/` (on-host) or `http://<gpu-host>:11434/`. |
 | 11   | Trusted remote Ollama IP                              | Only if the URL is not loopback. Must match the URL's host.  |
 | 12   | Ollama model tag                                      | Default `qwen3:14b` (Apache-2.0, Hugging Face). The bridge `ollama pull`s lazily. |
-| 13   | Fake hostname for the AI shell                        | Default `srv-prod-01` — what the attacker sees in `hostname`. |
+| 13   | Fake hostname for the AI shell                        | Default `srv-prod-01` - what the attacker sees in `hostname`. |
 | 14   | Fake username for the AI shell                        | Default `root`.                                              |
 | 15   | Splunk HEC                                            | `n` to skip; otherwise prompts for URL + token.              |
 | 16   | Threat alert webhook URL                              | Optional.                                                    |
@@ -176,7 +176,7 @@ After the wizard:
   supplied.
 * Cowrie + the bridge + the dashboard start.
 
-The bridge starts but **the fast-tier LLM model is not yet pulled** —
+The bridge starts but **the fast-tier LLM model is not yet pulled** -
 the wizard configures the model *tag* but the actual model blob
 (several GB) is operator-controlled. The bridge will fail every
 Ollama call until you complete the next step.
@@ -197,9 +197,9 @@ sudo systemctl edit ollama.service
 sudo systemctl daemon-reload && sudo systemctl restart ollama.service
 
 # Pull the three-tier stack (~13GB total)
-ollama pull qwen2.5-coder:7b-instruct   # fast tier — used by Stage 1
-ollama pull phi-4                        # deep tier — used by Stage 5+
-ollama pull nomic-embed-text             # embed tier — used by Stage 6+
+ollama pull qwen2.5-coder:7b-instruct   # fast tier - used by Stage 1
+ollama pull phi-4                        # deep tier - used by Stage 5+
+ollama pull nomic-embed-text             # embed tier - used by Stage 6+
 
 # Capture the fast-tier hash for the Stage 1 integrity check
 sudo apt install -y jq
@@ -263,17 +263,17 @@ rotate it explicitly via `anglerfish credentials rotate-key`.
 
 ## 9. Next steps
 
-* **[PRE_DEPLOY_CHECKLIST.md](PRE_DEPLOY_CHECKLIST.md)** — twelve-section
+* **[PRE_DEPLOY_CHECKLIST.md](PRE_DEPLOY_CHECKLIST.md)** - twelve-section
   verification before exposing the honeypot to attacker traffic.
-* **[MODEL_SETUP.md](MODEL_SETUP.md)** — full LLM setup, hardware
+* **[MODEL_SETUP.md](MODEL_SETUP.md)** - full LLM setup, hardware
   sizing, hash-rotation workflow.
-* **[RUNBOOK.md](RUNBOOK.md)** — day-2 operations: rotate keys, replay
+* **[RUNBOOK.md](RUNBOOK.md)** - day-2 operations: rotate keys, replay
   sessions, recover from common failures.
-* **[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)** — playbook for
+* **[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)** - playbook for
   unknown failure modes.
-* **[ARCHITECTURE.md](ARCHITECTURE.md)** — what each module does, who
+* **[ARCHITECTURE.md](ARCHITECTURE.md)** - what each module does, who
   talks to whom, what gets persisted.
-* **[THREAT_MODEL.md](THREAT_MODEL.md)** — STRIDE walkthrough and the
+* **[THREAT_MODEL.md](THREAT_MODEL.md)** - STRIDE walkthrough and the
   hardening that addresses each row.
-* **[API_REFERENCE.md](API_REFERENCE.md)** — bridge and dashboard
+* **[API_REFERENCE.md](API_REFERENCE.md)** - bridge and dashboard
   endpoints + WebSocket protocol for custom integrations.

@@ -4,14 +4,13 @@
 
 # Anglerfish AI
 
-> AI-powered SSH honeypot — deep-sea threat intelligence for the modern attacker.
+> AI-powered SSH honeypot. Deep-sea threat intelligence.
 
 Anglerfish AI is a self-contained honeypot operating system. Boot the ISO,
-complete a first-boot wizard, and have a production-grade AI-driven SSH
-honeypot running in minutes. Attackers see a convincing fake Debian shell
-driven by a local LLM; you see structured intelligence in Splunk, a live
-dashboard, a MITRE ATT&CK-tagged threat timeline, and an encrypted credential
-database.
+complete the first-boot wizard, and an AI-driven SSH honeypot is running
+in minutes. Attackers see a convincing fake Debian shell driven by a local
+LLM. You see structured intelligence in Splunk, a live dashboard, a
+MITRE ATT&CK-tagged threat timeline, and an encrypted credential database.
 
 ---
 
@@ -28,7 +27,7 @@ agree to the following:**
    acceptable-use policies of your hosting provider, network operator,
    and registrar.
 3. **Captured credentials, payloads, and shell sessions are sensitive
-   data.** Treat them as such — they may include real credentials
+   data.** Treat them as such. They may include real credentials
    inadvertently submitted by misconfigured automation. The credential
    database is encrypted at rest with AES-GCM; do not export it in
    plaintext.
@@ -78,9 +77,9 @@ before any service is enabled.
 
 The honeypot VM has two network interfaces:
 
-* **Bait** — exposed to hostile traffic; runs Cowrie on the configured
+* **Bait**: exposed to hostile traffic. Runs Cowrie on the configured
   port(s). Egress is dropped at nftables level except for DNS.
-* **Service** — private, firewalled; reaches Ollama (loopback or a
+* **Service**: private, firewalled. Reaches Ollama (loopback or a
   single trusted IP), Splunk HEC, and the operator dashboard. Nothing
   else.
 
@@ -120,7 +119,7 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 
 | Document                                         | What it covers                                                         |
 | ------------------------------------------------ | ---------------------------------------------------------------------- |
-| [`docs/PRODUCT.md`](docs/PRODUCT.md)             | Thesis, design principles, the seven north-star capabilities, non-goals |
+| [`docs/PRODUCT.md`](docs/PRODUCT.md)             | Thesis, design principles, the seven capabilities, non-goals |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md)             | Eleven-stage build plan from foundation to full adaptive-deception     |
 | [`docs/design/TEMPLATE.md`](docs/design/TEMPLATE.md) | Template each stage's design doc fills in before code is written       |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)   | Module-by-module walkthrough, IPC boundaries, where to look when       |
@@ -130,8 +129,8 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 | [`docs/proxmox.md`](docs/proxmox.md)             | Proxmox-specific bridge prep, VM config, GPU passthrough, snapshots    |
 | [`docs/proxmox-lab.md`](docs/proxmox-lab.md)     | Strict-lab variant: air-gapped bait bridge, PCAP capture, snapshot/reset workflow |
 | [`docs/PRE_DEPLOY_CHECKLIST.md`](docs/PRE_DEPLOY_CHECKLIST.md) | Top-to-bottom verification before exposing to attacker traffic         |
-| [`docs/INCIDENT_RESPONSE.md`](docs/INCIDENT_RESPONSE.md) | Playbook for the unknown — pivot, breach, audit-log gap, upstream CVE  |
-| [`docs/RUNBOOK.md`](docs/RUNBOOK.md)             | Day-2 ops — credentials rotation, geo updates, 7 recovery scenarios    |
+| [`docs/INCIDENT_RESPONSE.md`](docs/INCIDENT_RESPONSE.md) | Playbook for pivot, breach, audit-log gap, upstream CVE                |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md)             | Day-2 ops: credentials rotation, geo updates, 7 recovery scenarios     |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)   | STRIDE table, trust boundaries, crypto inventory, known limitations    |
 | [`SECURITY.md`](SECURITY.md)                     | Vulnerability disclosure policy, supported versions, scope             |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md)             | Quality gates, branch/commit style, PR checklist                       |
@@ -162,7 +161,7 @@ pre-commit install --install-hooks
 
 ### Run the quality gates
 
-The pipeline is the source of truth — any commit must pass these:
+The pipeline is the source of truth. Every commit must pass these:
 
 ```bash
 ruff check .
@@ -226,14 +225,14 @@ The Ollama endpoint host is validated at config time:
 
 * **Always accepted:** any loopback IP (`127.0.0.0/8`, `::1`) and the
   literal hostname `localhost`.
-* **Conditionally accepted:** an IP literal — and **only** an IP
-  literal — that matches the value of
+* **Conditionally accepted:** an IP literal (and **only** an IP
+  literal) that matches the value of
   `ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST`.
 * **Always rejected:** every other hostname (including DNS names that
   happen to resolve to a trusted IP), every non-matching IP, and the
   unspecified address `0.0.0.0`.
 
-This is a structural property — there is no override flag.
+This is a structural property. There is no override flag.
 
 ---
 
@@ -243,13 +242,13 @@ This is a structural property — there is no override flag.
   stripped of C0 control characters before reaching a prompt template;
   every model response is silently capped to a configured maximum.
 * **The LLM is untrusted.** Prompt injection from attacker commands is
-  mitigated *structurally* — the attacker's text always lives in its
-  own user message, and the system prompt instructs the model to treat
-  any user message as a shell command, not as instructions.
+  mitigated structurally: the attacker's text always lives in its own
+  user message, and the system prompt instructs the model to treat any
+  user message as a shell command, not as instructions.
 * **Rate limiting is mandatory.** The bridge enforces a global
   concurrency cap plus a per-session token bucket. When either fires,
-  the attacker still receives a plausible response — drawn from the
-  scripted fallback set — so the limiter cannot be used as a probe.
+  the attacker still receives a plausible response (drawn from the
+  scripted fallback set) so the limiter cannot be used as a probe.
 * **Credentials are encrypted at rest.** AES-GCM under a key supplied
   via `ANGLERFISH_CREDENTIALS__ENCRYPTION_KEY`. Deduplication uses
   HMAC-SHA256 fingerprints under a separate key derived from the
@@ -348,32 +347,30 @@ Anglerfish-AI/
 
 ## Contributing
 
-Contributions are welcome. Anglerfish is opinionated about quality:
+Before opening a PR:
 
-1. **Run `pre-commit run --all-files` before opening a PR.** The
-   pipeline catches every blocking issue locally; CI is a safety net,
-   not a triage queue.
-2. **Mypy is strict.** Every public function has a complete type
-   signature. `# type: ignore` is allowed only with an error code and
-   a one-line reason.
-3. **No placeholder code in `main`.** A module either ships a real
-   implementation with tests or it is removed.
-4. **Tests live next to the subsystem they cover.** Bridge tests in
+1. Run `pre-commit run --all-files`. It catches every blocking issue
+   locally. CI is a safety net, not a triage queue.
+2. Public functions need full type signatures. Mypy runs in strict
+   mode. `# type: ignore` is allowed only with an error code and a
+   one-line reason.
+3. No placeholder code on `main`. Either ship the implementation with
+   tests or remove the module.
+4. Put tests next to the subsystem they cover. Bridge tests in
    `tests/bridge/`, config tests in `tests/config/`, and so on.
-5. **Security-critical changes need a written threat-model note** in
-   the PR description: what changed, what is now newly trusted, and
-   how that trust is bounded.
+5. For security-critical changes, include a threat-model note in the
+   PR description: what changed, what is now newly trusted, and how
+   that trust is bounded.
 
 ---
 
 ## Disclosure on implementation
 
-Anglerfish AI is **architected by a human and implemented with the
-assistance of Claude Code (Anthropic)**. Every file has been reviewed
-for correctness; the project's quality pipeline (`ruff`, `mypy --strict`,
-`pytest --cov-fail-under=90`) is the gate that decides what ships, not
-the assistant's confidence. Pull requests are welcome and held to the
-same gate.
+Anglerfish AI is architected by a human and implemented with the
+assistance of Claude Code (Anthropic). Every file is reviewed before
+it lands. The quality pipeline (`ruff`, `mypy --strict`,
+`pytest --cov-fail-under=90`) is what decides whether code ships, not
+the assistant's confidence. Pull requests are held to the same gate.
 
 ---
 

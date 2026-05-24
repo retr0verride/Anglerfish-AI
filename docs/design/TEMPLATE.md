@@ -1,4 +1,4 @@
-# Stage N — <one-line title>
+# Stage N - <one-line title>
 
 Every stage from [`ROADMAP.md`](../ROADMAP.md) opens with a copy of
 this template, filled in, committed to `docs/design/STAGE_N_<slug>.md`.
@@ -17,7 +17,7 @@ What's broken / missing without this stage? One paragraph. Cite
 specific user-visible behavior or specific code paths (file:line).
 If the problem is "I want to build a cool feature," go back to
 [`PRODUCT.md`](../PRODUCT.md) and find which design principle it
-serves — or kill the stage.
+serves, or kill the stage.
 
 ## Proposed interface
 
@@ -28,7 +28,7 @@ What this stage exposes to the rest of the system. Include:
 * New config keys (under `ANGLERFISH_*`) with type, default, validation
   rules.
 * New REST endpoints with path, method, request/response shape.
-* New dashboard views (sketch the layout in text — boxes and arrows
+* New dashboard views (sketch the layout in text - boxes and arrows
   are fine).
 * New export format(s).
 * New audit-log event types.
@@ -51,7 +51,7 @@ boundaries, untrusted-input handling. For each:
 * The mitigation in this stage's code.
 * The residual risk (what we accept).
 
-If the answer is "no new attack surface," explain why convincingly —
+If the answer is "no new attack surface," explain why convincingly -
 adding any LLM-driven behavior at minimum widens the AI-attack
 surface.
 
@@ -72,13 +72,13 @@ If this stage doesn't add LLM calls, write "no LLM delta."
 
 Concrete enumerated tests, mapping 1:1 to `pytest` functions:
 
-1. **Unit** — `tests/<module>/test_<feature>.py::test_X`. One line per
+1. **Unit**, `tests/<module>/test_<feature>.py::test_X`. One line per
    case.
-2. **Integration** — full pipeline tests using `tmp_path` and real
+2. **Integration**: full pipeline tests using `tmp_path` and real
    SQLite/Ollama where possible.
-3. **Security** — new entries in `tests/llm_defense/` and
+3. **Security**: new entries in `tests/llm_defense/` and
    `tests/threat/test_*.py` for the threats listed above.
-4. **Coverage target** — must keep total coverage ≥90% after this
+4. **Coverage target**: must keep total coverage ≥90% after this
    stage merges. List any new files exempt from the gate (with
    reason).
 

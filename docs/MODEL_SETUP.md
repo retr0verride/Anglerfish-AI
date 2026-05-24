@@ -1,6 +1,6 @@
 # Local LLM setup
 
-Anglerfish runs entirely on local LLMs via [Ollama](https://ollama.com) —
+Anglerfish runs entirely on local LLMs via [Ollama](https://ollama.com) -
 no cloud dependencies. This guide walks you from a fresh Anglerfish VM
 to a working three-tier model stack, with the SHA256 hashes captured
 for the Stage 1 model-integrity check.
@@ -30,13 +30,13 @@ single "do everything" model.
 ## Hardware sizing
 
 The model picks above assume a single mid-range NVIDIA GPU (12GB VRAM
-class — RTX 3060, 4070, etc.). Adjust as needed:
+class. RTX 3060, 4070, etc.). Adjust as needed:
 
 | GPU class | Fast model | Deep model | Embed model |
 |-----------|-----------|-----------|-------------|
 | **CPU only** (no GPU) | `phi-3:3.8b` (slow but works) | reuse fast model | `nomic-embed-text` |
 | **8GB VRAM** (RTX 3050) | `qwen3:14b` (Q4) | `phi-3.5:3.8b` | `nomic-embed-text` |
-| **12GB VRAM** (RTX 3060) — **recommended** | `qwen3:14b` (Q4_K_M) | `phi-4:14b` (Q4_K_M) | `nomic-embed-text` |
+| **12GB VRAM** (RTX 3060) - **recommended** | `qwen3:14b` (Q4_K_M) | `phi-4:14b` (Q4_K_M) | `nomic-embed-text` |
 | **16GB VRAM** (RTX 4080) | `qwen3:14b` (Q5) | `phi-4:14b` (Q5) | `mxbai-embed-large` |
 | **24GB+ VRAM** (RTX 3090/4090) | `qwen3:14b` | `qwen2.5:32b` | `mxbai-embed-large` |
 
@@ -98,11 +98,11 @@ Skip to [step 3](#3-tune-ollama-for-the-anglerfish-workload).
 
 ### 2b. Install at runtime (slim ISO)
 
-If the ISO was built without the Ollama hook (the default — smaller
+If the ISO was built without the Ollama hook (the default, smaller
 image), install now:
 
 ```bash
-# This is Ollama's official installer — runs as root, installs the
+# This is Ollama's official installer - runs as root, installs the
 # systemd unit, starts the service. No interactive prompts.
 curl -fsSL https://ollama.com/install.sh | sh
 ```
@@ -166,13 +166,13 @@ The new settings are now active. Each variable explained:
 Total download is ~13GB; takes 5-20 minutes depending on your internet.
 
 ```bash
-# Fast tier — ~4.4GB
+# Fast tier - ~4.4GB
 ollama pull qwen3:14b
 
-# Deep tier — ~8.5GB
+# Deep tier - ~8.5GB
 ollama pull phi-4
 
-# Embedding tier — ~280MB
+# Embedding tier - ~280MB
 ollama pull nomic-embed-text
 ```
 
@@ -191,13 +191,13 @@ ollama list
 ## 5. Smoke-test each model
 
 ```bash
-# Fast tier — should respond in 1-2s
+# Fast tier - should respond in 1-2s
 ollama run qwen3:14b "explain ls -la output"
 
-# Deep tier — should respond in 10-30s
+# Deep tier - should respond in 10-30s
 ollama run phi-4 "summarize: an SSH attacker tried 47 common passwords against root, then ran wget to download a script. what are they probably doing?"
 
-# Embedding tier — returns a vector
+# Embedding tier - returns a vector
 curl -s http://localhost:11434/api/embeddings \
     -d '{"model": "nomic-embed-text", "prompt": "ls -la /etc"}' \
     | head -c 200
@@ -220,7 +220,7 @@ warm).
 ## 6. Capture the layer-blob hashes for the integrity check
 
 The Stage 1 model-integrity check ([`design/STAGE_1_llm_defense.md`](design/STAGE_1_llm_defense.md))
-pins against the *layer/blob* digest, not the human-readable tag — this
+pins against the *layer/blob* digest, not the human-readable tag, this
 defeats silent tag re-pointing attacks. Capture the hashes now so the
 bridge can verify them at every startup.
 
@@ -243,7 +243,7 @@ echo "Deep:  $DEEP_HASH"
 echo "Embed: $EMBED_HASH"
 ```
 
-Each prints `sha256:abc123...`. Save these — they go into the next step.
+Each prints `sha256:abc123...`. Save these, they go into the next step.
 
 ---
 
@@ -258,13 +258,13 @@ sudo nano /etc/anglerfish/anglerfish.env
 Set or update these lines:
 
 ```bash
-# Loopback Ollama — co-located with the bridge, no trusted_remote_host needed
+# Loopback Ollama - co-located with the bridge, no trusted_remote_host needed
 ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/
 
 # Fast-tier model (the only one Stage 1 needs; Stage 3 adds the multi-model layer)
 ANGLERFISH_OLLAMA__MODEL=qwen3:14b
 
-# Stage 1 defense — pin the fast model's layer hash
+# Stage 1 defense - pin the fast model's layer hash
 ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
 
 # REQUIRED when MODEL_EXPECTED_HASH is set: where to find the manifest.
@@ -275,7 +275,7 @@ ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
 # the other fails at startup with a clear error.
 ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR=/usr/share/ollama/.ollama/models/manifests
 
-# Stage 1 defense layer tuning (optional — defaults are sensible)
+# Stage 1 defense layer tuning (optional - defaults are sensible)
 ANGLERFISH_DEFENSE__OUTPUT_FILTER_ENABLED=true
 ANGLERFISH_DEFENSE__INJECTION_FILTER_ENABLED=true
 ANGLERFISH_DEFENSE__INJECTION_THRESHOLD=0.7
@@ -323,7 +323,7 @@ a defense pattern with something like `ignore previous instructions`) a
 ## When you update a model
 
 Whenever you `ollama pull` a new version of a tracked model, the layer
-digest changes — the integrity check will catch it as a mismatch and
+digest changes, the integrity check will catch it as a mismatch and
 the bridge will refuse to start. That's working as designed.
 
 To roll an update intentionally:
@@ -361,7 +361,7 @@ Every model update is intentional and audited.
 | `nvidia-smi: command not found` | NVIDIA driver not installed | `sudo apt install nvidia-driver firmware-misc-nonfree && sudo reboot` |
 | `nvidia-smi` works but Ollama is slow (>10s/token) | Ollama falling back to CPU | Check `journalctl -u ollama.service` for CUDA errors; usually a driver / CUDA-runtime version mismatch |
 | `Out of memory` on `ollama run phi-4` | Fast model still loaded | Verify `OLLAMA_MAX_LOADED_MODELS=2`; if still failing, restart Ollama to clear state |
-| Bridge logs `model integrity check failed` after `ollama pull` | Expected — model updated, hash mismatch | Update `ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH` per "When you update a model" |
+| Bridge logs `model integrity check failed` after `ollama pull` | Expected - model updated, hash mismatch | Update `ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH` per "When you update a model" |
 | Bridge logs `model integrity skipped` warning | `ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH` unset | Capture the hash (step 6), set the env var, restart the bridge |
 | `OLLAMA_FLASH_ATTENTION=1` makes inference slower or crashes | Flash attention incompatible with your quant type or driver version | Set to `0`, restart Ollama |
 | Disk filling fast under `~/.ollama/models/blobs` | `keep_alive=-1` + multiple pulls of similar models | Run `ollama list` and `ollama rm <unused>` to clean up |
@@ -373,7 +373,7 @@ Every model update is intentional and audited.
 See [`PRODUCT.md`](PRODUCT.md) §"Why these specifically" for the full
 reasoning. Short version:
 
-* **Qwen3:14b over Deepseek-Coder** — Apache-2.0 licensed, distributed
+* **Qwen3:14b over Deepseek-Coder** - Apache-2.0 licensed, distributed
   via Hugging Face, 14B params fits in 12GB VRAM at Q4. **Deepseek
   family deliberately avoided in production defaults**: third-party
   security reviews have flagged CCP-aligned content moderation that
@@ -382,9 +382,9 @@ reasoning. Short version:
   breaking the deception). Qwen3 is independent of those concerns.
   The known markdown-drift quirk is *exactly* what the Stage 1
   `markdown_formatting` detector targets.
-* **Phi-4 over Qwen2.5:32B** — 14B parameters that punch like 30B for
+* **Phi-4 over Qwen2.5:32B** - 14B parameters that punch like 30B for
   summarization, and fits in 12GB VRAM where 32B doesn't.
-* **Nomic-Embed over MiniLM** — Better semantic representation, fast
+* **Nomic-Embed over MiniLM** - Better semantic representation, fast
   enough that we can re-embed sessions cheaply when the model is
   swapped.
 

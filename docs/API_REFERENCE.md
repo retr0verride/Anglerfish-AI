@@ -10,7 +10,7 @@ Anglerfish AI exposes two HTTP services:
 Both bind to loopback by default. To expose the dashboard on the service
 NIC, set `ANGLERFISH_DASHBOARD__HOST` to the interface IP and front it
 with a reverse proxy that terminates TLS. The bridge **must** stay on
-loopback — its threat model assumes Cowrie is the only caller.
+loopback, its threat model assumes Cowrie is the only caller.
 
 All request and response bodies are JSON unless noted. Pydantic models are
 frozen with `extra="forbid"`: unknown fields are rejected, all timestamps
@@ -29,7 +29,7 @@ requires `Authorization: Bearer <secret>`, where the secret is
 `ANGLERFISH_BRIDGE__SHARED_SECRET` from the wizard-generated `.env`.
 
 If the secret is unset (development mode only), authentication is
-bypassed entirely — every endpoint is open. Production deployments must
+bypassed entirely, every endpoint is open. Production deployments must
 set the secret; the wizard generates a 32-byte URL-safe token and writes
 it to the env file shared by the bridge daemon and Cowrie.
 
@@ -37,7 +37,7 @@ it to the env file shared by the bridge daemon and Cowrie.
 
 | Method   | Path                                       | Purpose                                  | Auth |
 | -------- | ------------------------------------------ | ---------------------------------------- | ---- |
-| `GET`    | `/api/health`                              | Liveness + version                       | —    |
+| `GET`    | `/api/health`                              | Liveness + version                       | -    |
 | `POST`   | `/api/v1/session`                          | Open a new attacker session              | ✓    |
 | `POST`   | `/api/v1/session/{session_id}/command`     | Run one command in an open session       | ✓    |
 | `DELETE` | `/api/v1/session/{session_id}`             | End a session and release its state      | ✓    |
@@ -96,7 +96,7 @@ Request:
 | `command` | string | 1 – 32768 chars       |
 
 The command is length-capped and stripped of C0 control characters before
-reaching the prompt template — see [`THREAT_MODEL.md`](THREAT_MODEL.md).
+reaching the prompt template, see [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
 Response `200`:
 
@@ -118,19 +118,19 @@ Response `200`:
 
 When `source = "fallback"` the LLM call failed or rate-limited and a
 scripted response was substituted. When `source = "rejected"` the LLM
-failed *and* fallbacks were disabled — the attacker receives an empty
+failed *and* fallbacks were disabled, the attacker receives an empty
 reply. Either way the response always returns 200; the operator
 distinguishes the cases via `source` and via the threat engine's
 notes field, not via HTTP status.
 
 Errors:
 
-- `404` — `session_id` is unknown or already ended
-- `422` — request body fails Pydantic validation
+- `404` - `session_id` is unknown or already ended
+- `422` - request body fails Pydantic validation
 
 ### `DELETE /api/v1/session/{session_id}`
 
-Response `204 No Content`. Idempotent — deleting an already-ended session
+Response `204 No Content`. Idempotent, deleting an already-ended session
 also returns 204.
 
 ### `GET /api/v1/sessions`
@@ -149,11 +149,11 @@ returned; use the dashboard `/api/sessions` for the audit-log view.
 The bridge enforces two layers, both configured under the
 `ANGLERFISH_RATE_LIMIT__*` env-var section:
 
-1. **Global concurrency cap** — `ANGLERFISH_RATE_LIMIT__MAX_CONCURRENT_REQUESTS`
+1. **Global concurrency cap**, `ANGLERFISH_RATE_LIMIT__MAX_CONCURRENT_REQUESTS`
    (default `8`). Requests beyond the cap wait in a queue up to
    `ANGLERFISH_RATE_LIMIT__QUEUE_TIMEOUT_S` (default `10.0`); a timeout
    returns a `fallback` response, never a 503.
-2. **Per-session token bucket** —
+2. **Per-session token bucket** -
    `ANGLERFISH_RATE_LIMIT__REQUESTS_PER_SESSION_PER_MINUTE` (default
    `30`) with burst `ANGLERFISH_RATE_LIMIT__SESSION_BURST` (default
    `10`). Excess commands in the same session return a `fallback`
@@ -161,7 +161,7 @@ The bridge enforces two layers, both configured under the
    `ANGLERFISH_RATE_LIMIT__BUCKET_IDLE_EVICTION_S` seconds (default
    `300`) to keep memory bounded.
 
-Either limiter fires *transparently* — the attacker always receives a
+Either limiter fires *transparently*, the attacker always receives a
 plausible response so the limiter cannot be used as a probe. Operators
 see the fallback rate climb via `/api/stats` on the dashboard.
 
@@ -196,19 +196,19 @@ SOAR, custom tooling).
 
 ### Authentication
 
-Three modes — checked in this order:
+Three modes, checked in this order:
 
-1. **Session cookie** (`anglerfish_session`) — set on `POST /api/login`.
+1. **Session cookie** (`anglerfish_session`); set on `POST /api/login`.
    `HttpOnly`, `SameSite=Strict`, `max_age=86400` (24h), signed with
    `ANGLERFISH_DASHBOARD__SESSION_SECRET`. The browser SPA uses this.
-2. **HTTP Basic** — `Authorization: Basic <base64(user:password)>`.
+2. **HTTP Basic**, `Authorization: Basic <base64(user:password)>`.
    Validated against the bcrypt hash in
    `ANGLERFISH_DASHBOARD__ADMIN_PASSWORD_HASH`. The username is
    `ANGLERFISH_DASHBOARD__ADMIN_USERNAME` (default `admin`). Use this
    for non-browser clients.
-3. **Open mode** — if `ADMIN_PASSWORD_HASH` is unset, all auth checks
+3. **Open mode**: if `ADMIN_PASSWORD_HASH` is unset, all auth checks
    are bypassed. Only safe when nftables fully isolates the service NIC
-   — see [`THREAT_MODEL.md`](THREAT_MODEL.md).
+   - see [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
 Unauthenticated requests to protected endpoints return `401` with
 `WWW-Authenticate: Basic realm=anglerfish`.
@@ -237,18 +237,18 @@ their own; they expire when the session cookie does.
 
 | Method | Path                          | Auth | CSRF | Purpose                                    |
 | ------ | ----------------------------- | ---- | ---- | ------------------------------------------ |
-| `GET`  | `/`                           | —    | —    | Operator SPA (HTML)                        |
-| `GET`  | `/api/health`                 | —    | —    | Liveness + version                         |
-| `POST` | `/api/login`                  | —    | —    | Establish a session                        |
-| `POST` | `/api/logout`                 | ✓    | —    | Clear the session                          |
-| `GET`  | `/api/csrf`                   | ✓    | —    | Mint a CSRF token for the current session  |
-| `GET`  | `/api/stats`                  | ✓    | —    | Top-line counters                          |
-| `GET`  | `/api/sessions`               | ✓    | —    | All sessions, newest first                 |
-| `GET`  | `/api/sessions/{session_id}`  | ✓    | —    | One session and its full command history   |
-| `GET`  | `/api/commands`               | ✓    | —    | Recent commands across all sessions        |
-| `GET`  | `/api/threats`                | ✓    | —    | Recent threat assessments                  |
-| `GET`  | `/api/credentials`            | ✓    | —    | Decrypted credential records (paginated)   |
-| `GET`  | `/api/credentials/stats`      | ✓    | —    | Credential-table aggregates                |
+| `GET`  | `/`                           | -    | -    | Operator SPA (HTML)                        |
+| `GET`  | `/api/health`                 | -    | -    | Liveness + version                         |
+| `POST` | `/api/login`                  | -    | -    | Establish a session                        |
+| `POST` | `/api/logout`                 | ✓    | -    | Clear the session                          |
+| `GET`  | `/api/csrf`                   | ✓    | -    | Mint a CSRF token for the current session  |
+| `GET`  | `/api/stats`                  | ✓    | -    | Top-line counters                          |
+| `GET`  | `/api/sessions`               | ✓    | -    | All sessions, newest first                 |
+| `GET`  | `/api/sessions/{session_id}`  | ✓    | -    | One session and its full command history   |
+| `GET`  | `/api/commands`               | ✓    | -    | Recent commands across all sessions        |
+| `GET`  | `/api/threats`                | ✓    | -    | Recent threat assessments                  |
+| `GET`  | `/api/credentials`            | ✓    | -    | Decrypted credential records (paginated)   |
+| `GET`  | `/api/credentials/stats`      | ✓    | -    | Credential-table aggregates                |
 
 ### `POST /api/login`
 
@@ -264,8 +264,8 @@ Response `200` sets the session cookie:
 
 Failures:
 
-- `401` — bad username or password
-- `429` — too many failed attempts from this IP (see Rate limiting below);
+- `401` - bad username or password
+- `429` - too many failed attempts from this IP (see Rate limiting below);
   response includes `Retry-After: <seconds>`
 
 ### `POST /api/logout`
@@ -367,7 +367,7 @@ historical data).
 
 `score` is 0–100. `high_severity = score >= 60`. `persistence_attempted`
 is true when the session touched any technique tagged as a persistence
-mechanism — see [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §threat-engine.
+mechanism, see [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §threat-engine.
 
 ### `GET /api/credentials`
 
@@ -375,7 +375,7 @@ mechanism — see [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §threat-engine.
 | ----------- | ------ | ------- | ------------------ |
 | `limit`     | int    | 100     | 1–1000             |
 | `offset`    | int    | 0       | 0–100000           |
-| `source_ip` | string | —       | exact match, ≤64ch |
+| `source_ip` | string | -       | exact match, ≤64ch |
 
 ```json
 {
@@ -395,7 +395,7 @@ mechanism — see [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §threat-engine.
 
 `configured: false` means the credentials subsystem is not initialised
 (`ANGLERFISH_CREDENTIALS__ENCRYPTION_KEY` unset); `records` will be empty.
-Credentials are decrypted server-side and sent over TLS — never exposed
+Credentials are decrypted server-side and sent over TLS, never exposed
 in plaintext on disk outside the encrypted SQLite database.
 
 ### `GET /api/credentials/stats`
@@ -411,15 +411,15 @@ in plaintext on disk outside the encrypted SQLite database.
 }
 ```
 
-Aggregates are computed from HMAC fingerprints, not the plaintext —
+Aggregates are computed from HMAC fingerprints, not the plaintext -
 unique counts work without decrypting every row.
 
 ### Rate limiting
 
-- **Login attempts** — per-IP token bucket, capacity 5, refill 1 token
+- **Login attempts** - per-IP token bucket, capacity 5, refill 1 token
   every 12 seconds (≈5/min). Exceeded → `429 Retry-After: <seconds>`.
   A successful login clears the bucket for that IP.
-- **All other endpoints** — no per-endpoint limit. Protect with a reverse
+- **All other endpoints** - no per-endpoint limit. Protect with a reverse
   proxy (nginx `limit_req`, Caddy `rate_limit`) if you expose the dashboard
   outside the service NIC.
 
@@ -431,7 +431,7 @@ unique counts work without decrypting every row.
 ws://dashboard:8420/ws/events
 ```
 
-Read-only push channel for everything the operator SPA shows live —
+Read-only push channel for everything the operator SPA shows live -
 sessions, commands, threat assessments. Same data as the REST endpoints
 above but streamed.
 
@@ -443,17 +443,17 @@ polling `/api/stats` + `/api/commands` over a long-lived connection.
 
 The upgrade request must satisfy three guards in order:
 
-1. **Origin** — the `Origin` header must match the dashboard's own
+1. **Origin**: the `Origin` header must match the dashboard's own
    `host:port`, or be in `ANGLERFISH_DASHBOARD__ALLOWED_ORIGINS`
    (comma-separated). Missing or non-matching → close code `4403`.
-2. **Authentication** — the connection inherits the HTTP session, so the
+2. **Authentication**: the connection inherits the HTTP session, so the
    browser must already have a valid `anglerfish_session` cookie (or
    open-mode must be active). Failed → close code `4401`.
-3. **State** — the dashboard's in-memory state must be initialised. If
+3. **State**: the dashboard's in-memory state must be initialised. If
    the dashboard has just started and is still loading, the close code
    is `1011`.
 
-There is no client-side authentication message — the cookie does the work.
+There is no client-side authentication message, the cookie does the work.
 
 ### Server → client messages
 
@@ -474,12 +474,12 @@ There is no client-side authentication message — the cookie does the work.
 | `command`          | `{session_id, command, response, source, latency_ms}` | One command executed              |
 | `threat`           | `ThreatAssessment` (see `/api/threats`)      | Threat engine scored a session            |
 
-Treat `ping` as a keep-alive only — no payload, no need to ack. If you
+Treat `ping` as a keep-alive only, no payload, no need to ack. If you
 don't see one for >60s, the connection is dead; reconnect.
 
 ### Client → server messages
 
-None. The dashboard does not accept WebSocket messages from clients —
+None. The dashboard does not accept WebSocket messages from clients -
 all writes go via the REST API. Any frame the client sends is silently
 discarded.
 
@@ -488,7 +488,7 @@ discarded.
 Each connected client has its own queue (default size 256). If your
 client falls behind, **old events are dropped** to keep the queue from
 growing without bound. Use `/api/commands` or the Splunk forwarder for
-guaranteed delivery — the WebSocket is best-effort.
+guaranteed delivery, the WebSocket is best-effort.
 
 ### Close codes
 
@@ -531,9 +531,9 @@ asyncio.run(main())
 
 ### Pull recent threats into Splunk via REST
 
-Anglerfish already pushes events to Splunk HEC out of the box (see the
-forwarder docs). The REST API is for *pulling* historical data — useful
-for backfilling a Splunk index after a forwarder outage:
+Anglerfish pushes events to Splunk HEC via the forwarder. The REST API
+is for *pulling* historical data, which is useful for backfilling a
+Splunk index after a forwarder outage:
 
 ```bash
 curl -fsS -u "operator:$PASSWORD" \
@@ -550,7 +550,7 @@ curl -fsS -u "operator:$PASSWORD" \
 
 The threat engine has a webhook alerter built in
 (`ANGLERFISH_THREAT__ALERT_WEBHOOK_URL`). If you'd rather build it
-yourself, tail the WebSocket — see the Python example above.
+yourself, tail the WebSocket, see the Python example above.
 
 ### Health-check both services from a load balancer
 
@@ -570,7 +570,7 @@ service has finished its startup checks.
 ## Versioning
 
 API endpoints are versioned in the path (`/api/v1/…`). Breaking changes
-to existing v1 endpoints will not happen — new fields may be added to
+to existing v1 endpoints will not happen, new fields may be added to
 response bodies (clients should ignore unknown fields), new endpoints
 may be added under `/api/v1/…`, and new versions under `/api/v2/…` will
 ship alongside `/api/v1/…` for at least one minor release before v1

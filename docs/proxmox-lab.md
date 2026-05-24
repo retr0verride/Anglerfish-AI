@@ -5,25 +5,25 @@ production [`proxmox.md`](proxmox.md) puts Anglerfish on a real attacker
 network; this one puts it in a hermetic sandbox where attackers can
 only reach the honeypot from inside your own host. Use it for:
 
-* **Training yourself** — operate a honeypot end-to-end without the
+* **Training yourself** - operate a honeypot end-to-end without the
   legal/operational risk of exposing it to the real internet.
 * **Replaying captured PCAPs** against the honeypot to study one
   attacker session in depth (you control the replay timing, you can
   pause and inspect, you can repeat).
-* **Developing detection rules** — write a Suricata/Zeek rule, replay
+* **Developing detection rules** - write a Suricata/Zeek rule, replay
   the PCAP, see if it fires.
 
 When to graduate: once you've got operator reps and you have a
 disclosure + incident-response plan, switch to [`proxmox.md`](proxmox.md)
 for real exposure. The lab does not generate threat-intel for the
-community — it's a private training environment.
+community, it's a private training environment.
 
 ---
 
 ## What "strict" means here
 
 1. **Air-gapped bait bridge.** The bait NIC inside the honeypot is on
-   `vmbr-lab`, a Linux bridge with `bridge-ports none` — no physical
+   `vmbr-lab`, a Linux bridge with `bridge-ports none`, no physical
    uplink. Nothing from outside the Proxmox host can reach the honeypot.
    Attacker traffic comes from another VM on the same host (a Kali, a
    replay-tool VM, etc.).
@@ -33,7 +33,7 @@ community — it's a private training environment.
    analysis in Wireshark, Suricata, or Zeek.
 3. **Snapshot-and-reset workflow.** Take a clean snapshot of the
    honeypot VM before each study, study one attacker, roll back. Each
-   study starts from byte-identical state — credentials DB empty, audit
+   study starts from byte-identical state, credentials DB empty, audit
    log fresh, no contamination from the previous session.
 
 ---
@@ -52,7 +52,7 @@ ip -br link show vmbr-lab
 ```
 
 The bridge exists but has no uplink. Anything attached to it can only
-reach other VMs on the same bridge — there's no route to the rest of
+reach other VMs on the same bridge, there's no route to the rest of
 the network.
 
 You still need `vmbr-service` (the operator-facing bridge from the
@@ -97,7 +97,7 @@ suricata -r /var/log/anglerfish-lab/pcap/cap-*.pcap -l /tmp/sur-out
 ## 2. Deploy the honeypot VM in lab mode
 
 The existing [`proxmox/deploy.sh`](../proxmox/deploy.sh) works for the
-lab too — just override the bait bridge:
+lab too, just override the bait bridge:
 
 ```bash
 sudo ./deploy.sh \
@@ -117,7 +117,7 @@ endpoint, you can:
 * Run Ollama on the Proxmox host (`http://<host-service-ip>:11434/`)
   and reach it over `vmbr-service`. Most practical.
 * Run Ollama inside the honeypot VM (`http://127.0.0.1:11434/`). Wastes
-  RAM in a lab — both Ollama and Cowrie compete for the VM's memory.
+  RAM in a lab, both Ollama and Cowrie compete for the VM's memory.
 
 ---
 
@@ -233,13 +233,13 @@ doesn't generate intelligence the community can use. When you're ready:
    exposure means real consequences.
 2. Switch from `vmbr-lab` to `vmbr-bait` (with an actual uplink) per
    [`proxmox.md`](proxmox.md).
-3. Set up the abuse-reporting pipeline — captured credentials and IPs
+3. Set up the abuse-reporting pipeline, captured credentials and IPs
    should flow to AbuseIPDB, your registrar's abuse contact, and (if you
    participate) MISP or SANS DShield.
 4. Configure the alert webhook (`ANGLERFISH_THREAT__ALERT_WEBHOOK_URL`)
    to page you on high-severity events. The webhook URL must be HTTPS
-   and on a public IP — see [`API_REFERENCE.md`](API_REFERENCE.md).
-5. Keep the lab around — when you tune a detection rule, validate it
+   and on a public IP, see [`API_REFERENCE.md`](API_REFERENCE.md).
+5. Keep the lab around, when you tune a detection rule, validate it
    in the lab before pushing it to the exposed honeypot.
 
 ---

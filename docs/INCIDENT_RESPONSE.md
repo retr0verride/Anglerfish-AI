@@ -12,11 +12,11 @@ more than three hours of poking at a live system.
 
 ## Roles
 
-* **First responder** — whoever sees the alert first. Their job:
+* **First responder** - whoever sees the alert first. Their job:
   contain, snapshot, escalate. Not their job: fix.
-* **IC (Incident Commander)** — decides whether to take the honeypot
+* **IC (Incident Commander)** - decides whether to take the honeypot
   offline. For a one-person operation, that's you.
-* **Scribe** — keeps the timeline. Even for solo response, open a
+* **Scribe** - keeps the timeline. Even for solo response, open a
   text file and timestamp every action. Future-you will thank present-you.
 
 ---
@@ -28,7 +28,7 @@ more than three hours of poking at a live system.
 | **SEV-1** | Suspected pivot / lateral movement / data exfil from the honeypot to elsewhere | Immediate     |
 | **SEV-2** | Operator credential / API key compromise; audit log gap; persistence detected  | < 30 minutes  |
 | **SEV-3** | Service crash loop, disk fill, Splunk outage, missing alerts                  | < 2 hours     |
-| **SEV-4** | Cosmetic — dashboard slow, geo lookups failing, etc.                          | Next business day |
+| **SEV-4** | Cosmetic - dashboard slow, geo lookups failing, etc.                          | Next business day |
 
 When in doubt, classify up. Downgrading mid-incident is fine.
 
@@ -62,7 +62,7 @@ Now you can investigate without destroying evidence.
 
 ## Scenarios
 
-### S1 — Suspected pivot / lateral movement (SEV-1)
+### S1 - Suspected pivot / lateral movement (SEV-1)
 
 **Symptoms.** Unexpected outbound connection from the honeypot VM. The
 bridge or dashboard logs an OSError opening a socket. A network IDS in
@@ -90,7 +90,7 @@ curl -fsS -u "admin:$ADMIN_PASS" 'http://127.0.0.1:8420/api/commands?limit=200' 
     | jq '.[] | select(.source != "ai") | {timestamp, command}'
 
 # 3. Did the LLM respond with anything that looks like a real-shell
-#    side-effect? (It shouldn't — the bridge is supposed to be pure
+#    side-effect? (It shouldn't - the bridge is supposed to be pure
 #    LLM-text, but a regression could break that invariant.)
 sudo journalctl -u anglerfish-bridge.service --since '1 hour ago' \
     | grep -iE 'exec|subprocess|system|popen|fork'
@@ -99,7 +99,7 @@ sudo journalctl -u anglerfish-bridge.service --since '1 hour ago' \
 **Recovery.**
 1. If you confirmed lateral movement: **the honeypot is burned**.
    `qm destroy` the VM. Deploy a fresh one. Don't reuse the
-   credentials DB — assume the encryption key is also compromised.
+   credentials DB, assume the encryption key is also compromised.
 2. If you confirmed nothing escaped: bring the bait NIC back up after
    you've audited the most recent code changes. Verify nftables rules
    are still loaded.
@@ -108,12 +108,12 @@ sudo journalctl -u anglerfish-bridge.service --since '1 hour ago' \
 * If escape was confirmed: file a CVE-style disclosure with whoever
   controls the upstream component that allowed it (Cowrie, Ollama, the
   bridge's prompt sanitizer, etc.). The community needs to know.
-* Update [`THREAT_MODEL.md`](THREAT_MODEL.md) — the threat you didn't
+* Update [`THREAT_MODEL.md`](THREAT_MODEL.md) - the threat you didn't
   mitigate is now a known limitation worth documenting.
 
 ---
 
-### S2 — Operator credential breach (SEV-2)
+### S2 - Operator credential breach (SEV-2)
 
 **Symptoms.** Dashboard login from an unfamiliar IP. `audit.jsonl`
 shows a `dashboard.login_success` from a source you don't recognize.
@@ -121,7 +121,7 @@ Splunk alerts on session-creation outside operator hours.
 
 **Immediate.**
 ```bash
-# 1. Rotate the dashboard session secret — invalidates ALL active sessions.
+# 1. Rotate the dashboard session secret - invalidates ALL active sessions.
 NEW_SECRET=$(openssl rand -base64 48)
 sudo sed -i "s|^ANGLERFISH_DASHBOARD__SESSION_SECRET=.*|ANGLERFISH_DASHBOARD__SESSION_SECRET=$NEW_SECRET|" \
     /etc/anglerfish/anglerfish.env
@@ -155,7 +155,7 @@ grep ANGLERFISH_BRIDGE__SHARED_SECRET /etc/anglerfish/anglerfish.env
 
 **Recovery.** Assume everything the dashboard had access to is leaked:
 captured credentials, threat assessments, session history. Treat any
-credentials in your DB as burned — they're public knowledge now.
+credentials in your DB as burned, they're public knowledge now.
 
 **Post-incident.**
 * Add the source IP to your nftables drop list permanently.
@@ -166,7 +166,7 @@ credentials in your DB as burned — they're public knowledge now.
 
 ---
 
-### S3 — Audit log gap (SEV-2)
+### S3 - Audit log gap (SEV-2)
 
 **Symptoms.** `audit.jsonl` has a time gap (e.g. no entries between
 14:00 and 16:00 yesterday). `lsattr` shows the +a attribute is missing.
@@ -191,7 +191,7 @@ sudo lsattr /var/log/anglerfish/audit.jsonl
 Someone with root access either truncated the file, removed +a, or
 deleted entries. Possibilities:
 
-1. **Splunk events for the gap window are intact.** Check Splunk —
+1. **Splunk events for the gap window are intact.** Check Splunk -
    the off-host stream is the canary. If Splunk has the missing
    entries, someone modified the local file only.
 2. **Splunk also has a gap.** Either Splunk was unreachable (check
@@ -207,16 +207,16 @@ deleted entries. Possibilities:
 3. If Splunk has the missing entries, replay them into a separate
    `audit-recovered.jsonl` and document the source.
 4. If neither side has them, mark the time window as "evidence
-   missing — see incident log YYYYMMDD" and treat any decisions made
+   missing, see incident log YYYYMMDD" and treat any decisions made
    from that window as untrusted.
 
 **Post-incident.** This is exactly why audit logs need to be off-host.
-If Splunk also failed, you need a second sink — a different
+If Splunk also failed, you need a second sink, a different
 collector, an S3 bucket with object-lock, or a printer. Yes, a printer.
 
 ---
 
-### S4 — Disk filling fast (SEV-3)
+### S4 - Disk filling fast (SEV-3)
 
 **Symptoms.** `journalctl: No space left on device`. Dashboard returns
 500. SQLite write errors in the bridge logs.
@@ -247,14 +247,14 @@ The biggest disk fillers, in order of likelihood:
    `journalctl --rotate && journalctl --vacuum-size=1G`.
 4. **Lab PCAP rotation broken.** If you're running the strict-lab
    `anglerfish-lab-pcap.service`, check `ls /var/log/anglerfish-lab/pcap/`
-   — should have ≤168 files. If more, tcpdump is stuck — restart it.
+   - should have ≤168 files. If more, tcpdump is stuck - restart it.
 
 **Recovery.** Reclaim space, restart the affected services, verify
 they recover. Set a disk-usage monitor that alerts at 80%, not 100%.
 
 ---
 
-### S5 — Bridge crash loop (SEV-3)
+### S5 - Bridge crash loop (SEV-3)
 
 **Symptoms.** `systemctl status anglerfish-bridge.service` shows
 `activating (auto-restart)` cycling repeatedly. Cowrie returns
@@ -292,7 +292,7 @@ confirm it stays up for 60s, then re-enable auto-restart.
 
 ---
 
-### S6 — Captured credentials used against you (SEV-2)
+### S6 - Captured credentials used against you (SEV-2)
 
 **Symptoms.** Your security monitoring (separate from Anglerfish)
 detects login attempts to your real systems using a username +
@@ -326,17 +326,17 @@ something real? Likely one of:
   for the same weakness.
 * An operator copy-pasted a real credential into the honeypot during
   testing. That's a serious operator hygiene issue.
-* You're being targeted — the attacker is correlating honeypot
+* You're being targeted - the attacker is correlating honeypot
   captures with your real infrastructure. Treat as SEV-1.
 
 **Post-incident.** Document the cred + username pair and the IP that
-used it across both sides. This is high-value threat intel — share it
+used it across both sides. This is high-value threat intel, share it
 upstream (AbuseIPDB, your ISAC, etc.) with the IP and the fact that
 the actor reuses honeypot-harvested creds.
 
 ---
 
-### S7 — Upstream CVE (Cowrie, Ollama, FastAPI, etc.) (SEV-1 to SEV-3)
+### S7 - Upstream CVE (Cowrie, Ollama, FastAPI, etc.) (SEV-1 to SEV-3)
 
 **Symptoms.** A CVE drops for a component you use, with a working
 proof-of-concept that targets your version.
@@ -385,9 +385,9 @@ can be cloned for forensics without changing further state.
 1. Read this playbook end-to-end.
 2. Read your incident timeline. What changed in the environment?
 3. Deploy a fresh VM ([`INSTALL.md`](INSTALL.md)). Do not reuse the
-   compromised VM's data — assume keys and DBs are tainted.
+   compromised VM's data, assume keys and DBs are tainted.
 4. Run [`PRE_DEPLOY_CHECKLIST.md`](PRE_DEPLOY_CHECKLIST.md) top to
-   bottom — no skipping.
+   bottom, no skipping.
 5. Restore credentials and audit log from the *pre-incident* backup,
    not from anything post-incident.
 6. Bring the bait NIC up. Watch the first hour live.
@@ -396,7 +396,7 @@ can be cloned for forensics without changing further state.
 
 ## After every incident, regardless of severity
 
-Update three things — these are the only artifacts the next IR will
+Update three things, these are the only artifacts the next IR will
 trust:
 
 1. Your incident timeline. Final write-up: what happened, what worked,
@@ -416,13 +416,13 @@ trust:
 * **You don't have to notify users of stolen credentials in your DB.**
   Those credentials weren't real (an attacker tried them against a
   fake shell). Don't email people "your password might be compromised"
-  based on honeypot data — you'd be making things worse with no signal.
+  based on honeypot data, you'd be making things worse with no signal.
 * **You don't have to take down the LLM if it said something weird.**
   The LLM is sandboxed: its output is text, returned to the attacker,
   and never executed. A weird response is interesting but not an
   incident. Log it, investigate at leisure.
 * **You don't have to file a CVE for every wobble.** A bridge crash
-  loop is an SEV-3 ops issue, not a security incident — unless the
+  loop is an SEV-3 ops issue, not a security incident, unless the
   cause turns out to be exploitable.
 
 When in doubt, page someone. The cost of a false alarm is one

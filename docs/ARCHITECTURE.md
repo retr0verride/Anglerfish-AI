@@ -1,4 +1,4 @@
-# Anglerfish AI — Architecture
+# Anglerfish AI - Architecture
 
 A walk through every module, every IPC boundary, and every trust
 assumption. The goal of this document is that an engineer who has
@@ -49,9 +49,9 @@ For day-2 ops see [RUNBOOK.md](RUNBOOK.md).
 
 Two NICs, two trust levels:
 
-* **Bait NIC** — exposed to attacker traffic. Only Cowrie listens.
+* **Bait NIC** - exposed to attacker traffic. Only Cowrie listens.
   nftables drops all egress except DNS.
-* **Service NIC** — operator-only. Reaches Ollama, Splunk HEC, the
+* **Service NIC** - operator-only. Reaches Ollama, Splunk HEC, the
   dashboard. nftables egress is restricted to the configured Ollama
   IP, the Splunk HEC URL, and DNS + NTP.
 
@@ -96,13 +96,13 @@ The LLM middleware. Files:
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`service.py`](../src/anglerfish/bridge/service.py) | `AIBridgeService` — the orchestrator. |
-| [`client.py`](../src/anglerfish/bridge/client.py)   | `OllamaClient` — async HTTP client + JSON shapes. |
+| [`service.py`](../src/anglerfish/bridge/service.py) | `AIBridgeService` - the orchestrator. |
+| [`client.py`](../src/anglerfish/bridge/client.py)   | `OllamaClient` - async HTTP client + JSON shapes. |
 | [`prompts.py`](../src/anglerfish/bridge/prompts.py) | System-prompt template; appends sanitised user message. |
 | [`sanitize.py`](../src/anglerfish/bridge/sanitize.py) | C0-control stripping + length cap (input + output). |
 | [`rate_limit.py`](../src/anglerfish/bridge/rate_limit.py) | Per-session token bucket + global concurrency semaphore. |
 | [`fallback.py`](../src/anglerfish/bridge/fallback.py) | Deterministic shell-error templates for the no-LLM path. |
-| [`session.py`](../src/anglerfish/bridge/session.py) | `SessionContext` — cwd, history window, attacker metadata. |
+| [`session.py`](../src/anglerfish/bridge/session.py) | `SessionContext` - cwd, history window, attacker metadata. |
 | [`server.py`](../src/anglerfish/bridge/server.py)   | FastAPI app + bearer-token middleware. |
 | [`errors.py`](../src/anglerfish/bridge/errors.py)   | Typed error hierarchy. |
 
@@ -121,7 +121,7 @@ Request lifecycle:
    * Takes one slot from the per-session bucket + global semaphore;
      queues briefly if the global is full, returns a fallback if
      either gives up.
-   * Builds messages via `build_messages` — system prompt is
+   * Builds messages via `build_messages` - system prompt is
      template-only (never interpolates attacker text), user message
      is the sanitised input.
    * Awaits `OllamaClient.chat`; on any exception falls back.
@@ -142,7 +142,7 @@ FastAPI + WebSockets. Files:
 | [`auth.py`](../src/anglerfish/dashboard/auth.py)   | bcrypt + signed cookie + HTTP Basic fallback. Routes `/api/login`, `/api/logout`, `/api/csrf`. |
 | [`rate_limit.py`](../src/anglerfish/dashboard/rate_limit.py) | Per-IP token bucket for `/api/login`. |
 | [`csrf.py`](../src/anglerfish/dashboard/csrf.py)   | Synchronizer-token helper for future state-changing endpoints. |
-| [`websocket.py`](../src/anglerfish/dashboard/websocket.py) | `/ws/events` — origin check + auth check + per-client bounded queue. |
+| [`websocket.py`](../src/anglerfish/dashboard/websocket.py) | `/ws/events` - origin check + auth check + per-client bounded queue. |
 | [`state.py`](../src/anglerfish/dashboard/state.py) | In-memory pub/sub + bounded snapshot cache. |
 | `templates/`, `static/`           | Jinja2 + JS for the SPA.                                       |
 
@@ -150,7 +150,7 @@ Auth model:
 
 * **Open mode** (no `ADMIN_PASSWORD_HASH`): every endpoint is open;
   the page header shows a warning banner. Meant only for pre-wizard
-  first boot. Basic auth is positively *rejected* in open mode —
+  first boot. Basic auth is positively *rejected* in open mode -
   the dashboard can't validate when there's nothing to validate
   against.
 * **Locked mode**: session cookie via `POST /api/login`, or HTTP
@@ -175,8 +175,8 @@ Splunk HEC + JSONL fallback.
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`service.py`](../src/anglerfish/forwarder/service.py) | `Forwarder` — selects HEC; falls back to JSONL on failure. |
-| [`hec.py`](../src/anglerfish/forwarder/hec.py)         | `SplunkHECClient` — async POSTs to `/services/collector/event`. |
+| [`service.py`](../src/anglerfish/forwarder/service.py) | `Forwarder` - selects HEC; falls back to JSONL on failure. |
+| [`hec.py`](../src/anglerfish/forwarder/hec.py)         | `SplunkHECClient` - async POSTs to `/services/collector/event`. |
 | [`jsonl.py`](../src/anglerfish/forwarder/jsonl.py)     | Append-only writer with size-based rotation. |
 | [`event.py`](../src/anglerfish/forwarder/event.py)     | `ForwarderEvent` envelope shared between backends. |
 | [`factories.py`](../src/anglerfish/forwarder/factories.py) | Helpers to wrap session snapshots in events. |
@@ -192,7 +192,7 @@ MITRE ATT&CK-tagged scoring.
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`service.py`](../src/anglerfish/threat/service.py)     | `ThreatEngine` — orchestrator over scorer + alerter. |
+| [`service.py`](../src/anglerfish/threat/service.py)     | `ThreatEngine` - orchestrator over scorer + alerter. |
 | [`scorer.py`](../src/anglerfish/threat/scorer.py)       | Pure function: snapshot → `ThreatAssessment`. |
 | [`techniques.py`](../src/anglerfish/threat/techniques.py) | Rule set: regex / keyword → ATT&CK technique ID + score. |
 | [`alerter.py`](../src/anglerfish/threat/alerter.py)     | Idempotent webhook poster (one fire per session). |
@@ -206,9 +206,9 @@ Encrypted credential intelligence database.
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`storage.py`](../src/anglerfish/credentials/storage.py) | `CredentialStore` — async SQLite with WAL. |
-| [`crypto.py`](../src/anglerfish/credentials/crypto.py)   | `CredentialCipher` — AES-256-GCM with random 12-byte nonces. |
-| [`rotation.py`](../src/anglerfish/credentials/rotation.py) | `rotate_key` — re-encrypts every row under a new key, atomic swap. |
+| [`storage.py`](../src/anglerfish/credentials/storage.py) | `CredentialStore` - async SQLite with WAL. |
+| [`crypto.py`](../src/anglerfish/credentials/crypto.py)   | `CredentialCipher` - AES-256-GCM with random 12-byte nonces. |
+| [`rotation.py`](../src/anglerfish/credentials/rotation.py) | `rotate_key` - re-encrypts every row under a new key, atomic swap. |
 
 Deduplication uses a HMAC-SHA-256 fingerprint over
 `(source_ip, username, password)` so the dashboard can collapse
@@ -218,7 +218,7 @@ brute-force volleys without decrypting every row.
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`service.py`](../src/anglerfish/fingerprint/service.py) | `Fingerprinter` — composes the per-session record. |
+| [`service.py`](../src/anglerfish/fingerprint/service.py) | `Fingerprinter` - composes the per-session record. |
 | [`ssh.py`](../src/anglerfish/fingerprint/ssh.py)         | RFC 4253 banner parser. |
 | [`hashes.py`](../src/anglerfish/fingerprint/hashes.py)   | JA3 + HASSH hash helpers. |
 | [`tor.py`](../src/anglerfish/fingerprint/tor.py)         | Async-safe Tor-exit-list refresher. |
@@ -230,8 +230,8 @@ is logged and the previous list stays in effect.
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`lookup.py`](../src/anglerfish/geo/lookup.py) | `GeoLookup` — async (via `to_thread`) wrapper over `maxminddb`. |
-| [`fetch.py`](../src/anglerfish/geo/fetch.py)   | `fetch_geolite_databases` — SHA-verified MaxMind download. |
+| [`lookup.py`](../src/anglerfish/geo/lookup.py) | `GeoLookup` - async (via `to_thread`) wrapper over `maxminddb`. |
+| [`fetch.py`](../src/anglerfish/geo/fetch.py)   | `fetch_geolite_databases` - SHA-verified MaxMind download. |
 
 The fetcher refuses on SHA mismatch, on archive members with
 parent-dir traversal, on archives exceeding a 200 MB ceiling, and
@@ -263,38 +263,38 @@ files land at `0600`, system config at `0640`, hostname at `0644`.
 
 `anglerfish` entry point. Subcommands:
 
-* `anglerfish config show` — dumps the loaded config with secrets
+* `anglerfish config show` - dumps the loaded config with secrets
   masked. Useful for diagnosing wizard misconfig.
-* `anglerfish bridge serve` — launches the bridge under uvicorn.
-* `anglerfish credentials rotate-key` — see RUNBOOK §Credentials.
-* `anglerfish geo update` — fetch GeoLite2; invoked by the systemd
+* `anglerfish bridge serve` - launches the bridge under uvicorn.
+* `anglerfish credentials rotate-key` - see RUNBOOK §Credentials.
+* `anglerfish geo update` - fetch GeoLite2; invoked by the systemd
   oneshot.
-* `anglerfish banner` — the ASCII banner for terminal beautifying.
+* `anglerfish banner` - the ASCII banner for terminal beautifying.
 
 ### 2.11 `audit.py`
 
 Append-only JSONL audit log shared by every module. Each record:
 `{ts, event_type, **fields}`. The file is opened, fsynced, closed
 per write; the wrapper holds an `RLock` for thread safety. Failures
-are caught and logged — never raised, because audit failures
+are caught and logged, never raised, because audit failures
 should not stop honeypot operation.
 
 ### 2.12 `integration/`
 
 The Cowrie-side shim:
 
-* [`cowrie.py`](../src/anglerfish/integration/cowrie.py) — Cowrie
+* [`cowrie.py`](../src/anglerfish/integration/cowrie.py) - Cowrie
   output plugin. Translates Cowrie events to bridge calls.
 * [`cowrie_shell.py`](../src/anglerfish/integration/cowrie_shell.py)
-  — sync HTTP client wrapper for the bridge.
+  - sync HTTP client wrapper for the bridge.
 * [`cowrie_shell_adapter.py`](../src/anglerfish/integration/cowrie_shell_adapter.py)
-  — runtime monkey-patch of `HoneyPotShell.lineReceived` that
+  - runtime monkey-patch of `HoneyPotShell.lineReceived` that
   intercepts unknown commands.
 
 The patch ships two ways: a source patch under
 [`cowrie/patches/`](../cowrie/patches/) applied at ISO-build time,
 and the runtime monkey-patch as belt-and-braces. If both fail, the
-honeypot still works — attackers see Cowrie's static replies, no
+honeypot still works, attackers see Cowrie's static replies, no
 LLM.
 
 ---
@@ -329,7 +329,7 @@ LLM.
 
 The dashboard does **not** call back into the bridge. The bridge
 publishes events to `DashboardState` (in-process), and the dashboard
-reads from it. This keeps the dashboard a pure consumer — restarts
+reads from it. This keeps the dashboard a pure consumer, restarts
 of the dashboard don't perturb the bridge.
 
 ### 3.5 Dashboard ↔ browser
@@ -371,7 +371,7 @@ management plane.
 | Path                                       | Owner             | Mode | What                                                  |
 |--------------------------------------------|-------------------|------|--------------------------------------------------------|
 | `/etc/anglerfish/anglerfish.env`           | root              | 0600 | Bearer secret + AES key + session secret + admin hash. |
-| `/etc/anglerfish/wizard.json`              | root              | 0600 | Operator answers — secrets are **not** persisted here. |
+| `/etc/anglerfish/wizard.json`              | root              | 0600 | Operator answers - secrets are **not** persisted here. |
 | `/etc/anglerfish/nftables/anglerfish.nft`  | root              | 0640 | Firewall ruleset.                                      |
 | `/etc/anglerfish/cowrie.cfg`               | root              | 0640 | Cowrie config (rendered from template).                |
 | `/etc/systemd/network/10-bait.network`     | root              | 0644 | systemd-networkd for the bait NIC.                     |

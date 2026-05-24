@@ -1,4 +1,4 @@
-# Anglerfish AI — roadmap
+# Anglerfish AI - roadmap
 
 11 stages from foundation to full adaptive-deception product. Each
 stage is its own design doc, its own PR, ships green, and is
@@ -13,7 +13,7 @@ Status legend: `🟦 not started` · `🟨 in design` · `🟩 in progress` · `
 
 | #   | Stage                          | Status        | Est. effort | Design doc                              | Depends on |
 | --- | ------------------------------ | ------------- | ----------- | --------------------------------------- | ---------- |
-| 0   | Positioning + product spec     | ✅ shipped     | ~2h         | n/a (the docs themselves)               | —          |
+| 0   | Positioning + product spec     | ✅ shipped     | ~2h         | n/a (the docs themselves)               | -          |
 | 1   | LLM defense layer              | ✅ shipped     | ~6h         | `design/STAGE_1_llm_defense.md`         | 0          |
 | 2   | Persistent rich session store  | 🟦 not started | ~8h         | `design/STAGE_2_session_store.md`       | 0          |
 | 3   | Local-LLM leverage layer       | 🟦 not started | ~8h         | `design/STAGE_3_llm_leverage.md`        | 1          |
@@ -33,7 +33,7 @@ sustainable pace, not a sprint.
 
 ## Stage details
 
-### Stage 0 — Positioning + product spec ✅
+### Stage 0 - Positioning + product spec ✅
 
 Done in this commit. Establishes the thesis, design principles,
 non-goals, and the design-doc convention everything else hangs off.
@@ -42,7 +42,7 @@ Deliverables shipped: [`PRODUCT.md`](PRODUCT.md),
 [`design/TEMPLATE.md`](design/TEMPLATE.md), this file, README docs
 index updated.
 
-### Stage 1 — LLM defense layer ✅
+### Stage 1 - LLM defense layer ✅
 
 **Problem.** The bridge had zero defense against LLM-targeted
 attacks. Jailbreak prompts could extract "I am an AI" confessions.
@@ -64,16 +64,16 @@ Prompt injection could flip persona mid-session. Model degradation
 
 **Artifacts the rest of the roadmap depends on:**
 
-* `src/anglerfish/bridge/defense.py` — `OutputFilter`, `InjectionScorer`,
+* `src/anglerfish/bridge/defense.py` - `OutputFilter`, `InjectionScorer`,
   `ModelIntegrity`, `DefenseVerdict`, `ModelIntegrityError`,
   `load_pattern_overrides`.
-* `src/anglerfish/bridge/defense_patterns.py` — in-tree default patterns;
+* `src/anglerfish/bridge/defense_patterns.py` - in-tree default patterns;
   every later stage that touches the bridge adds cases to the corpus.
 * `DefenseConfig` under `ANGLERFISH_DEFENSE__*` env vars.
 * Audit events: `bridge.defense_fired`, `bridge.model_integrity_verified`,
   `bridge.model_integrity_failed`, `bridge.model_integrity_skipped`.
 * Bridge errors: `InjectionDetectedError`, `OutputFilterFiredError`.
-* 116 test-corpus files in `tests/llm_defense/corpus/` — the source of
+* 116 test-corpus files in `tests/llm_defense/corpus/` - the source of
   truth for what Stage 1 catches and what it deliberately doesn't.
 
 **Numbers at completion:** 891 tests pass at 92%+ coverage; mypy
@@ -84,7 +84,7 @@ Building defense once, then layering features on top, means each new
 feature inherits the defense automatically. Building features first
 and bolting on defense later means re-auditing every feature.
 
-### Stage 2 — Persistent rich session store
+### Stage 2 - Persistent rich session store
 
 **Problem.** Sessions today live in an in-memory ring buffer
 ([`src/anglerfish/dashboard/state.py`](../src/anglerfish/dashboard/state.py)).
@@ -96,7 +96,7 @@ data: turns, observations, embeddings, intent summaries.
 
 * SQLite schema for sessions, turns, observations, embeddings,
   intent summaries.
-* `src/anglerfish/sessions/store.py` — async API mirroring
+* `src/anglerfish/sessions/store.py` - async API mirroring
   `CredentialStore`.
 * Replaces in-memory ring; dashboard reads from store.
 * Export endpoints: `GET /api/sessions/export?format=csv|json|stix2`.
@@ -105,7 +105,7 @@ data: turns, observations, embeddings, intent summaries.
 **Why second** (after defense). Foundational data layer that stages
 5/6/7 sit on top of. Built once, stable interface for years.
 
-### Stage 3 — Local-LLM leverage layer
+### Stage 3 - Local-LLM leverage layer
 
 **Problem.** Today there's one LLM call pattern: bridge → Ollama →
 text response. For stages 4-10 we need: streaming responses (for
@@ -116,13 +116,13 @@ management (eliminate cold-start latency).
 
 **Deliverables:**
 
-* `src/anglerfish/llm/` — new module replacing
+* `src/anglerfish/llm/` - new module replacing
   `src/anglerfish/bridge/client.py`.
 * Multi-model config: `ANGLERFISH_LLM__FAST_MODEL` (default
   `qwen3:14b`-class), `ANGLERFISH_LLM__DEEP_MODEL` (default
   `phi-4` or similar 14B+ reasoning model),
   `ANGLERFISH_LLM__EMBED_MODEL` (default `nomic-embed-text`).
-  Deepseek family avoided in defaults — third-party security reviews
+  Deepseek family avoided in defaults, third-party security reviews
   flagged CCP-aligned content moderation that surfaces in shell
   honeypot contexts. See `docs/MODEL_SETUP.md`.
 * Streaming response API.
@@ -132,7 +132,7 @@ management (eliminate cold-start latency).
 **Why third** (after defense + store). Stages 4-10 all use this
 runtime. Defense layer wraps it; store persists its outputs.
 
-### Stage 4 — Active time-wasting
+### Stage 4 - Active time-wasting
 
 **Problem.** Today every command gets a fast LLM response. Human
 attackers move on quickly. We want to *stretch* sessions: more
@@ -141,7 +141,7 @@ moments, occasional asks-for-clarification.
 
 **Deliverables:**
 
-* `src/anglerfish/bridge/strategies/wasting.py` — strategy plug-in.
+* `src/anglerfish/bridge/strategies/wasting.py` - strategy plug-in.
 * Config: `ANGLERFISH_BRIDGE__WASTING_STRATEGY=off|light|aggressive`.
 * Per-session time budget so we don't keep one attacker forever.
 * New dashboard metric: avg time-wasted per session, vs baseline
@@ -150,7 +150,7 @@ moments, occasional asks-for-clarification.
 **Why fourth.** Smallest LLM-driven feature, proves the Stage 3
 runtime end-to-end before we build harder things on it.
 
-### Stage 5 — LLM intent extraction
+### Stage 5 - LLM intent extraction
 
 **Problem.** Today threat intel is rule-based MITRE techniques: useful
 but low-abstraction. Operators want natural-language summaries: *"this
@@ -160,7 +160,7 @@ Profile: opportunistic cryptojacking. Confidence: high."*
 
 **Deliverables:**
 
-* `src/anglerfish/intel/intent.py` — end-of-session summarizer.
+* `src/anglerfish/intel/intent.py` - end-of-session summarizer.
 * Structured output schema (Pydantic): who, what, why, confidence,
   matched techniques.
 * Dashboard panel showing the intent summary per session.
@@ -168,9 +168,9 @@ Profile: opportunistic cryptojacking. Confidence: high."*
 * Stored in session store (Stage 2).
 
 **Why fifth.** Highest user-facing value of any single capability.
-Demonstrates "intel, not logs" — the thesis in one feature.
+Demonstrates "intel, not logs"; the thesis in one feature.
 
-### Stage 6 — Behavioral clustering
+### Stage 6 - Behavioral clustering
 
 **Problem.** Today the only way to recognize "same attacker, different
 IP" is exact JA3/HASSH match. Real botnets rotate identifiers. We
@@ -178,7 +178,7 @@ want vector embeddings of session behavior and clustering on top.
 
 **Deliverables:**
 
-* `src/anglerfish/intel/embeddings.py` — generate session embeddings
+* `src/anglerfish/intel/embeddings.py` - generate session embeddings
   via the local embedding model (Stage 3).
 * Vector storage in SQLite (sqlite-vec or inline).
 * Re-identification queries: "show me sessions similar to session X."
@@ -187,7 +187,7 @@ want vector embeddings of session behavior and clustering on top.
 **Why sixth.** Needs persistent store (Stage 2) and multi-model
 runtime (Stage 3). Unlocks attacker-profile features in Stage 7.
 
-### Stage 7 — Adaptive persona
+### Stage 7 - Adaptive persona
 
 **Problem.** Today every attacker sees the same fake hostname /
 filesystem / process list. A real production environment serves
@@ -207,11 +207,11 @@ different attackers different views.
 and clustering (Stage 6) to bias choice based on similar past
 attackers.
 
-### Stage 8 — Engaged persistence
+### Stage 8 - Engaged persistence
 
 **Problem.** Today when an attacker installs a backdoor (`crontab -e`,
 `systemctl enable malicious.service`, `~/.ssh/authorized_keys`), the
-LLM acknowledges but we never see what they'd do *next* — because the
+LLM acknowledges but we never see what they'd do *next*, because the
 session ends and they don't come back to "their" foothold.
 
 **Deliverables:**
@@ -222,7 +222,7 @@ session ends and they don't come back to "their" foothold.
 * `crontab -l` returns the fake entry. `systemctl status backdoor`
   returns plausible status. `~/.ssh/authorized_keys` echoes their key.
 * Operator opt-in: `ANGLERFISH_BRIDGE__ENGAGED_PERSISTENCE=true` (default
-  `false` — this is aggressive and changes the threat model).
+  `false`, this is aggressive and changes the threat model).
 * THREAT_MODEL.md update: we're now generating attacker-facing
   falsehoods that could affect attacker decisions; that's the design
   goal but also a new responsibility.
@@ -231,7 +231,7 @@ session ends and they don't come back to "their" foothold.
 (Stage 7) for credibility (a "backdoor" on the "wrong" persona type
 is unconvincing).
 
-### Stage 9 — Decoy data poisoning
+### Stage 9 - Decoy data poisoning
 
 **Problem.** Attackers steal `/etc/passwd`, `~/.aws/credentials`,
 `~/.ssh/config` etc. We could generate plausible-but-traceable content
@@ -253,7 +253,7 @@ they steal, then track where those tokens get used.
 (only poison when attacker is high-confidence malicious) and the
 session store (Stage 2) for the registry.
 
-### Stage 10 — Active counter-deception
+### Stage 10 - Active counter-deception
 
 **Problem.** When a high-confidence malicious session is detected, we
 have options beyond passive observation. Serve garbled binaries when
@@ -278,10 +278,10 @@ delays to confuse timing-sensitive malware.
 **Why tenth.** Most aggressive capability. Needs every prior defense
 layer mature.
 
-### Stage 11 — Dashboard + export overhaul
+### Stage 11 - Dashboard + export overhaul
 
 **Problem.** After 10 stages of new data, the dashboard is the
-weakest link — built for the v0.1 schema, not for intent summaries,
+weakest link, built for the v0.1 schema, not for intent summaries,
 embeddings, personas, honeytokens, counter-deception state.
 
 **Deliverables:**

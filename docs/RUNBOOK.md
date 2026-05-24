@@ -1,4 +1,4 @@
-# Anglerfish AI — Operator Runbook
+# Anglerfish AI - Operator Runbook
 
 Day-2 procedures. Each task is a short heading + the commands; if a
 step needs explanation it lives below the block, never inside it.
@@ -11,7 +11,7 @@ All commands assume:
 * The package lives in `/opt/anglerfish/venv/`. Symlinks under
   `/usr/local/bin/` keep `anglerfish`/`anglerfish-wizard` on PATH.
 
-> When in doubt, run `anglerfish config show` — it prints the live
+> When in doubt, run `anglerfish config show` - it prints the live
 > configuration with secrets masked, which is enough to confirm what
 > the bridge and dashboard are actually using.
 
@@ -56,7 +56,7 @@ sudo systemctl start anglerfish-bridge.service anglerfish-dashboard.service
 The old database is preserved at `<path>.bak` next to the new one.
 Keep that backup until you've verified at least one fresh credential
 record decrypts with the new key. The rotation tool refuses to run
-if a previous rotation left a `.new` or `.bak` file in place — clean
+if a previous rotation left a `.new` or `.bak` file in place, clean
 those up first if so.
 
 ### Query captured credentials
@@ -98,7 +98,7 @@ jq -c 'select(.session_id == "9e9f4b2a-..." and .event == "command") |
 
 ### Inspect the audit log
 
-The audit log is separate from session capture — it records
+The audit log is separate from session capture, it records
 operator-facing events (login success/failure, key rotation, geo
 updates, wizard runs):
 
@@ -121,7 +121,7 @@ sudo sed -i 's|^ANGLERFISH_THREAT__ALERT_THRESHOLD=.*|ANGLERFISH_THREAT__ALERT_T
 sudo systemctl restart anglerfish-bridge.service
 ```
 
-The alerter is idempotent on a session — a single session won't fire
+The alerter is idempotent on a session, a single session won't fire
 twice even if its score keeps climbing.
 
 ---
@@ -238,7 +238,7 @@ never rotates it. Use `logrotate`:
 }
 ```
 
-`copytruncate` matters — the AuditLog reopens the file on every
+`copytruncate` matters, the AuditLog reopens the file on every
 write, but a regular rename mid-rotation would leave a window where
 records vanish.
 
@@ -255,7 +255,7 @@ Stop captures (so attackers see a stuck shell, not a crash):
 ```bash
 sudo systemctl stop cowrie.service anglerfish-bridge.service
 sudo zstd -19 --rm /var/lib/anglerfish/sessions.jsonl.*
-# (truncate the live JSONL if needed — last-resort)
+# (truncate the live JSONL if needed - last-resort)
 sudo truncate -s 0 /var/lib/anglerfish/sessions.jsonl
 sudo systemctl start anglerfish-bridge.service cowrie.service
 ```
@@ -345,7 +345,7 @@ kept it, right?), then rotate forward.
 ### Update Cowrie's fake filesystem
 
 Cowrie ships fake filesystems under `/opt/cowrie/share/cowrie/`.
-The Anglerfish output plugin ignores filesystem changes — those
+The Anglerfish output plugin ignores filesystem changes, those
 are Cowrie's domain. Edit, then:
 
 ```bash
@@ -379,5 +379,5 @@ sudo shred -u /var/lib/anglerfish/credentials.db*
 ```
 
 Then `qm destroy <vmid>` on the Proxmox host. Captured session
-JSONL and audit logs are not shredded by this procedure — handle
+JSONL and audit logs are not shredded by this procedure, handle
 them per your retention policy.

@@ -5,7 +5,7 @@ Each step is a single command you can run and verify. Skipping items is
 fine for a closed lab; **don't skip them for real-internet exposure**.
 
 If you're doing the strict-lab variant, see
-[`proxmox-lab.md`](proxmox-lab.md) instead — most of these checks still
+[`proxmox-lab.md`](proxmox-lab.md) instead, most of these checks still
 apply but the network ones loosen up.
 
 Legend: `[ ]` open, `[x]` done.
@@ -41,11 +41,11 @@ grep -E '^ANGLERFISH_(DASHBOARD__SESSION_SECRET|CREDENTIALS__ENCRYPTION_KEY|BRID
     | sed 's/=.*/=<set>/'
 ```
 
-- `[ ]` `ANGLERFISH_DASHBOARD__SESSION_SECRET` — ≥32 chars, base64.
-- `[ ]` `ANGLERFISH_CREDENTIALS__ENCRYPTION_KEY` — base64, decodes to 32 bytes.
-- `[ ]` `ANGLERFISH_BRIDGE__SHARED_SECRET` — Cowrie sends this in
+- `[ ]` `ANGLERFISH_DASHBOARD__SESSION_SECRET` - ≥32 chars, base64.
+- `[ ]` `ANGLERFISH_CREDENTIALS__ENCRYPTION_KEY` - base64, decodes to 32 bytes.
+- `[ ]` `ANGLERFISH_BRIDGE__SHARED_SECRET` - Cowrie sends this in
   `Authorization: Bearer <secret>` on every bridge call.
-- `[ ]` `ANGLERFISH_DASHBOARD__ADMIN_PASSWORD_HASH` — bcrypt hash. If
+- `[ ]` `ANGLERFISH_DASHBOARD__ADMIN_PASSWORD_HASH` - bcrypt hash. If
   this is empty the dashboard runs in **open mode**. That's only safe
   in a closed lab. Set it.
 
@@ -61,7 +61,7 @@ stat -c '%a %U:%G %n' /etc/anglerfish/anglerfish.env
 
 ## 3. Network isolation
 
-This is the hardest line of defense — get it right or don't deploy.
+This is the hardest line of defense, get it right or don't deploy.
 
 ### 3.1 Two-NIC physical separation
 
@@ -118,7 +118,7 @@ sudo kill %1
 ```
 
 - `[ ]` No DNS traffic on the bait interface for 5+ seconds. If you see
-  any, something on the bait side is doing DNS lookups — investigate.
+  any, something on the bait side is doing DNS lookups, investigate.
 
 ---
 
@@ -135,7 +135,7 @@ sudo -u anglerfish ANGLERFISH_LOG_LEVEL=INFO \
 
 - `[ ]` `ollama.base_url` is loopback or matches `trusted_remote_host`.
 - `[ ]` `threat.alert_webhook_url` (if set) is `https://` and points to
-  a public hostname or public IP — **not** RFC1918 / loopback /
+  a public hostname or public IP, **not** RFC1918 / loopback /
   link-local. The validator will refuse to start otherwise.
 - `[ ]` `splunk.hec_url` (if enabled) is `https://` and the hostname
   matches the cert. If you're using a private CA, mount the CA into
@@ -184,15 +184,15 @@ systemctl --no-pager status \
     ollama.service 2>&1 | grep -E 'Loaded|Active' | head -40
 ```
 
-- `[ ]` `anglerfish-firewall.service` — active or `oneshot` exited 0.
+- `[ ]` `anglerfish-firewall.service` - active or `oneshot` exited 0.
   This MUST be `Before=` the bridge and dashboard. Verify:
   ```bash
   systemctl list-dependencies --before anglerfish-firewall.service
   ```
-- `[ ]` `anglerfish-bridge.service` — `active (running)`.
-- `[ ]` `anglerfish-dashboard.service` — `active (running)`.
-- `[ ]` `cowrie.service` — `active (running)`.
-- `[ ]` `ollama.service` — `active (running)` (or running on a trusted
+- `[ ]` `anglerfish-bridge.service` - `active (running)`.
+- `[ ]` `anglerfish-dashboard.service` - `active (running)`.
+- `[ ]` `cowrie.service` - `active (running)`.
+- `[ ]` `ollama.service` - `active (running)` (or running on a trusted
   remote host you can reach).
 - `[ ]` No service in `failed` state:
   ```bash
@@ -205,8 +205,8 @@ systemctl --no-pager status \
 
 ```bash
 # Inside the VM:
-curl -fsS http://127.0.0.1:8421/api/health    # bridge — want {"status":"ok",...}
-curl -fsS http://127.0.0.1:8420/api/health    # dashboard — same
+curl -fsS http://127.0.0.1:8421/api/health    # bridge - want {"status":"ok",...}
+curl -fsS http://127.0.0.1:8420/api/health    # dashboard - same
 
 # Bridge with bearer token:
 SECRET=$(grep ANGLERFISH_BRIDGE__SHARED_SECRET /etc/anglerfish/anglerfish.env | cut -d= -f2)
@@ -221,7 +221,7 @@ curl -fsS -H "Authorization: Bearer $SECRET" \
 
 ---
 
-## 8. Smoke test — drive a fake attacker
+## 8. Smoke test - drive a fake attacker
 
 End-to-end test: hit Cowrie from a throwaway IP, verify the LLM
 responded, verify the audit + credentials + threat pipelines fired.
@@ -258,7 +258,7 @@ curl -fsS -u "admin:$ADMIN_PASS" http://127.0.0.1:8420/api/threats \
 
 ## 9. Off-host shipping (when enabled)
 
-The honeypot itself can be compromised — your most important records
+The honeypot itself can be compromised, your most important records
 have to live somewhere else.
 
 ```bash
