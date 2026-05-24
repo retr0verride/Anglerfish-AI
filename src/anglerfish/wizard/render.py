@@ -49,6 +49,11 @@ _DEFAULT_DASHBOARD_PORT = 8420
 _DEFAULT_BRIDGE_PORT = 8421
 _DEFAULT_SSH_PORT = 2222
 _DEFAULT_TELNET_PORT = 2223
+# Lure listener port. Same as Cowrie's 2222 by default so a single
+# bait-NIC nftables rule covers both during the Cowrie deprecation
+# window. Operators that want the lure on a distinct port set
+# ANGLERFISH_LURE__LISTEN_PORT in the env file and re-run the wizard.
+_DEFAULT_LURE_PORT = 2222
 
 
 def render_env(
@@ -92,10 +97,30 @@ def render_env(
         _line("ANGLERFISH_BRIDGE__SHARED_SECRET", bridge_secret),
         _line("ANGLERFISH_BRIDGE_URL", f"http://127.0.0.1:{_DEFAULT_BRIDGE_PORT}"),
         "",
-        "# --- Cowrie (listener ports) ---------------------------------------------",
+        "# --- Cowrie (deprecated, retained for transition window) -----------------",
+        # Stage 2 replaces Cowrie with the native asyncssh lure. The
+        # Cowrie keys stay until a later commit deletes the integration,
+        # so operators upgrading in place can run both for an A/B
+        # window. New installs leave the Cowrie listener disabled (set
+        # ANGLERFISH_COWRIE__SSH_LISTEN_PORT to 0 if you want to be
+        # explicit) and rely on the lure.
         _line("ANGLERFISH_COWRIE__HOSTNAME", answers.fake_hostname),
         _line("ANGLERFISH_COWRIE__SSH_LISTEN_PORT", str(_DEFAULT_SSH_PORT)),
         _line("ANGLERFISH_COWRIE__TELNET_LISTEN_PORT", str(_DEFAULT_TELNET_PORT)),
+        "",
+        "# --- Lure (native asyncssh SSH honeypot, replaces Cowrie) ----------------",
+        # The lure refuses to start unless LISTEN_HOST is a real local
+        # interface IP. Static-network setups get the bait IP filled in
+        # below; DHCP setups must edit this file once the lease is up
+        # to substitute the actual bait NIC address.
+        _line("ANGLERFISH_LURE__ENABLED", "true"),
+        _line(
+            "ANGLERFISH_LURE__LISTEN_HOST",
+            _bait_listen_host(answers),
+        ),
+        _line("ANGLERFISH_LURE__LISTEN_PORT", str(_DEFAULT_LURE_PORT)),
+        _line("ANGLERFISH_LURE__HOSTNAME", answers.fake_hostname),
+        _line("ANGLERFISH_LURE__HOST_KEY_DIR", "/var/lib/anglerfish/lure-keys"),
         "",
         "# --- Dashboard -----------------------------------------------------------",
         # Bind to all interfaces; nftables permits dashboard ingress on the
@@ -135,30 +160,66 @@ def render_env(
     return "\n".join(_iter_lines(lines))
 
 
+def _bait_listen_host(answers: WizardAnswers) -> str | None:
+    """Best-effort bait-NIC IP for ``ANGLERFISH_LURE__LISTEN_HOST``.
+
+    Returns the literal IP string for static configs, ``None`` for
+    DHCP setups (the env-file line stays commented; operators fill in
+    the lease IP once the bait NIC is up).
+    """
+    net = answers.bait_network
+    if net.dhcp or not net.address:
+        return None
+    # NetworkConfig.address is stored as ``ip/prefix``; strip the suffix.
+    head = net.address.split("/", 1)[0].strip()
+    return head or None
+
+
 def render_nftables(
     answers: WizardAnswers,
     *,
     dashboard_port: int = _DEFAULT_DASHBOARD_PORT,
     ssh_listen_port: int = _DEFAULT_SSH_PORT,
     telnet_listen_port: int = _DEFAULT_TELNET_PORT,
+    lure_listen_port: int = _DEFAULT_LURE_PORT,
 ) -> str:
     """Render the nftables ruleset for the bait/service NIC split.
 
     The ruleset enforces three invariants:
 
-    1. Cowrie's SSH + Telnet listeners are the only ports open on the
-       bait interface (plus the implicit established/related state).
-    2. Egress from the bait interface is dropped entirely (only DNS
-       is permitted, so the LLM's plausible-shell responses can still
+    1. The lure SSH listener (Stage 2 replacement for Cowrie) is the
+       primary port open on the bait NIC. Cowrie's legacy SSH + Telnet
+       ports stay accepted through the deprecation window so operators
+       can run both during A/B; a later commit removes those rules
+       when Cowrie itself is deleted.
+    2. Egress from the bait NIC is dropped entirely (only DNS is
+       permitted, so the LLM's plausible-shell responses can still
        reference DNS-resolvable hostnames in passing).
-    3. Egress from the service interface is restricted to Ollama
-       (11434), Splunk HEC (8088), the dashboard's own port, DNS, NTP.
+    3. Egress from the service NIC is restricted to Ollama (11434),
+       Splunk HEC (8088), the dashboard's own port, DNS, NTP.
     """
     bait = _quote_iface(answers.bait_interface)
     service = _quote_iface(answers.service_interface)
 
+    # Build the bait-NIC accept rule. If the lure port matches Cowrie's
+    # SSH port (the default-aligned case), one rule covers both. If
+    # the operator picked a distinct lure port, emit a separate rule.
+    cowrie_ports = {ssh_listen_port, telnet_listen_port}
+    if lure_listen_port in cowrie_ports:
+        bait_accept = (
+            f"iifname {bait} tcp dport {{ {ssh_listen_port}, {telnet_listen_port} }} accept"
+        )
+    else:
+        bait_accept = (
+            f"iifname {bait} tcp dport {lure_listen_port} accept  "
+            "# native lure (Stage 2)\n        "
+            f"iifname {bait} tcp dport "
+            f"{{ {ssh_listen_port}, {telnet_listen_port} }} accept  "
+            "# Cowrie (deprecation window)"
+        )
+
     return f"""#!/usr/sbin/nft -f
-# Generated by anglerfish-wizard. Do not edit by hand —
+# Generated by anglerfish-wizard. Do not edit by hand;
 # re-run `anglerfish-wizard --reconfigure` to regenerate.
 
 flush ruleset
@@ -170,8 +231,8 @@ table inet anglerfish {{
         ct state established,related accept
         iifname "lo" accept
 
-        # Cowrie listeners on the bait NIC.
-        iifname {bait} tcp dport {{ {ssh_listen_port}, {telnet_listen_port} }} accept
+        # Bait NIC: lure (Stage 2) and Cowrie (legacy, transition window).
+        {bait_accept}
 
         # Dashboard + ops SSH on the service NIC.
         iifname {service} tcp dport {dashboard_port} accept

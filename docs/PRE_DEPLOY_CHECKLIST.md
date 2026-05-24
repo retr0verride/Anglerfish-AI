@@ -213,18 +213,33 @@ SECRET=$(grep ANGLERFISH_BRIDGE__SHARED_SECRET /etc/anglerfish/anglerfish.env | 
 curl -fsS -H "Authorization: Bearer $SECRET" \
     http://127.0.0.1:8421/api/v1/sessions
 # Want: []  (or current sessions)
+
+# Lure: confirm the SSH listener is up on the bait NIC only.
+ss -lntp | grep -E ':2222 |:22 '
+# Want: a single LISTEN line on the bait-NIC IP, not 0.0.0.0.
+
+# Lure: validate-config without binding (idempotent, safe on a live host).
+anglerfish lure validate-config
+# Want: "lure config OK - listener would bind to <bait-ip>:<port>"
 ```
 
 - `[ ]` Bridge `/api/health` returns 200.
 - `[ ]` Dashboard `/api/health` returns 200.
 - `[ ]` Bridge accepts your bearer token.
+- `[ ]` Lure listener is bound to the bait-NIC IP, not `0.0.0.0`.
+- `[ ]` `anglerfish lure validate-config` exits 0.
+- `[ ]` Lure host keys exist at `ANGLERFISH_LURE__HOST_KEY_DIR`
+  with mode `0600` (key files) and `0700` (directory). Generated
+  fresh per install; never copied from another host.
 
 ---
 
 ## 8. Smoke test - drive a fake attacker
 
-End-to-end test: hit Cowrie from a throwaway IP, verify the LLM
+End-to-end test: hit the lure from a throwaway IP, verify the LLM
 responded, verify the audit + credentials + threat pipelines fired.
+During the deprecation window the same test against Cowrie's port
+should also succeed.
 
 ```bash
 # From outside the VM, on a throwaway client:

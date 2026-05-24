@@ -139,3 +139,60 @@ def test_render_cowrie_cfg_port_overrides() -> None:
     out = render_cowrie_cfg(_answers(), ssh_listen_port=2223, telnet_listen_port=2224)
     assert "listen_endpoints = tcp:2223:interface=0.0.0.0" in out
     assert "listen_endpoints = tcp:2224:interface=0.0.0.0" in out
+
+
+# ---------------------------------------------------------------------------
+# Stage 2C: lure env-file rendering + nftables port wiring
+# ---------------------------------------------------------------------------
+
+
+def test_render_env_includes_lure_section() -> None:
+    out = render_env(_answers(), session_secret="x", encryption_key="y", bridge_secret="z")
+    assert "ANGLERFISH_LURE__ENABLED=true" in out
+    assert "ANGLERFISH_LURE__LISTEN_PORT=2222" in out
+    assert "ANGLERFISH_LURE__HOSTNAME=srv-prod-01" in out
+    assert "ANGLERFISH_LURE__HOST_KEY_DIR=/var/lib/anglerfish/lure-keys" in out
+
+
+def test_render_env_lure_listen_host_empty_for_dhcp() -> None:
+    # Default _answers() has dhcp=True bait_network; LISTEN_HOST must
+    # be the commented-out form so the lure refuses to start until the
+    # operator fills in the leased IP.
+    out = render_env(_answers(), session_secret="x", encryption_key="y", bridge_secret="z")
+    assert "# ANGLERFISH_LURE__LISTEN_HOST=" in out
+
+
+def test_render_env_lure_listen_host_pulled_from_static_bait() -> None:
+    from anglerfish.wizard.answers import NetworkConfig
+
+    static_bait = NetworkConfig(
+        dhcp=False,
+        address="192.0.2.10/24",
+        gateway=ipaddress.ip_address("192.0.2.1"),
+        dns=(ipaddress.ip_address("1.1.1.1"),),
+    )
+    out = render_env(
+        _answers(bait_network=static_bait),
+        session_secret="x",
+        encryption_key="y",
+        bridge_secret="z",
+    )
+    assert "ANGLERFISH_LURE__LISTEN_HOST=192.0.2.10" in out
+
+
+def test_render_nftables_default_lure_port_shares_cowrie_rule() -> None:
+    """Default lure port (2222) coincides with Cowrie's SSH; one rule covers both."""
+    out = render_nftables(_answers())
+    # Cowrie SSH+telnet rule still emitted once.
+    assert out.count("tcp dport { 2222, 2223 }") == 1
+    # No separate per-lure-port rule when ports collide.
+    assert "native lure" not in out
+
+
+def test_render_nftables_distinct_lure_port_gets_separate_rule() -> None:
+    out = render_nftables(_answers(), lure_listen_port=22)
+    assert "tcp dport 22 accept" in out
+    assert "native lure" in out
+    assert "Cowrie (deprecation window)" in out
+    # Cowrie rule still emitted for the transition window.
+    assert "tcp dport { 2222, 2223 }" in out

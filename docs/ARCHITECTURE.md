@@ -16,8 +16,9 @@ For day-2 ops see [RUNBOOK.md](RUNBOOK.md).
 ```text
 ┌──────────────────── Anglerfish honeypot VM ────────────────────┐
 │                                                                │
-│   bait NIC ─────► Cowrie (SSH/Telnet)                          │
-│                       │                                        │
+│   bait NIC ─────► Lure (native asyncssh, Stage 2)              │
+│                       │   (Cowrie shim retained for the        │
+│                       │    deprecation window)                 │
 │                       │  POST /api/v1/command (bearer auth)    │
 │                       ▼                                        │
 │   anglerfish-bridge ─ AIBridgeService ──► OllamaClient ──► LLM │
@@ -49,8 +50,11 @@ For day-2 ops see [RUNBOOK.md](RUNBOOK.md).
 
 Two NICs, two trust levels:
 
-* **Bait NIC** - exposed to attacker traffic. Only Cowrie listens.
-  nftables drops all egress except DNS.
+* **Bait NIC** - exposed to attacker traffic. The native asyncssh
+  lure (`anglerfish.lure`) is the primary listener. The legacy
+  Cowrie listener stays accepted in nftables through the deprecation
+  window so operators upgrading in place can run both side-by-side.
+  nftables drops all bait-NIC egress except DNS.
 * **Service NIC** - operator-only. Reaches Ollama, Splunk HEC, the
   dashboard. nftables egress is restricted to the configured Ollama
   IP, the Splunk HEC URL, and DNS + NTP.
@@ -108,10 +112,13 @@ The LLM middleware. Files:
 
 Request lifecycle:
 
-1. Cowrie's shell adapter intercepts an unknown command (one Cowrie
-   doesn't have a built-in for).
-2. It POSTs to the bridge with `X-Anglerfish-Protocol: 1` and the
-   bearer token. Connection is loopback only.
+1. The lure's process handler intercepts an unknown command (one
+   `NativeCommands` doesn't dispatch in-process). The Cowrie shell
+   adapter takes the same path during the deprecation window.
+2. The caller POSTs to the bridge with `X-Anglerfish-Protocol: 2`
+   (lure) or `1` (Cowrie shim) and the bearer token. Connection is
+   loopback only. The bridge accepts both protocol versions through
+   the deprecation window.
 3. The server middleware verifies the protocol version (426 on
    mismatch) and the bearer (constant-time compare; 401 on
    mismatch).
@@ -279,14 +286,50 @@ per write; the wrapper holds an `RLock` for thread safety. Failures
 are caught and logged, never raised, because audit failures
 should not stop honeypot operation.
 
-### 2.12 `integration/`
+### 2.12 `lure/` (Stage 2)
 
-The Cowrie-side shim:
+The native asyncssh SSH honeypot that replaced Cowrie. See
+[`docs/design/STAGE_2_lure_subsystem.md`](design/STAGE_2_lure_subsystem.md)
+for the full design.
+
+* [`server.py`](../src/anglerfish/lure/server.py) - `LureServer`
+  lifecycle wrapper, `_LureSSHServer` asyncssh subclass,
+  `_process_handler` shell loop, per-IP rate limiter, bait-NIC
+  validator.
+* [`runner.py`](../src/anglerfish/lure/runner.py) - `run_lure`
+  top-level coroutine; owns the dep graph + signal handlers.
+* [`bridge_client.py`](../src/anglerfish/lure/bridge_client.py) -
+  async HTTP client to `AIBridgeService` over loopback.
+* [`commands.py`](../src/anglerfish/lure/commands.py) - native
+  command dispatch (`whoami`, `id`, `pwd`, `ls`, `cd`, `uname`,
+  `hostname`, `echo`, `cat`-of-known-paths, `history`, `exit`) plus
+  `LatencyJitter` (per-process EWMA of bridge latency so native vs
+  bridge response times are statistically indistinguishable).
+* [`fakefs.py`](../src/anglerfish/lure/fakefs.py) - ~50-path static
+  filesystem covering standard reconnaissance targets.
+* [`keys.py`](../src/anglerfish/lure/keys.py) - RSA 4096 + Ed25519
+  host-key generation, load, permission validation.
+* [`config.py`](../src/anglerfish/lure/config.py) - `LureConfig`
+  under `ANGLERFISH_LURE__*`. Default opt-out.
+* [`http.py`](../src/anglerfish/lure/http.py) - `NotImplementedError`
+  stub for the future HTTP/HTTPS lure (TODO-1).
+
+The lure runs as a separate systemd unit from the bridge so a crash
+in one process does not take the other down. Both run on the same
+VM; the boundary is an HTTP call on loopback `:8421` with the
+existing bearer token.
+
+### 2.13 `integration/` (deprecated)
+
+The Cowrie-side shim. Retained for the deprecation window so
+operators upgrading in place can run both the lure and Cowrie. A
+later commit deletes this module, the `cowrie/` directory, and the
+related tests.
 
 * [`cowrie.py`](../src/anglerfish/integration/cowrie.py) - Cowrie
   output plugin. Translates Cowrie events to bridge calls.
 * [`cowrie_shell.py`](../src/anglerfish/integration/cowrie_shell.py)
-  - sync HTTP client wrapper for the bridge.
+  - sync HTTP client wrapper for the bridge (protocol v1).
 * [`cowrie_shell_adapter.py`](../src/anglerfish/integration/cowrie_shell_adapter.py)
   - runtime monkey-patch of `HoneyPotShell.lineReceived` that
   intercepts unknown commands.

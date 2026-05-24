@@ -45,8 +45,9 @@ before any service is enabled.
                   ┌──────────────────────────────────────────────────────┐
                   │              ANGLERFISH AI VM                        │
                   │                                                      │
-   bait NIC ──────┤  Cowrie (SSH/Telnet on :2222/:2223)                  │
-   (hostile)      │      │                                               │
+   bait NIC ──────┤  Lure (native asyncssh on :2222 by default)          │
+   (hostile)      │      │  (Stage 2 - replaces Cowrie; both can run     │
+                  │      │   side-by-side during the deprecation window) │
                   │      │ unknown commands  (HTTP, loopback :8421)      │
                   │      v                                               │
                   │  Bridge HTTP server                                  │
@@ -77,8 +78,10 @@ before any service is enabled.
 
 The honeypot VM has two network interfaces:
 
-* **Bait**: exposed to hostile traffic. Runs Cowrie on the configured
-  port(s). Egress is dropped at nftables level except for DNS.
+* **Bait**: exposed to hostile traffic. Runs the lure SSH listener
+  (Stage 2, native asyncssh) on the configured port. The Cowrie
+  ports stay accepted through the deprecation window. Egress is
+  dropped at nftables level except for DNS.
 * **Service**: private, firewalled. Reaches Ollama (loopback or a
   single trusted IP), Splunk HEC, and the operator dashboard. Nothing
   else.
@@ -105,8 +108,9 @@ dashboard endpoints only. See [`cowrie/nftables/anglerfish.nft`](cowrie/nftables
 | `wizard/`       | **shipped**   | First-boot Typer wizard, generates secrets, writes `.env`          |
 | `cli/`          | **shipped**   | `anglerfish` and `anglerfish-wizard` entry points + ASCII banner   |
 | `models/`       | **shipped**   | Shared session / response / threat / fingerprint / geo / credential types |
-| `integration/`  | **shipped**   | Cowrie output-plugin shim                                          |
-| `cowrie/`       | **shipped**   | Cowrie config template, output plugin, nftables ruleset            |
+| `lure/`         | **shipped**   | Native asyncssh SSH honeypot (Stage 2 replacement for Cowrie)      |
+| `integration/`  | **deprecated** | Cowrie output-plugin shim (removed after the lure deprecation window) |
+| `cowrie/`       | **deprecated** | Cowrie config template + output plugin (lure listener is the new default) |
 | `iso/`          | **shipped**   | live-build recipe, hooks, build script                             |
 | `systemd/`      | **shipped**   | Hardened unit files for every long-running service                 |
 
@@ -330,7 +334,8 @@ Anglerfish-AI/
 │   ├── config/           # Pydantic config models
 │   ├── models/           # Shared runtime data models
 │   ├── wizard/           # First-boot configuration wizard
-│   ├── integration/      # Cowrie output-plugin shim
+│   ├── lure/             # Native asyncssh SSH lure (Stage 2)
+│   ├── integration/      # Cowrie output-plugin shim (deprecated)
 │   └── cli/              # Entry points + ASCII banner
 ├── tests/                # pytest test suite (≥90% coverage gate)
 ├── cowrie/               # Cowrie cfg template + output plugin + nftables

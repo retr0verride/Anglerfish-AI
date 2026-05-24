@@ -196,6 +196,50 @@ knows.
 
 ---
 
+## Lure subsystem (Stage 2)
+
+Replacing Cowrie with the native asyncssh lure introduces one
+significant new attack surface: an unprivileged process that
+accepts arbitrary attacker SSH bytes on the public bait NIC. The
+full STRIDE pass lives in
+[`docs/design/STAGE_2_lure_subsystem.md`](design/STAGE_2_lure_subsystem.md)
+under "Threat-model delta"; the table here summarises.
+
+| Threat | Mitigation | Residual risk |
+|---|---|---|
+| **Spoofing** - attacker forges a client version to influence persona selection in Stage 9 | Client version is captured for telemetry only; persona selection keys off the bridge's intent inference, not the client banner. | A future stage adding client-version-based logic would re-open the spoof; Stage 9 designers must respect this. |
+| **Tampering** - attacker smuggles control sequences into command input | `sanitize_command` C0-strips, normalises CR/LF, and caps to `LureConfig.max_command_chars` (default 1024, smaller than the bridge's 4096 so per-IP throughput is bounded even when the bridge is overloaded). | A sanitiser bug becomes a bug in two places (bridge + lure); test coverage in `tests/bridge/test_sanitize.py` is exhaustive. |
+| **Repudiation** - attacker disconnects mid-sequence and the audit log loses state | Every command (native and bridge-routed) writes `lure.command_native` / `lure.command_bridge` BEFORE the response is generated, so a racing disconnect cannot elide actions. `session.history()` persists across the session lifetime. | A flushing race between `audit_log.record` and `asyncio.Task.cancel` could theoretically lose the last event; mitigated by recording into a pre-allocated buffer before the async write. |
+| **Information disclosure** - banner / host keys / response timing identify this as a honeypot | Banner mirrors a recent Debian stable (configurable). Host keys are fresh per install (`ensure_host_keys` at first boot). `LatencyJitter` keeps native and bridge response times statistically indistinguishable so the dispatch table is not a timing fingerprint. | A determined attacker scanning the internet and clustering host keys by similarity might identify an Anglerfish fleet; defending against this would require key lying which is a worse posture. |
+| **DoS** - attacker opens N concurrent connections and exhausts the event loop | Two per-source-IP limits enforced *in the lure*, before the bridge sees work: concurrent connections (`per_ip_max_concurrent_connections`, default 3) and connections per minute (`per_ip_max_connections_per_minute`, default 30). Audit `lure.rate_limited` with kind on every reject. | Distributed attacker (many source IPs) still drowns the lure; nftables is the next defense layer (see `docs/PRE_DEPLOY_CHECKLIST.md`). |
+| **Elevation of privilege** - attacker exploits an asyncssh CVE to escape the protocol layer | Lure runs as an unprivileged systemd-managed user with `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`, `MemoryDenyWriteExecute=true`, `SystemCallFilter=@system-service`, `ReadWritePaths=<data_dir>`. `CapabilityBoundingSet=` empty unless binding port <1024 (then `CAP_NET_BIND_SERVICE` only). | Container escape (when run in a container in a future deployment shape) out of scope for Stage 2; future stages should consider gVisor / Kata. |
+| **Subsystem exposure** - attacker requests SFTP / port-forwarding / TUN / TAP to use the lure as a relay | All non-shell subsystems refused at the asyncssh layer with `lure.subsystem_refused` audit events. SFTP factory not registered, `connection_requested` / `server_requested` / `unix_*_requested` / `tun_requested` / `tap_requested` all return False. | Channel-type expansion in a future asyncssh release; pin via `pyproject.toml` upper bound and review on bump. |
+| **Public-key auth fingerprint capture without abuse** - attacker spammed keys to enumerate accepted ones | `public_key_auth_supported` returns True so clients offer keys; `validate_public_key` logs the fingerprint via `lure.login_attempt` with `auth_method=publickey` and returns False unconditionally. Password auth (accept-any with logging) is the v1 capture surface. | None - intel signal, not a service. |
+
+### Bridge wire-protocol bump
+
+The bridge accepts both `X-Anglerfish-Protocol: 1` (Cowrie shim)
+and `2` (lure with `CommandRequest.fs_context`) through the
+deprecation window. A later commit drops `"1"` from
+`SUPPORTED_PROTOCOLS` once Cowrie is deleted.
+
+### Trust-boundary changes
+
+| Boundary             | Before (Cowrie)     | After (lure)         |
+| -------------------- | ------------------- | -------------------- |
+| Bait NIC ↔ honeypot  | Cowrie / Twisted    | Anglerfish lure (asyncssh) |
+| Honeypot ↔ bridge    | sync HTTP loopback  | async HTTP loopback (unchanged shape, protocol v2) |
+| Bridge ↔ Ollama      | unchanged           | unchanged            |
+| Lure ↔ CredentialStore | n/a               | NEW: in-process typed call |
+| Lure ↔ Fingerprinter | n/a                 | NEW: in-process typed call |
+
+The net change narrows the bait-side attack surface (asyncssh has
+a smaller code surface than Cowrie + Twisted) and adds two new
+in-process integration points. Both new integrations go through
+types we already test and audit.
+
+---
+
 ## Known limitations (acknowledged, not yet mitigated)
 
 1. **Audit log is not write-once at the FS layer.** A root attacker can `cat /dev/null > audit.jsonl`. Operators wanting WORM should layer `chattr +a` or write to an external WORM target.
