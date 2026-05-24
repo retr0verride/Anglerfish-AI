@@ -151,6 +151,14 @@ def render_env(
         "# --- Credentials ---------------------------------------------------------",
         _line("ANGLERFISH_CREDENTIALS__ENCRYPTION_KEY", encryption_key),
         "",
+        "# --- Session store (Stage 4 persistent SQLite) ---------------------------",
+        # database_path defaults to /var/lib/anglerfish/sessions.db. Uncomment
+        # to relocate (e.g. onto a larger volume). max_active_sessions_returned
+        # caps the /api/sessions response size; raise if the dashboard's
+        # active-sessions view is being truncated.
+        _line("# ANGLERFISH_SESSIONS__DATABASE_PATH", "/var/lib/anglerfish/sessions.db"),
+        _line("# ANGLERFISH_SESSIONS__MAX_ACTIVE_SESSIONS_RETURNED", "500"),
+        "",
         "# --- Geo enrichment (MaxMind GeoLite2) -----------------------------------",
         _line("ANGLERFISH_GEO__CITY_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-City.mmdb"),
         _line("ANGLERFISH_GEO__ASN_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-ASN.mmdb"),

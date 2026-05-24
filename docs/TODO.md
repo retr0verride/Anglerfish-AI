@@ -31,3 +31,27 @@ The full design lives in a future stage; sketch only:
 - Per-IP rate limit and bait-NIC binding mirror the SSH lure.
 
 Owner: TBD. Not on the active roadmap yet.
+
+## TODO-2: systemd unit invokes `create_app` via uvicorn `--factory`
+
+`systemd/anglerfish-dashboard.service` (or the equivalent invocation
+of `uvicorn anglerfish.dashboard:create_app --factory`) cannot work
+as written: `create_app` requires a positional `settings` argument
+and uvicorn's `--factory` mode calls the factory with no arguments.
+Production dashboard startup is broken on a clean install.
+
+Two viable fixes:
+
+- Add a zero-arg wrapper, e.g. `anglerfish.dashboard.uvicorn_factory`,
+  that calls `load_settings()` then `create_app(settings)`. Update
+  the systemd unit to point at the wrapper.
+- Drop `--factory` and have the systemd unit run a small
+  `anglerfish dashboard serve` subcommand that owns its own uvicorn
+  instance (parallels how the lure already runs via
+  `anglerfish lure serve`).
+
+The second option is more consistent with the Stage 2 lure pattern
+and surfaces config errors earlier. Pre-existing as of Stage 4; flagged
+during the Stage 4 scoped re-review.
+
+Owner: TBD. Verify the actual systemd unit text before picking a fix.

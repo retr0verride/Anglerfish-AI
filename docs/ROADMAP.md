@@ -25,8 +25,8 @@ Status legend: `🟦 not started` · `🟨 in design` · `🟩 in progress` · `
 | 0   | Positioning + product spec         | ✅ shipped     | ~2h         | n/a (the docs themselves)               | -          |
 | 1   | LLM defense layer                  | ✅ shipped     | ~6h         | `design/STAGE_1_llm_defense.md`         | 0          |
 | 2   | Lure subsystem (Cowrie replacement) | ✅ shipped    | ~12h        | `design/STAGE_2_lure_subsystem.md`      | 1          |
-| 3   | Dashboard control plane            | 🟦 not started | ~8h         | `design/STAGE_3_dashboard_control_plane.md` | 2      |
-| 4   | Persistent rich session store      | 🟦 not started | ~8h         | `design/STAGE_4_session_store.md`       | 0          |
+| 3   | Dashboard control plane            | ✅ shipped     | ~8h         | `design/STAGE_3_dashboard_control_plane.md` | 2      |
+| 4   | Persistent rich session store      | ✅ shipped     | ~8h         | `design/STAGE_4_session_store.md`       | 3          |
 | 5   | Local-LLM leverage layer           | 🟦 not started | ~8h         | `design/STAGE_5_llm_leverage.md`        | 1          |
 | 6   | Capability: active time-wasting    | 🟦 not started | ~6h         | `design/STAGE_6_time_wasting.md`        | 1, 5       |
 | 7   | Capability: intent extraction      | 🟦 not started | ~6h         | `design/STAGE_7_intent_extraction.md`   | 1, 4, 5    |
