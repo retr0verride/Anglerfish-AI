@@ -281,26 +281,33 @@ Existing tests updated:
 Quality gates (non-negotiable): ruff clean, mypy --strict clean,
 pytest at >= 90% coverage. Stage 4's gates already lock these in.
 
-## Open questions for review
+## Decisions (locked during operator review)
 
-1. **Tailer poll interval.** 0.5s default is a guess. Too low and
-   we burn CPU on `stat()`; too high and dashboard latency feels
-   sluggish. Acceptable to ship 0.5s and tune later?
-2. **`audit_log_path` setting.** Today `AuditLog()` is constructed
-   with the default `/var/log/anglerfish/audit.jsonl` and never
-   parameterized in production. Add `ANGLERFISH_AUDIT__LOG_PATH`
-   to settings now (the tailer needs the same value), or hard-code
-   the default in both places and defer the env var?
-3. **Placeholder session row from command-before-open.** The
-   matrix above proposes auto-creating a session row from a
-   command event if no prior open event exists. Alternative:
-   queue the command, wait one poll cycle for a late open, then
-   give up and drop. Auto-create is simpler and matches the
-   migration helper's behaviour; queue-and-wait is more
-   conservative. Pick one.
-4. **Tailer process placement.** Inside the dashboard process
-   (proposed) means the tailer dies if the dashboard dies. Inside
-   the bridge process means the writer and reader are colocated
-   but the tailer would need to push to dashboard via IPC (back
-   to Path β). Inside-dashboard is correct for the WebSocket
-   fan-out story; flag in case there's a reason to revisit.
+1. **Tailer poll interval: 0.5s, ship and tune.** A 0.5-second
+   `stat()` against a file on local disk is negligible CPU
+   overhead, and the dashboard's user-perceived freshness
+   tolerance is well under 1s. Hard-code as a module constant;
+   no env knob until production data says otherwise.
+2. **Add `ANGLERFISH_AUDIT__LOG_PATH` now.** Two process domains
+   (the bridge/lure writer side and the dashboard reader side)
+   must agree on this path. Parameterizing once in
+   `AnglerfishSettings` makes that agreement structural rather
+   than coincidental. Both `AuditLog()` construction sites and
+   the tailer read the same setting; an operator who relocates
+   the log on one side automatically updates the other.
+3. **Auto-create placeholder session row from command-before-open.**
+   Symmetric with the Stage 4 `import_jsonl_into_store` helper,
+   and the right call for a security tool: losing a recorded
+   attacker command because a prior lifecycle event was missed
+   is the worst possible outcome. The placeholder row carries
+   the source_ip/username from the command event and a started_at
+   equal to the command's audit timestamp; if a `lure.session_opened`
+   for the same session_id arrives later, the subsequent
+   `upsert_session` overwrites the placeholder with the real
+   metadata.
+4. **Tailer runs in the dashboard process.** The dashboard owns
+   the SessionStore and the WebSocket fan-out; putting the tailer
+   anywhere else would require rebuilding IPC, which is the
+   problem Path α exists to avoid. If the dashboard dies, the UI
+   is dead anyway — the tailer dying with it is correct state
+   alignment, not a failure mode worth defending against.
