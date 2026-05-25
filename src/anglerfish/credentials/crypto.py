@@ -2,7 +2,7 @@
 
 Two derived keys live behind one operator-supplied master key:
 
-* The **AES-GCM key** is the master key itself — used to encrypt the
+* The **AES-GCM key** is the master key itself, used to encrypt the
   ``username`` and ``password`` fields. Each encryption uses a fresh
   random 12-byte nonce. The 16-byte authentication tag is included in
   the ciphertext returned by :mod:`cryptography`'s AESGCM API.
@@ -10,8 +10,8 @@ Two derived keys live behind one operator-supplied master key:
   HMAC-SHA256 over a fixed application-context string. It is used to
   compute deterministic 32-byte fingerprints of the plaintext that
   the database can ``SELECT WHERE ...`` on without decrypting any
-  records — that lets us deduplicate identical attempts and answer
-  unique-counts cheaply.
+  records, so duplicate attempts deduplicate and unique-counts
+  answer cheaply.
 
 Both keys live only in memory; only the master key persists in
 configuration. Splitting the role of "find again" from the role of

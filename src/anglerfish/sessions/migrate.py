@@ -21,8 +21,9 @@ typer parser. The :func:`import_jsonl_into_store` helper is the
 durable interface; the ``docs/RUNBOOK.md`` "Import old forwarder
 JSONL" section documents the one-liner.
 
-Lines that fail Pydantic validation (malformed event, unrecognised
-shape, truncated mid-write) are logged at warning and skipped. The
+Lines that fail JSON parsing (malformed event, truncated mid-write)
+are logged at warning and skipped. Lines whose decoded shape does
+not match a recognised Cowrie event_id are silently ignored. The
 import is best-effort: a partial corpus is better than refusing to
 start on a single bad line.
 """
@@ -90,8 +91,10 @@ async def import_jsonl_into_store(
 
     The store must already be open. The caller owns its lifecycle.
     """
-    # One-shot pre-check; sync filesystem call is fine here because
-    # this is operator-invoked migration, not a hot path.
+    # One-shot operator-invoked migration, not a hot path. The
+    # blocking filesystem calls here and inside _iter_events are
+    # intentional; asyncio.to_thread would be overkill for a helper
+    # that runs once per install under operator supervision.
     if not path.is_file():  # noqa: ASYNC240 - one-shot operator helper
         raise FileNotFoundError(f"JSONL fallback not found at {path!s}")
     if batch_size <= 0:

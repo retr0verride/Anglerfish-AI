@@ -2,12 +2,11 @@
 
 Public surface:
 
-* :class:`CredentialStore` — async SQLite-backed store. Use as an
+* :class:`CredentialStore` - async SQLite-backed store. Use as an
   async context manager or call :meth:`open` / :meth:`aclose`
   explicitly.
-* :class:`CredentialCipher` — exposed so test harnesses and the
-  optional offline-decrypt tool can reuse the same key derivation
-  scheme.
+* :class:`CredentialCipher` - exposed so :func:`rotate_key` and
+  test harnesses can reuse the same key-derivation scheme.
 """
 
 from __future__ import annotations

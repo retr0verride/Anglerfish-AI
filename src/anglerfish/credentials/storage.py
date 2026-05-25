@@ -5,7 +5,7 @@ Repeated attempts of the same tuple update the row's ``last_seen``
 and increment its ``attempt_count``. Deduplication uses HMAC
 fingerprints so the index lookups never have to decrypt rows.
 
-The database file is created with mode ``0o600`` — encrypted at rest
+The database file is created with mode ``0o600``: encrypted at rest
 is necessary but not sufficient; on-disk permissions matter too.
 """
 
@@ -106,7 +106,7 @@ class CredentialStore:
             conn.close()
             raise
         if new_file:
-            # chmod is a partial no-op on Windows; best-effort, never fatal.
+            # Best-effort: Windows ignores chmod.
             with contextlib.suppress(OSError):
                 os.chmod(path, 0o600)
         self._conn = conn
@@ -258,7 +258,9 @@ class CredentialStore:
                 username = self._cipher.decrypt(ct_u, nonce_u)
                 password = self._cipher.decrypt(ct_p, nonce_p)
             except ValueError:
-                continue  # decryption failure means key mismatch — skip safely
+                # Decryption failure means key mismatch (mixed-key rows
+                # from a partial rotation); skip rather than 500.
+                continue
             records.append(
                 CredentialRecord(
                     source_ip=row_source_ip,

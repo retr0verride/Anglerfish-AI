@@ -135,3 +135,26 @@ behaviour but lacks AUDIT.md's "boundary conditions tested" coverage:
 
 Surfaced during the Stage 5 retroactive audit sweep of the lure
 subsystem. Test-only addition; no production code touched. Owner: TBD.
+
+## TODO-6: `_scalar` helpers silently coerce non-numeric to 0
+
+`src/anglerfish/sessions/store.py::SessionStore._scalar` (line ~507)
+and `src/anglerfish/credentials/storage.py::CredentialStore._scalar`
+(line ~321) both run SQL ``COUNT(*)`` / ``SUM(...)`` style queries
+and return ``int(value) if isinstance(value, (int, float)) else 0``.
+
+The ``else 0`` clause cannot fire today: COUNT and SUM return
+numeric types on every backend SQLite supports. The defensive
+fallback masks a class of bug that would otherwise indicate schema
+corruption or a query that was changed to return a non-numeric
+column without updating the caller.
+
+AUDIT.md "Parser-Validator -> Validation" calls out "no silent
+truncation, no bare except". A correct fix raises a typed exception
+(``TypeError(f"expected numeric scalar, got {type(value).__name__}")``)
+on the non-numeric path. Risk: any caller relying on the silent-zero
+behaviour for schema-changed columns breaks. Audit pass declined to
+make the behaviour change inline; logged here for a follow-up.
+
+Owner: TBD. Surfaced during the Stage 5 retroactive audit sweep of
+the sessions + credentials subsystems.

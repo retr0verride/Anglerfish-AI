@@ -5,11 +5,12 @@ re-encrypts under a new cipher, and atomically swaps the database
 file with the new one. The old database is preserved as
 ``<path>.bak`` so a failed rotation can be reverted.
 
-This is **synchronous and offline** by design — the bridge and
+This is **synchronous and offline** by design: the bridge and
 dashboard must be stopped before invoking it. Rotation while the
 store is being written would risk losing concurrent writes. The CLI
-command (``anglerfish credentials rotate-key``) refuses to proceed
-when it can detect a live SQLite WAL.
+command (``anglerfish credentials rotate-key``) prompts the operator
+to stop services and requires explicit ``--yes`` (or interactive
+confirmation) before running.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def rotate_key(
        DB into place.
 
     Rows whose ciphertext cannot be decrypted with ``old_cipher`` are
-    skipped and counted — this lets operators recover from a partial
+    skipped and counted, so operators can recover from a partial
     earlier rotation that left mixed-key rows.
 
     Raises:
@@ -181,7 +182,7 @@ def rotate_key(
         raise RotationError(f"rotation failed: {exc}") from exc
 
     # Atomic-ish swap. POSIX rename(2) is atomic on the same filesystem,
-    # but two renames in a row aren't transactional — a crash between them
+    # but two renames in a row are not transactional: a crash between them
     # leaves db_path missing but recoverable from backup_path.
     try:
         shutil.move(str(db_path), str(backup_path))

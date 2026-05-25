@@ -26,7 +26,7 @@ import logging
 import os
 import sqlite3
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Self
 from uuid import UUID
 
@@ -546,6 +546,4 @@ class SessionStore:
 
 
 def _utcnow_iso() -> str:
-    from datetime import UTC
-
     return datetime.now(tz=UTC).isoformat()
