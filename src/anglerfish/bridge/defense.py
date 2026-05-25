@@ -196,7 +196,7 @@ def _coerce_specs(items: Any, kind: str) -> list[PatternSpec]:
         if not isinstance(category, str) or not category:
             raise ValueError(f"{kind}[{i}] 'category' must be a non-empty string")
         severity = item["severity"]
-        if not isinstance(severity, (int, float)) or isinstance(severity, bool):
+        if isinstance(severity, bool) or not isinstance(severity, (int, float)):
             raise ValueError(f"{kind}[{i}] 'severity' must be a number")
         sev_f = float(severity)
         if not 0.0 <= sev_f <= 1.0:
@@ -307,7 +307,7 @@ class OutputFilter:
         so a real LLM response never silently exceeds the scan window
         in a well-formed config; when it does (operator override at
         runtime, or model misbehaviour producing more chars than the
-        OllamaClient cap), the returned verdict carries
+        LLMClient cap), the returned verdict carries
         ``truncated=True`` and the bridge service audit-logs
         ``bridge.defense_scan_truncated``.
         """
@@ -565,7 +565,12 @@ class ModelIntegrity:
         try:
             actual_raw = await asyncio.to_thread(self._read_manifest_layer_digest)
         except (FileNotFoundError, ValueError) as exc:
-            # ValueError catches json.JSONDecodeError too (subclass).
+            # ValueError covers both json.JSONDecodeError (subclass)
+            # and the schema-shape ValueErrors the reader raises for
+            # missing/malformed layer entries. FileNotFoundError does
+            # not derive from ValueError, so it is named separately
+            # rather than caught via a broader OSError clause that
+            # would also swallow permission errors and similar.
             self._audit_log.record(
                 "bridge.model_integrity_failed",
                 reason=f"could not read manifest layer digest: {exc}",

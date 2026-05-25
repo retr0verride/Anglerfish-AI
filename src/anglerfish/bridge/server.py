@@ -23,6 +23,7 @@ the credentials store, not by this server.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -81,7 +82,11 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._expected_secret = expected_secret
 
-    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
+    async def dispatch(  # type: ignore[no-untyped-def]  # starlette's dispatch signature uses untyped Callable for call_next
+        self,
+        request: Request,
+        call_next,
+    ):
         if request.url.path in _OPEN_PATHS:
             return await call_next(request)
 
@@ -110,8 +115,6 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
 
 def _constant_time_equals(a: str, b: str) -> bool:
     """Length-aware constant-time string compare to resist timing oracles."""
-    import hmac
-
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 

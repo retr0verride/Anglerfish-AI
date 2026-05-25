@@ -169,10 +169,6 @@ class AIBridgeService:
             return BridgeResponse(text="", source=ResponseSource.AI, latency_ms=0.0)
 
         start = self._monotonic()
-        # Note: `text` and `source` types are inferred from both branches
-        # (try / except). The explicit annotations that used to live here
-        # are no longer necessary since the injection branch above
-        # establishes the types via destructuring assignment.
         try:
             async with self._limiter.slot(session.session_id):
                 messages = build_messages(
@@ -229,8 +225,7 @@ class AIBridgeService:
         session: SessionContext,
         verdict: DefenseVerdict,
     ) -> None:
-        """Audit-log a defense trigger. Asymmetric observability: we
-        always know defense fired, the attacker never does."""
+        """Record a ``bridge.defense_fired`` audit event for ``verdict``."""
         self._audit_log.record(
             "bridge.defense_fired",
             detector=verdict.detector,

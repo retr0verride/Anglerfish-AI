@@ -3,10 +3,11 @@
 Public surface:
 
 - :class:`AIBridgeService` — orchestrates sanitisation, prompting,
-  rate-limiting, the Ollama call, fallback selection, and session
+  rate-limiting, the LLM call, fallback selection, and session
   recording.
-- :class:`OllamaClient` — typed async HTTP client for the Ollama chat
-  API.
+- :class:`LLMClient` — typed async chat client; new code imports it
+  from :mod:`anglerfish.llm` directly. ``OllamaClient`` survives
+  here as a one-release-cycle deprecation alias.
 - :class:`SessionContext` — per-attacker shell state (cwd, history).
 - :class:`BridgeRateLimiter` — combined global concurrency cap and
   per-session token bucket.
@@ -40,12 +41,15 @@ from anglerfish.bridge.server import (
 from anglerfish.bridge.service import AIBridgeService
 from anglerfish.bridge.session import SessionContext
 
-# Stage 5 moved these to anglerfish.llm; importing them through the
-# anglerfish.bridge.client deprecation shim would re-enter this
-# package init mid-load (anglerfish.llm.client imports from
-# anglerfish.bridge.errors). Source from the new home directly.
-from anglerfish.llm import ChatMessage
-from anglerfish.llm import LLMClient as OllamaClient
+# anglerfish.llm.client imports from anglerfish.bridge.errors, so
+# pulling LLMClient through the anglerfish.bridge.client deprecation
+# shim would re-enter this package init mid-load. Source from the
+# new home directly.
+from anglerfish.llm import ChatMessage, LLMClient
+
+# Stage 5 deprecation alias — remove with anglerfish.bridge.client
+# in the next release.
+OllamaClient = LLMClient
 
 __all__ = [
     "AIBridgeService",
@@ -55,6 +59,7 @@ __all__ = [
     "CommandRequest",
     "CommandResponse",
     "GlobalQueueTimeoutError",
+    "LLMClient",
     "OllamaClient",
     "OllamaResponseError",
     "OllamaUnavailableError",
