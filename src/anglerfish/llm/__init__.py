@@ -24,11 +24,12 @@ Public surface:
 
 from __future__ import annotations
 
-from anglerfish.llm.client import ChatMessage, ChatResult, LLMClient, TokenUsage
+from anglerfish.llm.client import ChatChunk, ChatMessage, ChatResult, LLMClient, TokenUsage
 from anglerfish.llm.roles import LLMRole
 from anglerfish.llm.warmup import WarmPool, WarmStatus
 
 __all__ = [
+    "ChatChunk",
     "ChatMessage",
     "ChatResult",
     "LLMClient",

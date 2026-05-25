@@ -23,7 +23,8 @@ Errors map identically to the original client:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal, Self
 
 import httpx
@@ -33,7 +34,7 @@ from anglerfish.config.models import OllamaConfig
 from anglerfish.llm.errors import OllamaResponseError, OllamaUnavailableError
 from anglerfish.llm.roles import LLMRole
 
-__all__ = ["ChatMessage", "ChatResult", "LLMClient", "TokenUsage"]
+__all__ = ["ChatChunk", "ChatMessage", "ChatResult", "LLMClient", "TokenUsage"]
 
 
 _USER_AGENT = "anglerfish-ai/0.1.0"
@@ -69,6 +70,23 @@ class ChatResult(BaseModel):
 
     content: str
     usage: TokenUsage = Field(default_factory=TokenUsage)
+
+
+class ChatChunk(BaseModel):
+    """One streamed slice of a chat response.
+
+    Yielded by :meth:`LLMClient.stream_chat`. ``delta`` is the
+    incremental token text from Ollama's chat NDJSON. The terminal
+    chunk has ``done=True``, a typically-empty ``delta``, and
+    ``usage`` populated from Ollama's ``prompt_eval_count`` +
+    ``eval_count`` fields.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    delta: str
+    done: bool = False
+    usage: TokenUsage | None = None
 
 
 class LLMClient:
@@ -169,6 +187,83 @@ class LLMClient:
                 "Ollama response 'message.content' is not a string",
             )
         return ChatResult(content=content, usage=_parse_usage(data))
+
+    async def stream_chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        role: LLMRole = LLMRole.FAST,
+    ) -> AsyncIterator[ChatChunk]:
+        """Stream a chat response from Ollama as :class:`ChatChunk` objects.
+
+        Issues ``POST /api/chat`` with ``stream=True``; iterates the
+        NDJSON response, yielding one :class:`ChatChunk` per line. The
+        terminal chunk carries ``done=True`` and a populated
+        :class:`TokenUsage`.
+
+        Network or protocol failures before the first chunk surface as
+        the same exception types :meth:`chat` raises
+        (:class:`OllamaUnavailableError` / :class:`OllamaResponseError`).
+        Failures *during* iteration (transport reset, JSON parse error
+        on a chunk) raise :class:`OllamaUnavailableError` to the caller
+        so callers degrade to fallback uniformly.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model_for(role),
+            "stream": True,
+            "messages": [m.model_dump() for m in messages],
+            "options": {
+                "temperature": self._config.temperature,
+                "top_p": self._config.top_p,
+                "num_predict": self._config.max_response_tokens,
+            },
+        }
+        try:
+            async with self._client.stream("POST", "/api/chat", json=payload) as response:
+                if 500 <= response.status_code < 600:
+                    raise OllamaUnavailableError(
+                        f"Ollama stream returned server error {response.status_code}",
+                    )
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    body_preview = body[:200].decode("utf-8", errors="replace")
+                    raise OllamaResponseError(
+                        f"Ollama stream returned client error {response.status_code}: "
+                        f"{body_preview!r}",
+                    )
+                async for chunk in self._iter_stream_lines(response):
+                    yield chunk
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailableError(
+                f"Ollama stream failed: {type(exc).__name__}: {exc}",
+            ) from exc
+
+    @staticmethod
+    async def _iter_stream_lines(response: httpx.Response) -> AsyncIterator[ChatChunk]:
+        """Parse Ollama's NDJSON stream into :class:`ChatChunk` objects."""
+        async for raw_line in response.aiter_lines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except ValueError as exc:
+                raise OllamaUnavailableError(
+                    f"Ollama stream chunk was not valid JSON: {exc}",
+                ) from exc
+            if not isinstance(data, dict):
+                raise OllamaUnavailableError(
+                    f"Ollama stream chunk is not a JSON object: {type(data).__name__}",
+                )
+            message = data.get("message")
+            delta = ""
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    delta = content
+            done = bool(data.get("done", False))
+            usage: TokenUsage | None = _parse_usage(data) if done else None
+            yield ChatChunk(delta=delta, done=done, usage=usage)
 
     async def warm(self, role: LLMRole) -> None:
         """Pin the model for ``role`` in Ollama's memory.
