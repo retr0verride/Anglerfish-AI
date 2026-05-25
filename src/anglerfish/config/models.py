@@ -513,10 +513,10 @@ class DefenseConfig(BaseModel):
             "response/input caps."
         ),
     )
-    model_expected_hash: SecretStr | None = Field(
+    fast_model_expected_hash: SecretStr | None = Field(
         default=None,
         description=(
-            "Expected SHA256 of the Ollama model's blob layer digest. "
+            "Expected SHA256 of the fast tier model's blob layer digest. "
             "When set, bridge verifies at startup and refuses to start "
             "on mismatch. When unset, bridge logs a loud warning and "
             "writes a bridge.model_integrity_skipped audit entry on "
@@ -524,6 +524,16 @@ class DefenseConfig(BaseModel):
             "manifest with: jq -r '.layers[] | "
             'select(.mediaType == "application/vnd.ollama.image.model") '
             "| .digest' < ~/.ollama/models/manifests/.../<tag>"
+        ),
+    )
+    deep_model_expected_hash: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Expected SHA256 of the deep tier model's blob layer digest. "
+            "Same shape and capture procedure as fast_model_expected_hash. "
+            "Optional; when unset the deep model verification is skipped "
+            "(operators that only use the fast tier in production can "
+            "leave this null until Stage 7+ consumers come online)."
         ),
     )
     pattern_overrides_path: Path | None = Field(
@@ -540,16 +550,35 @@ class DefenseConfig(BaseModel):
         default=None,
         description=(
             "Filesystem path to Ollama's `models/manifests` directory. "
-            "Required when model_expected_hash is set. Common values: "
-            "/usr/share/ollama/.ollama/models/manifests (Linux, official "
-            "installer running as `ollama` user); ~/.ollama/models/manifests "
-            "(user-installed Ollama). The bridge reads the layer digest from "
+            "Required when any of *_model_expected_hash is set. Common "
+            "values: /usr/share/ollama/.ollama/models/manifests (Linux, "
+            "official installer running as `ollama` user); "
+            "~/.ollama/models/manifests (user-installed Ollama). The "
+            "bridge reads the layer digest from "
             "<manifest_dir>/registry.ollama.ai/library/<model>/<tag> at "
-            "startup."
+            "startup, once per configured role."
         ),
     )
 
-    @field_validator("model_expected_hash")
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_model_expected_hash_shim(cls, data: Any) -> Any:
+        """Accept the pre-Stage-5 `model_expected_hash=` key.
+
+        Mirrors :meth:`OllamaConfig._legacy_model_shim`: operators
+        who pinned a single model in Stage 1.4-4.x have
+        ``ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=<digest>`` in their
+        env file. Route to ``fast_model_expected_hash`` if the
+        explicit per-role key was not supplied.
+        """
+        if not isinstance(data, dict) or "model_expected_hash" not in data:
+            return data
+        new_data = dict(data)
+        legacy_value = new_data.pop("model_expected_hash")
+        new_data.setdefault("fast_model_expected_hash", legacy_value)
+        return new_data
+
+    @field_validator("fast_model_expected_hash", "deep_model_expected_hash")
     @classmethod
     def _validate_model_hash(cls, v: SecretStr | None) -> SecretStr | None:
         if v is None:
@@ -561,7 +590,7 @@ class DefenseConfig(BaseModel):
         candidate = raw.removeprefix("sha256:").lower()
         if len(candidate) != 64 or not all(c in "0123456789abcdef" for c in candidate):
             raise ValueError(
-                "defense.model_expected_hash must be a SHA256 hex digest "
+                "defense *_model_expected_hash must be a SHA256 hex digest "
                 "(64 lowercase hex chars), optionally prefixed with "
                 "'sha256:'. Got: " + (raw[:80] + "..." if len(raw) > 80 else raw),
             )
@@ -569,14 +598,16 @@ class DefenseConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_integrity_requires_manifest_dir(self) -> Self:
-        # Enforce the cross-field invariant: if the operator is asking
-        # for integrity verification, they must also tell us where the
-        # Ollama manifest lives — otherwise the check would silently
-        # fail to find anything and produce a confusing FileNotFoundError
-        # at startup. Fail loudly at config time instead.
-        if self.model_expected_hash is not None and self.ollama_manifest_dir is None:
+        # Cross-field invariant: any configured hash needs the manifest
+        # directory. Without it the check silently fails to find anything
+        # and produces a confusing FileNotFoundError at startup. Fail
+        # loudly at config time instead.
+        any_hash = (
+            self.fast_model_expected_hash is not None or self.deep_model_expected_hash is not None
+        )
+        if any_hash and self.ollama_manifest_dir is None:
             raise ValueError(
-                "defense.model_expected_hash is set but defense.ollama_manifest_dir "
+                "defense.*_model_expected_hash is set but defense.ollama_manifest_dir "
                 "is not. Set ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR to the path "
                 "of Ollama's models/manifests directory (commonly "
                 "/usr/share/ollama/.ollama/models/manifests for systemd installs "

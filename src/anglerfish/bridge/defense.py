@@ -32,7 +32,7 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from anglerfish.bridge.defense_patterns import (
     INJECTION_PATTERNS,
@@ -40,7 +40,7 @@ from anglerfish.bridge.defense_patterns import (
     PatternSpec,
     compile_pattern,
 )
-from anglerfish.config.models import DefenseConfig
+from anglerfish.config.models import DefenseConfig, OllamaConfig
 
 if TYPE_CHECKING:
     from anglerfish.audit import AuditLog
@@ -52,10 +52,26 @@ __all__ = [
     "ModelIntegrityError",
     "OutputFilter",
     "load_pattern_overrides",
+    "verify_all_roles",
 ]
 
 
 _logger = logging.getLogger(__name__)
+
+
+class _Unset:
+    """Sentinel for the ModelIntegrity ``expected_hash`` constructor arg.
+
+    ``None`` already has a meaning at this boundary - "the role has no
+    pinned hash, emit the skipped event" - so we cannot use it as the
+    "not provided, fall back to config" default. Slice 2 of Stage 5
+    needs both behaviours simultaneously: single-role callers expect
+    the config fallback; ``verify_all_roles`` explicitly passes
+    ``None`` for unpinned roles.
+    """
+
+
+_UNSET: _Unset = _Unset()
 
 # Ollama's media-type identifier for the model blob inside a manifest's
 # layers array. Other layer types (template, license, params, system)
@@ -469,13 +485,18 @@ class ModelIntegrity:
         audit_log: AuditLog,
         *,
         manifest_root: Path | None = None,
+        expected_hash: SecretStr | None | _Unset = _UNSET,
     ) -> None:
         """Build the checker.
 
-        ``ollama_model`` is the model tag from
-        :attr:`OllamaConfig.model` (e.g. ``"qwen2.5-coder:7b-instruct"``).
-        Models without an explicit ``:tag`` default to ``:latest`` per
-        Ollama convention.
+        ``ollama_model`` is the Ollama tag for the role being verified
+        (fast or deep), e.g. ``"qwen3:14b"``. Models without an
+        explicit ``:tag`` default to ``:latest`` per Ollama convention.
+
+        ``expected_hash`` is the SHA256 the model is expected to match.
+        Defaults to :attr:`DefenseConfig.fast_model_expected_hash` for
+        backward compatibility with single-model call sites; per-role
+        wiring passes the per-role hash explicitly.
 
         ``manifest_root`` overrides
         :attr:`DefenseConfig.ollama_manifest_dir` — primarily for tests
@@ -489,6 +510,16 @@ class ModelIntegrity:
             self._manifest_root = manifest_root
         else:
             self._manifest_root = config.ollama_manifest_dir or Path()
+        # Stage 5 slice 2 made the hash a per-role construction
+        # parameter rather than reading config.model_expected_hash.
+        # The _UNSET sentinel keeps single-role callers working (they
+        # get config.fast_model_expected_hash) while letting
+        # verify_all_roles pass an explicit None to mean "this role
+        # has no pinned hash, emit skipped".
+        if isinstance(expected_hash, _Unset):
+            self._expected_hash: SecretStr | None = config.fast_model_expected_hash
+        else:
+            self._expected_hash = expected_hash
 
     @property
     def manifest_root(self) -> Path:
@@ -515,7 +546,7 @@ class ModelIntegrity:
           ``bridge.model_integrity_failed`` and raise
           :class:`ModelIntegrityError`. The bridge must exit non-zero.
         """
-        expected = self._config.model_expected_hash
+        expected = self._expected_hash
         if expected is None:
             _logger.warning(
                 "bridge starting WITHOUT model integrity check "
@@ -615,3 +646,40 @@ class ModelIntegrity:
         else:
             name, tag = self._ollama_model, "latest"
         return self._manifest_root / "registry.ollama.ai" / "library" / name / tag
+
+
+async def verify_all_roles(
+    *,
+    defense_config: DefenseConfig,
+    ollama_config: OllamaConfig,
+    audit_log: AuditLog,
+    manifest_root: Path | None = None,
+) -> None:
+    """Run :meth:`ModelIntegrity.verify` for every configured LLM role.
+
+    Stage 5 ships two roles (fast, deep). For each role, this helper
+    constructs a :class:`ModelIntegrity` checker with the role's
+    configured model tag and per-role expected hash, then awaits
+    verification. Hash mismatch on any role raises
+    :class:`ModelIntegrityError` and aborts further checks — the
+    bridge must exit non-zero on the first failure rather than try
+    to continue with a partially-verified runtime.
+
+    Roles whose expected hash is unset emit
+    ``bridge.model_integrity_skipped`` (the existing single-role
+    semantics) so operators that pin only the fast model in early
+    rollouts still see the audit trail for the unpinned role.
+    """
+    role_pairs = (
+        (ollama_config.fast_model, defense_config.fast_model_expected_hash),
+        (ollama_config.deep_model, defense_config.deep_model_expected_hash),
+    )
+    for model_tag, expected_hash in role_pairs:
+        checker = ModelIntegrity(
+            defense_config,
+            model_tag,
+            audit_log,
+            manifest_root=manifest_root,
+            expected_hash=expected_hash,
+        )
+        await checker.verify()

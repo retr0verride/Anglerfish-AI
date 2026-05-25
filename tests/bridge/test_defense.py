@@ -24,9 +24,10 @@ from anglerfish.bridge.defense import (
     ModelIntegrityError,
     OutputFilter,
     load_pattern_overrides,
+    verify_all_roles,
 )
 from anglerfish.bridge.defense_patterns import PatternSpec
-from anglerfish.config.models import DefenseConfig
+from anglerfish.config.models import DefenseConfig, OllamaConfig
 
 
 def _config(
@@ -752,7 +753,7 @@ def _integrity_config(
     manifest_dir: Path | None,
 ) -> DefenseConfig:
     return DefenseConfig(
-        model_expected_hash=SecretStr(expected_hash) if expected_hash else None,
+        fast_model_expected_hash=SecretStr(expected_hash) if expected_hash else None,
         ollama_manifest_dir=manifest_dir,
     )
 
@@ -1021,3 +1022,116 @@ async def test_model_integrity_manifest_root_override_takes_precedence(
     )
     await integrity.verify()  # should succeed via override path
     assert audit.events[-1][0] == "bridge.model_integrity_verified"
+
+
+# ---------------------------------------------------------------------------
+# verify_all_roles - Stage 5 slice 2 multi-role wrapper
+# ---------------------------------------------------------------------------
+
+
+async def test_verify_all_roles_passes_when_both_match(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    # Same manifest_root holds both manifests.
+    root = _make_manifest(
+        tmp_path,
+        "qwen3",
+        "14b",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    _make_manifest(
+        tmp_path,
+        "phi-4",
+        "latest",
+        f"sha256:{_OTHER_HASH}",
+    )
+    defense_cfg = DefenseConfig(
+        fast_model_expected_hash=SecretStr(_EXPECTED_HASH),
+        deep_model_expected_hash=SecretStr(_OTHER_HASH),
+        ollama_manifest_dir=root,
+    )
+    ollama_cfg = OllamaConfig(fast_model="qwen3:14b", deep_model="phi-4")
+    await verify_all_roles(
+        defense_config=defense_cfg,
+        ollama_config=ollama_cfg,
+        audit_log=audit,  # type: ignore[arg-type]
+        manifest_root=root,
+    )
+    types = [e[0] for e in audit.events]
+    assert types.count("bridge.model_integrity_verified") == 2
+
+
+async def test_verify_all_roles_aborts_on_first_mismatch(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    # Fast model has wrong digest in its manifest; deep is fine.
+    root = _make_manifest(
+        tmp_path,
+        "qwen3",
+        "14b",
+        f"sha256:{_OTHER_HASH}",
+    )
+    _make_manifest(
+        tmp_path,
+        "phi-4",
+        "latest",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    defense_cfg = DefenseConfig(
+        fast_model_expected_hash=SecretStr(_EXPECTED_HASH),
+        deep_model_expected_hash=SecretStr(_EXPECTED_HASH),
+        ollama_manifest_dir=root,
+    )
+    ollama_cfg = OllamaConfig(fast_model="qwen3:14b", deep_model="phi-4")
+    with pytest.raises(ModelIntegrityError):
+        await verify_all_roles(
+            defense_config=defense_cfg,
+            ollama_config=ollama_cfg,
+            audit_log=audit,  # type: ignore[arg-type]
+            manifest_root=root,
+        )
+    # First-failure semantics: deep was never checked.
+    types = [e[0] for e in audit.events]
+    assert "bridge.model_integrity_failed" in types
+    assert "bridge.model_integrity_verified" not in types
+
+
+async def test_verify_all_roles_skips_roles_with_no_hash(tmp_path: Path) -> None:
+    """Mixed config: fast pinned, deep unset. fast verifies; deep
+    emits the existing model_integrity_skipped event."""
+    audit = _MockAuditLog()
+    root = _make_manifest(
+        tmp_path,
+        "qwen3",
+        "14b",
+        f"sha256:{_EXPECTED_HASH}",
+    )
+    defense_cfg = DefenseConfig(
+        fast_model_expected_hash=SecretStr(_EXPECTED_HASH),
+        ollama_manifest_dir=root,
+    )
+    ollama_cfg = OllamaConfig(fast_model="qwen3:14b", deep_model="phi-4")
+    await verify_all_roles(
+        defense_config=defense_cfg,
+        ollama_config=ollama_cfg,
+        audit_log=audit,  # type: ignore[arg-type]
+        manifest_root=root,
+    )
+    types = [e[0] for e in audit.events]
+    assert "bridge.model_integrity_verified" in types
+    assert "bridge.model_integrity_skipped" in types
+
+
+async def test_verify_all_roles_skips_when_both_unset(tmp_path: Path) -> None:
+    audit = _MockAuditLog()
+    # No hashes configured: just construct the config without
+    # ollama_manifest_dir (the cross-field invariant only requires it
+    # when a hash is set).
+    defense_cfg = DefenseConfig()
+    ollama_cfg = OllamaConfig(fast_model="qwen3:14b", deep_model="phi-4")
+    await verify_all_roles(
+        defense_config=defense_cfg,
+        ollama_config=ollama_cfg,
+        audit_log=audit,  # type: ignore[arg-type]
+        manifest_root=tmp_path,
+    )
+    types = [e[0] for e in audit.events]
+    assert types == ["bridge.model_integrity_skipped"] * 2

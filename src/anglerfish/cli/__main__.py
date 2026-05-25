@@ -127,7 +127,7 @@ def bridge_serve(
 
     from anglerfish.audit import AuditLog
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
-    from anglerfish.bridge.defense import ModelIntegrity, ModelIntegrityError
+    from anglerfish.bridge.defense import ModelIntegrityError, verify_all_roles
 
     try:
         settings = load_settings()
@@ -139,21 +139,27 @@ def bridge_serve(
     # results (startup) both write to the same JSONL append-only log.
     audit_log = AuditLog(settings.audit.log_path)
     ai_client = OllamaClient(settings.ollama)
-    # Slice 1 of Stage 5 verifies just the fast model. Slice 2 extends
-    # ModelIntegrity to walk every configured role.
-    integrity = ModelIntegrity(
-        settings.defense,
-        settings.ollama.fast_model,
-        audit_log,
-    )
 
-    # Pre-uvicorn integrity check: run BEFORE uvicorn.run() so any
+    # Pre-uvicorn integrity check: walk every configured LLM role
+    # (Stage 5 ships fast + deep). Runs BEFORE uvicorn.run() so any
     # failure surfaces as a structured Console panel + clean
     # typer.Exit(2), not a raw traceback in journalctl. The lifespan
     # path stays available for tests of create_bridge_app in isolation
     # (we pass integrity=None below so it doesn't double-check).
+    # Per-role budget: 10s times number of roles (two today).
+    roles_verified = 2
+    timeout_s = 10.0 * roles_verified
     try:
-        asyncio.run(asyncio.wait_for(integrity.verify(), timeout=10.0))
+        asyncio.run(
+            asyncio.wait_for(
+                verify_all_roles(
+                    defense_config=settings.defense,
+                    ollama_config=settings.ollama,
+                    audit_log=audit_log,
+                ),
+                timeout=timeout_s,
+            ),
+        )
     except ModelIntegrityError as exc:
         Console().print(
             Panel(str(exc), title="[red]Model integrity check failed[/red]"),
@@ -162,8 +168,9 @@ def bridge_serve(
     except TimeoutError as exc:
         Console().print(
             Panel(
-                f"Model integrity check timed out after 10s. Check that "
-                f"ollama_manifest_dir ({integrity.manifest_root}) is reachable.",
+                f"Model integrity check timed out after {timeout_s}s. Check that "
+                f"ollama_manifest_dir ({settings.defense.ollama_manifest_dir}) "
+                "is reachable.",
                 title="[red]Model integrity check timed out[/red]",
             ),
         )

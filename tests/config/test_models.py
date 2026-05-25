@@ -428,7 +428,7 @@ def test_defense_defaults() -> None:
     assert cfg.injection_filter_enabled is True
     assert cfg.injection_threshold == pytest.approx(0.7)
     assert cfg.scan_max_chars == 8192
-    assert cfg.model_expected_hash is None
+    assert cfg.fast_model_expected_hash is None
     assert cfg.pattern_overrides_path is None
     assert cfg.ollama_manifest_dir is None
 
@@ -477,37 +477,37 @@ _MANIFEST_DIR = Path("/usr/share/ollama/.ollama/models/manifests")
 
 def test_defense_model_hash_accepts_bare_sha256() -> None:
     cfg = DefenseConfig(
-        model_expected_hash=SecretStr(_VALID_SHA256),
+        fast_model_expected_hash=SecretStr(_VALID_SHA256),
         ollama_manifest_dir=_MANIFEST_DIR,
     )
-    assert cfg.model_expected_hash is not None
-    assert cfg.model_expected_hash.get_secret_value() == _VALID_SHA256
+    assert cfg.fast_model_expected_hash is not None
+    assert cfg.fast_model_expected_hash.get_secret_value() == _VALID_SHA256
 
 
 def test_defense_model_hash_accepts_sha256_prefix() -> None:
     cfg = DefenseConfig(
-        model_expected_hash=SecretStr(_VALID_SHA256_PREFIXED),
+        fast_model_expected_hash=SecretStr(_VALID_SHA256_PREFIXED),
         ollama_manifest_dir=_MANIFEST_DIR,
     )
-    assert cfg.model_expected_hash is not None
+    assert cfg.fast_model_expected_hash is not None
     # The validator preserves the raw form; downstream code normalizes.
-    assert cfg.model_expected_hash.get_secret_value() == _VALID_SHA256_PREFIXED
+    assert cfg.fast_model_expected_hash.get_secret_value() == _VALID_SHA256_PREFIXED
 
 
 def test_defense_model_hash_rejects_wrong_length() -> None:
     with pytest.raises(ValidationError, match="SHA256 hex"):
-        DefenseConfig(model_expected_hash=SecretStr("a" * 63))
+        DefenseConfig(fast_model_expected_hash=SecretStr("a" * 63))
     with pytest.raises(ValidationError, match="SHA256 hex"):
-        DefenseConfig(model_expected_hash=SecretStr("a" * 65))
+        DefenseConfig(fast_model_expected_hash=SecretStr("a" * 65))
     with pytest.raises(ValidationError, match="SHA256 hex"):
-        DefenseConfig(model_expected_hash=SecretStr("sha256:" + "a" * 63))
+        DefenseConfig(fast_model_expected_hash=SecretStr("sha256:" + "a" * 63))
 
 
 def test_defense_model_hash_rejects_non_hex() -> None:
     with pytest.raises(ValidationError, match="SHA256 hex"):
-        DefenseConfig(model_expected_hash=SecretStr("g" * 64))  # 'g' isn't hex
+        DefenseConfig(fast_model_expected_hash=SecretStr("g" * 64))  # 'g' isn't hex
     with pytest.raises(ValidationError, match="SHA256 hex"):
-        DefenseConfig(model_expected_hash=SecretStr("z" * 64))  # 'z' isn't hex
+        DefenseConfig(fast_model_expected_hash=SecretStr("z" * 64))  # 'z' isn't hex
 
 
 def test_defense_model_hash_accepts_uppercase_normalized() -> None:
@@ -516,15 +516,15 @@ def test_defense_model_hash_accepts_uppercase_normalized() -> None:
     # accepting both prevents copy-paste friction with no security loss
     # (the underlying hash is the same value either way).
     cfg = DefenseConfig(
-        model_expected_hash=SecretStr("A" * 64),
+        fast_model_expected_hash=SecretStr("A" * 64),
         ollama_manifest_dir=_MANIFEST_DIR,
     )
-    assert cfg.model_expected_hash is not None
+    assert cfg.fast_model_expected_hash is not None
 
 
 def test_defense_model_hash_rejects_empty() -> None:
     with pytest.raises(ValidationError, match="SHA256 hex"):
-        DefenseConfig(model_expected_hash=SecretStr(""))
+        DefenseConfig(fast_model_expected_hash=SecretStr(""))
 
 
 def test_defense_pattern_overrides_path_optional() -> None:
@@ -540,22 +540,61 @@ def test_defense_ollama_manifest_dir_optional_alone() -> None:
     assert cfg.ollama_manifest_dir == Path(
         "/usr/share/ollama/.ollama/models/manifests",
     )
-    assert cfg.model_expected_hash is None
+    assert cfg.fast_model_expected_hash is None
 
 
 def test_defense_hash_requires_manifest_dir() -> None:
     """Cross-field invariant: if hash is set, manifest dir must be too."""
     with pytest.raises(ValidationError, match="ollama_manifest_dir"):
-        DefenseConfig(model_expected_hash=SecretStr(_VALID_SHA256))
+        DefenseConfig(fast_model_expected_hash=SecretStr(_VALID_SHA256))
 
 
 def test_defense_hash_with_manifest_dir_accepted() -> None:
     cfg = DefenseConfig(
-        model_expected_hash=SecretStr(_VALID_SHA256),
+        fast_model_expected_hash=SecretStr(_VALID_SHA256),
         ollama_manifest_dir=_MANIFEST_DIR,
     )
-    assert cfg.model_expected_hash is not None
+    assert cfg.fast_model_expected_hash is not None
     assert cfg.ollama_manifest_dir == _MANIFEST_DIR
+
+
+def test_defense_legacy_model_expected_hash_routes_to_fast() -> None:
+    """Pre-Stage-5 operators set ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH;
+    the backward-compat shim routes it to fast_model_expected_hash."""
+    cfg = DefenseConfig(
+        model_expected_hash=SecretStr(_VALID_SHA256),  # type: ignore[call-arg]
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
+    assert cfg.fast_model_expected_hash is not None
+    assert cfg.fast_model_expected_hash.get_secret_value() == _VALID_SHA256
+
+
+def test_defense_explicit_fast_wins_over_legacy_alias() -> None:
+    explicit = _VALID_SHA256
+    legacy = "b" * 64
+    cfg = DefenseConfig(
+        model_expected_hash=SecretStr(legacy),  # type: ignore[call-arg]
+        fast_model_expected_hash=SecretStr(explicit),
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
+    assert cfg.fast_model_expected_hash is not None
+    assert cfg.fast_model_expected_hash.get_secret_value() == explicit
+
+
+def test_defense_deep_model_expected_hash_independent() -> None:
+    """Each role's hash is configured separately. Setting only the
+    deep hash also triggers the manifest-dir-required cross-field check."""
+    cfg = DefenseConfig(
+        deep_model_expected_hash=SecretStr(_VALID_SHA256),
+        ollama_manifest_dir=_MANIFEST_DIR,
+    )
+    assert cfg.fast_model_expected_hash is None
+    assert cfg.deep_model_expected_hash is not None
+
+
+def test_defense_deep_hash_alone_still_requires_manifest_dir() -> None:
+    with pytest.raises(ValidationError, match="ollama_manifest_dir"):
+        DefenseConfig(deep_model_expected_hash=SecretStr(_VALID_SHA256))
 
 
 def test_defense_frozen() -> None:

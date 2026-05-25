@@ -34,7 +34,7 @@ def test_settings_direct_construction(
     assert s.defense.output_filter_enabled is True
     assert s.defense.injection_filter_enabled is True
     assert s.defense.injection_threshold == pytest.approx(0.7)
-    assert s.defense.model_expected_hash is None
+    assert s.defense.fast_model_expected_hash is None
 
 
 def test_settings_missing_required_fields_fails() -> None:
