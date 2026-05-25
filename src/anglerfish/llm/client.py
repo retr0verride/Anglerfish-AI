@@ -170,6 +170,39 @@ class LLMClient:
             )
         return ChatResult(content=content, usage=_parse_usage(data))
 
+    async def warm(self, role: LLMRole) -> None:
+        """Pin the model for ``role`` in Ollama's memory.
+
+        Issues a no-op ``POST /api/generate`` with ``prompt=""`` and
+        ``keep_alive=-1`` so Ollama keeps the model resident until the
+        next call. Used by :class:`anglerfish.llm.warmup.WarmPool` at
+        startup and on a periodic refresh cycle. Raises the same error
+        types as :meth:`chat`, but always with the ``/api/generate``
+        endpoint name in the message so log entries are unambiguous.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model_for(role),
+            "prompt": "",
+            "stream": False,
+            "keep_alive": -1,
+        }
+        try:
+            response = await self._client.post("/api/generate", json=payload)
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailableError(
+                f"Ollama warm request failed: {type(exc).__name__}: {exc}",
+            ) from exc
+
+        if 500 <= response.status_code < 600:
+            raise OllamaUnavailableError(
+                f"Ollama warm returned server error {response.status_code}",
+            )
+        if response.status_code >= 400:
+            body_preview = response.text[:200]
+            raise OllamaResponseError(
+                f"Ollama warm returned client error {response.status_code}: {body_preview!r}",
+            )
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()

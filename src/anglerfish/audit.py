@@ -32,6 +32,7 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   ``lure.fingerprint_observed``, ``lure.login_attempt``.
 * Threat: ``threat.alert_fired``.
 * Geo: ``geo.update_succeeded``, ``geo.update_failed``.
+* LLM: ``llm.warmup_succeeded``, ``llm.warmup_failed``.
 
 The Stage 4.2 audit-log tailer in
 :mod:`anglerfish.dashboard.audit_tailer` consumes the per-session

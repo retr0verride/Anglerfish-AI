@@ -59,6 +59,7 @@ _INTEGRITY_EVENT_TYPES = frozenset(
         "bridge.model_integrity_skipped",
     },
 )
+_WARMUP_EVENT_TYPES = frozenset({"llm.warmup_succeeded", "llm.warmup_failed"})
 
 
 async def ollama_health(
@@ -71,12 +72,24 @@ async def ollama_health(
     base_url = str(settings.ollama.base_url)
     reachable, checked_at = await _probe_ollama(base_url, http_client=http_client)
     integrity = _latest_integrity_check(audit_log.path)
+    warmup = _latest_warmup_per_role(audit_log.path)
     return {
         "reachable": reachable,
         "reachable_at": checked_at,
-        # Reports the fast tier (handles every command). Slice 2 of
-        # Stage 5 extends this to per-role status.
-        "model": settings.ollama.fast_model,
+        "models": [
+            {
+                "role": "fast",
+                "model": settings.ollama.fast_model,
+                "warmed_at": warmup.get("fast", {}).get("warmed_at"),
+                "last_warmup_status": warmup.get("fast", {}).get("status"),
+            },
+            {
+                "role": "deep",
+                "model": settings.ollama.deep_model,
+                "warmed_at": warmup.get("deep", {}).get("warmed_at"),
+                "last_warmup_status": warmup.get("deep", {}).get("status"),
+            },
+        ],
         "integrity_check": integrity,
     }
 
@@ -157,6 +170,28 @@ def _latest_integrity_check(audit_path: Path) -> dict[str, Any]:
         "last_checked_at": None,
         "expected_hash_present": False,
     }
+
+
+def _latest_warmup_per_role(audit_path: Path) -> dict[str, dict[str, Any]]:
+    """Return ``{role: {warmed_at, status}}`` from the most recent warmup events.
+
+    ``status`` is ``"succeeded"`` or ``"failed"`` based on the event type.
+    ``warmed_at`` is the audit-event wall-clock timestamp string. Roles
+    with no recorded warmup yet are omitted from the result.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    for event in iter_events(audit_path):
+        event_type = event.get("event_type")
+        if event_type not in _WARMUP_EVENT_TYPES:
+            continue
+        role = event.get("role")
+        if not isinstance(role, str) or role in latest:
+            continue
+        latest[role] = {
+            "warmed_at": event.get("ts"),
+            "status": "succeeded" if event_type == "llm.warmup_succeeded" else "failed",
+        }
+    return latest
 
 
 def _command_rate_per_minute(audit_path: Path, window_minutes: int) -> float:

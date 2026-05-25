@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from anglerfish.llm.client import ChatMessage, ChatResult, LLMClient, TokenUsage
 from anglerfish.llm.roles import LLMRole
+from anglerfish.llm.warmup import WarmPool, WarmStatus
 
 __all__ = [
     "ChatMessage",
@@ -33,4 +34,6 @@ __all__ = [
     "LLMClient",
     "LLMRole",
     "TokenUsage",
+    "WarmPool",
+    "WarmStatus",
 ]

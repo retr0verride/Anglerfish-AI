@@ -39,6 +39,7 @@ from anglerfish import __version__
 from anglerfish.bridge.defense import ModelIntegrity
 from anglerfish.bridge.service import AIBridgeService
 from anglerfish.bridge.session import SessionContext
+from anglerfish.llm.warmup import WarmPool
 
 __all__ = [
     "PROTOCOL_VERSION",
@@ -164,6 +165,7 @@ def create_bridge_app(
     service: AIBridgeService,
     *,
     integrity: ModelIntegrity | None = None,
+    warm_pool: WarmPool | None = None,
 ) -> FastAPI:
     """Build the FastAPI app that exposes ``service`` over HTTP.
 
@@ -171,6 +173,11 @@ def create_bridge_app(
     requests are accepted. When unset, the integrity check is skipped
     entirely — useful for tests and dev loops; production deployments
     should construct it from settings.defense and pass it here.
+
+    ``warm_pool`` is an optional :class:`anglerfish.llm.WarmPool`; when
+    supplied, its background tasks start in the lifespan and are
+    cancelled in teardown. Production deployments construct it from the
+    LLMClient that backs the AIBridgeService.
 
     A :class:`ModelIntegrityError` raised by ``integrity.verify()``
     propagates out of the lifespan, which uvicorn surfaces as a
@@ -206,8 +213,14 @@ def create_bridge_app(
                 raise RuntimeError(
                     "model integrity check timed out — see logs",
                 ) from exc
-        yield
-        await service.aclose()
+        if warm_pool is not None:
+            await warm_pool.start()
+        try:
+            yield
+        finally:
+            if warm_pool is not None:
+                await warm_pool.stop()
+            await service.aclose()
 
     app = FastAPI(
         title="Anglerfish Bridge",

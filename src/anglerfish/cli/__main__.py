@@ -127,6 +127,7 @@ def bridge_serve(
 
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
     from anglerfish.bridge.defense import ModelIntegrityError, verify_all_roles
+    from anglerfish.llm import WarmPool
 
     try:
         settings = load_settings()
@@ -179,9 +180,14 @@ def bridge_serve(
         raise typer.Exit(code=2) from exc
 
     service = AIBridgeService(settings, client=ai_client, audit_log=audit_log)
+    warm_pool = WarmPool(
+        client=ai_client,
+        config=settings.ollama,
+        audit_log=audit_log,
+    )
     # integrity=None: we already verified above; passing the instance
     # would cause a redundant second verify() in the lifespan.
-    application = create_bridge_app(service, integrity=None)
+    application = create_bridge_app(service, integrity=None, warm_pool=warm_pool)
     uvicorn.run(application, host=host, port=port, log_level=settings.log_level.value.lower())
 
 

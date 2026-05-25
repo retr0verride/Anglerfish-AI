@@ -133,6 +133,19 @@ class OllamaConfig(BaseModel):
     max_response_chars: int = Field(default=8192, gt=0, le=65536)
     temperature: float = Field(default=0.4, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
+    warmup_refresh_seconds: float = Field(
+        default=600.0,
+        gt=0.0,
+        le=86400.0,
+        description=(
+            "Interval at which the bridge re-pings each configured role "
+            "via /api/generate with keep_alive=-1 to pin the model in "
+            "Ollama's memory. Default 600s (10 min) matches Ollama's own "
+            "default OLLAMA_KEEP_ALIVE='5m' with a comfortable margin. "
+            "Lower for faster recovery from operator-side model unloads; "
+            "raise to reduce idle GPU work in shared-host deployments."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -44,8 +44,28 @@ def test_ollama_endpoint_returns_unreachable_when_no_server(
     assert r.status_code == 200
     body = r.json()
     assert body["reachable"] is False
-    assert body["model"] == "qwen3:14b"
+    models_by_role = {m["role"]: m for m in body["models"]}
+    assert models_by_role["fast"]["model"] == "qwen3:14b"
+    assert models_by_role["deep"]["model"] == "phi-4"
+    assert models_by_role["fast"]["warmed_at"] is None
     assert body["integrity_check"]["status"] == "unknown"
+
+
+def test_ollama_endpoint_surfaces_recent_warmup_per_role(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    audit_path.write_text(
+        '{"ts":"2026-05-25T10:00:00+00:00","event_type":"llm.warmup_succeeded","role":"fast","model":"qwen3:14b"}\n'
+        '{"ts":"2026-05-25T10:00:01+00:00","event_type":"llm.warmup_failed","role":"deep","model":"phi-4","error":"x"}\n',
+        encoding="utf-8",
+    )
+    body = client.get("/api/health/ollama").json()
+    models_by_role = {m["role"]: m for m in body["models"]}
+    assert models_by_role["fast"]["warmed_at"] == "2026-05-25T10:00:00+00:00"
+    assert models_by_role["fast"]["last_warmup_status"] == "succeeded"
+    assert models_by_role["deep"]["warmed_at"] == "2026-05-25T10:00:01+00:00"
+    assert models_by_role["deep"]["last_warmup_status"] == "failed"
 
 
 def test_ollama_endpoint_surfaces_recent_integrity_pass(
