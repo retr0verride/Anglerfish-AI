@@ -33,10 +33,17 @@ class StrategyContext:
     ``wasted_ms_so_far`` is the running per-session total of time
     the strategy has added. Strategies consult it to honour the
     session cap (slice 6.5 ships the cap; earlier slices pass 0).
+
+    ``command_count`` is the 0-based index of this command within
+    the session (0 for the first command, 1 for the second, ...).
+    Strategies use it together with ``session_id`` to seed a
+    deterministic PRNG so per-command randomness is reproducible
+    across bridge restarts and pinnable in tests.
     """
 
     session_id: UUID
     command: str
+    command_count: int
     wasted_ms_so_far: int
     bridge_config: BridgeConfig
 

@@ -387,10 +387,12 @@ class AIBridgeService:
         strategy_ctx = StrategyContext(
             session_id=session.session_id,
             command=sanitised,
+            command_count=session.command_count,
             wasted_ms_so_far=0,  # slice 6.5 wires the per-session cap
             bridge_config=self._settings.bridge,
         )
         pre_effect = await strategy.pre_command(strategy_ctx)
+        wasted_ms = pre_effect.total_added_ms
         async for pre_chunk in self._apply_pre_effect(pre_effect, accumulated):
             yield pre_chunk
 
@@ -414,6 +416,7 @@ class AIBridgeService:
                             yield bridge_chunk
                             delay = await strategy.between_chunks(strategy_ctx, bridge_chunk)
                             if delay > 0:
+                                wasted_ms += int(delay * 1000.0)
                                 await self._sleep(delay)
                 except BudgetExhaustedError as exc:
                     self._record_budget_exhausted(session, exc)
@@ -424,6 +427,14 @@ class AIBridgeService:
             error = exc
 
         latency_ms = (self._monotonic() - start) * 1000.0
+
+        if wasted_ms > 0:
+            self._record_wasting_applied(
+                session=session,
+                strategy_name=strategy.name,
+                wasted_ms=wasted_ms,
+                pre_message=pre_effect.pre_message is not None,
+            )
 
         if error is None:
             # Post-stream defense filter. Detection only; the chunks
@@ -498,6 +509,29 @@ class AIBridgeService:
             snippet=verdict.snippet,
             session_id=str(session.session_id),
             attacker_ip=session.source_ip,
+        )
+
+    def _record_wasting_applied(
+        self,
+        *,
+        session: SessionContext,
+        strategy_name: str,
+        wasted_ms: int,
+        pre_message: bool,
+    ) -> None:
+        """Audit a per-command wasting-strategy effect.
+
+        Fires once per command that the strategy touched in any way
+        (pre-message, inter-chunk delay, or both). The `off` strategy
+        never reaches this path because ``wasted_ms`` stays at zero.
+        """
+        self._audit_log.record(
+            "bridge.wasting_applied",
+            session_id=str(session.session_id),
+            attacker_ip=session.source_ip,
+            strategy=strategy_name,
+            wasted_ms=wasted_ms,
+            pre_message=pre_message,
         )
 
     def _record_budget_exhausted(

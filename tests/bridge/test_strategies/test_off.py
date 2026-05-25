@@ -21,6 +21,7 @@ def _ctx() -> StrategyContext:
     return StrategyContext(
         session_id=uuid4(),
         command="ls",
+        command_count=0,
         wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
     )
@@ -47,15 +48,13 @@ def test_get_strategy_off_returns_off_instance() -> None:
     assert isinstance(get_strategy("off"), OffStrategy)
 
 
-def test_get_strategy_light_and_aggressive_route_to_off_in_slice_61() -> None:
-    """Slice 6.1 routes light + aggressive to OffStrategy until 6.2 / 6.3.
+def test_get_strategy_aggressive_routes_to_off_until_slice_63() -> None:
+    """Slice 6.2 routes aggressive to OffStrategy until 6.3 lands.
 
-    The names are accepted (no ValueError) so that dashboard-driven
-    strategy changes do not 500 the bridge during the slice 6.1
-    deploy window. Slices 6.2 / 6.3 replace the routing with the
-    real implementations.
+    The name is accepted (no ValueError) so dashboard-driven strategy
+    changes do not 500 the bridge during the slice-2 deploy window;
+    slice 6.3 ships the real aggressive implementation.
     """
-    assert isinstance(get_strategy("light"), OffStrategy)
     assert isinstance(get_strategy("aggressive"), OffStrategy)
 
 

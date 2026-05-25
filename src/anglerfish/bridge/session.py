@@ -35,6 +35,7 @@ class SessionContext:
 
     __slots__ = (
         "_clock",
+        "_command_count",
         "_cwd",
         "_fake_hostname",
         "_fake_username",
@@ -72,6 +73,12 @@ class SessionContext:
         self._fake_username = fake_username
         self._cwd = fake_cwd
         self._history: deque[CommandTurn] = deque(maxlen=history_window)
+        # Stage 6: monotonic per-session command counter, distinct from
+        # the windowed history length (which caps at history_window).
+        # Used by wasting strategies to seed deterministic per-command
+        # randomness without colliding when an attacker repeats a
+        # command verbatim.
+        self._command_count = 0
         now = self._clock()
         self._started_at = now
         self._last_activity_at = now
@@ -108,6 +115,11 @@ class SessionContext:
     def last_activity_at(self) -> datetime:
         return self._last_activity_at
 
+    @property
+    def command_count(self) -> int:
+        """Total commands recorded against this session (uncapped)."""
+        return self._command_count
+
     def history(self) -> tuple[CommandTurn, ...]:
         """Return the recent command/response history (oldest first)."""
         return tuple(self._history)
@@ -131,6 +143,7 @@ class SessionContext:
                 latency_ms=latency_ms,
             ),
         )
+        self._command_count += 1
         self._last_activity_at = timestamp
 
     def update_cwd(self, new_cwd: str) -> None:

@@ -29,9 +29,11 @@ from anglerfish.bridge.strategies.base import (
     StrategyPreEffect,
     WastingStrategyBase,
 )
+from anglerfish.bridge.strategies.light import LightStrategy
 from anglerfish.bridge.strategies.off import OffStrategy
 
 __all__ = [
+    "LightStrategy",
     "OffStrategy",
     "StrategyContext",
     "StrategyPreEffect",
@@ -46,19 +48,19 @@ _logger = logging.getLogger(__name__)
 def get_strategy(name: str) -> WastingStrategyBase:
     """Return a strategy instance for ``name``.
 
-    Slice 6.1 ships only :class:`OffStrategy`. The names ``light``
-    and ``aggressive`` are accepted (so dashboard-driven changes do
-    not 500 the bridge) but resolve to :class:`OffStrategy` until
-    slices 6.2 / 6.3 land. Unknown names raise :class:`ValueError`;
-    the caller treats this as a misconfiguration and falls back to
-    the bridge's static config.
+    Slice 6.2 added :class:`LightStrategy`; ``aggressive`` is still
+    routed to :class:`OffStrategy` until slice 6.3 lands. Unknown
+    names raise :class:`ValueError`; the caller treats this as a
+    misconfiguration and falls back to the bridge's static config.
     """
     if name == "off":
         return OffStrategy()
-    if name in ("light", "aggressive"):
-        # Stage 6 slice 1: real implementations land in 6.2 / 6.3.
+    if name == "light":
+        return LightStrategy()
+    if name == "aggressive":
+        # Stage 6 slice 2: real implementation lands in slice 6.3.
         # Falling back to OffStrategy keeps the cross-process channel
         # exercisable end-to-end without behaviour change yet.
-        _logger.debug("wasting_strategy=%s requested; slice 6.1 routes to off", name)
+        _logger.debug("wasting_strategy=aggressive requested; slice 6.2 routes to off")
         return OffStrategy()
     raise ValueError(f"unknown wasting strategy: {name!r}")

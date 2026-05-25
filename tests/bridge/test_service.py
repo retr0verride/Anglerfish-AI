@@ -1117,3 +1117,92 @@ async def test_handle_command_stream_exhausted_budget_yields_fallback_chunk(
     assert chunks[-1].source == ResponseSource.FALLBACK
     budget_events = [e for e in audit.events if e[0] == "bridge.budget_exhausted"]
     assert len(budget_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 slice 2: light strategy applies inter-chunk delays + audits
+# ---------------------------------------------------------------------------
+
+
+async def test_handle_command_stream_with_light_strategy_emits_audit(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """light strategy adds delays per chunk; bridge.wasting_applied fires."""
+    import json as _json
+
+    body = (
+        _json.dumps({"message": {"content": "a"}, "done": False})
+        + "\n"
+        + _json.dumps({"message": {"content": "b"}, "done": False})
+        + "\n"
+        + _json.dumps({"done": True, "prompt_eval_count": 1, "eval_count": 2})
+        + "\n"
+    )
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        bridge=BridgeConfig(wasting_strategy="light"),
+    )
+
+    audit = _MockAudit()
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+        sleep=fake_sleep,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        chunks = [c async for c in service.handle_command_stream(session, "ls /etc")]
+    finally:
+        await service.aclose()
+
+    # Two non-terminal AI chunks + a terminal done chunk.
+    assert sum(1 for c in chunks if not c.done) >= 2
+    assert chunks[-1].done is True
+    # At least one inter-chunk sleep recorded (light always pads).
+    assert len(sleeps) >= 1
+    assert all(0.05 <= s <= 0.15 for s in sleeps)
+    # Wasting audit event fired exactly once with sane fields.
+    wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
+    assert len(wasting_events) == 1
+    _, fields = wasting_events[0]
+    assert fields["strategy"] == "light"
+    assert fields["session_id"] == str(session.session_id)
+    assert fields["wasted_ms"] > 0
+
+
+async def test_handle_command_stream_off_strategy_emits_no_wasting_audit(
+    settings: AnglerfishSettings,
+) -> None:
+    """off strategy never audits bridge.wasting_applied."""
+    import json as _json
+
+    body = _json.dumps({"done": True}) + "\n"
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        _ = [c async for c in service.handle_command_stream(session, "ls /etc")]
+    finally:
+        await service.aclose()
+    wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
+    assert wasting_events == []
