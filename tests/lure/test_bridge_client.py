@@ -47,7 +47,7 @@ async def test_open_session_returns_uuid() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/session"
-        assert request.headers[PROTOCOL_VERSION_HEADER] == "2"
+        assert request.headers[PROTOCOL_VERSION_HEADER] == "3"
         assert request.headers["Authorization"] == "Bearer test-secret"
         return httpx.Response(200, json={"session_id": str(expected)})
 
@@ -304,7 +304,7 @@ async def test_protocol_header_present_on_every_request() -> None:
         await client.close_session(sid)
     finally:
         await client.aclose()
-    assert seen_versions == ["2", "2", "2"]
+    assert seen_versions == ["3", "3", "3"]
 
 
 async def test_authorization_header_set_when_secret_provided() -> None:
@@ -376,11 +376,11 @@ async def test_async_context_manager_closes_on_exit() -> None:
         pass
 
 
-def test_protocol_version_constant_is_two() -> None:
-    # Sanity: the client ships with the v2 protocol header.
+def test_protocol_version_constant_is_three() -> None:
+    # Stage 5 slice 4c bumped the lure to v3 (?stream=1 support).
     from anglerfish.lure import bridge_client
 
-    assert bridge_client._LURE_PROTOCOL_VERSION == "2"
+    assert bridge_client._LURE_PROTOCOL_VERSION == "3"
 
 
 def test_uuid_returned_is_uuid_type() -> None:
@@ -401,3 +401,117 @@ def test_uuid_returned_is_uuid_type() -> None:
 
     sid = anyio.run(_run)
     assert isinstance(sid, UUID)
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 slice 4c: command_stream NDJSON consumption
+# ---------------------------------------------------------------------------
+
+
+async def test_command_stream_yields_chunks_in_order() -> None:
+    import json as _json
+
+    sid = uuid4()
+    ndjson = (
+        _json.dumps({"delta": "hi ", "source": "ai", "done": False})
+        + "\n"
+        + _json.dumps({"delta": "world", "source": "ai", "done": False})
+        + "\n"
+        + _json.dumps(
+            {
+                "delta": "",
+                "source": "ai",
+                "done": True,
+                "latency_ms": 4.2,
+                "cwd": "/root",
+            },
+        )
+        + "\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("stream") == "1"
+        assert request.url.path == f"/api/v1/session/{sid}/command"
+        return httpx.Response(
+            200,
+            content=ndjson.encode("utf-8"),
+            headers={"content-type": "application/x-ndjson"},
+        )
+
+    client = _client_with(handler)
+    try:
+        chunks = [c async for c in client.command_stream(sid, "ls", fs_context="/etc: root")]
+    finally:
+        await client.aclose()
+    assert [c.delta for c in chunks] == ["hi ", "world", ""]
+    assert chunks[-1].done is True
+    assert chunks[-1].cwd == "/root"
+    assert chunks[-1].latency_ms == 4.2
+
+
+async def test_command_stream_5xx_raises_bridge_unavailable() -> None:
+    sid = uuid4()
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"")
+
+    from anglerfish.lure.bridge_client import BridgeUnavailableError
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(BridgeUnavailableError):
+            async for _ in client.command_stream(sid, "ls"):
+                pass
+    finally:
+        await client.aclose()
+
+
+async def test_command_stream_protocol_mismatch_426() -> None:
+    sid = uuid4()
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(426, content=b"")
+
+    from anglerfish.lure.bridge_client import BridgeUnavailableError
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(BridgeUnavailableError, match="protocol mismatch"):
+            async for _ in client.command_stream(sid, "ls"):
+                pass
+    finally:
+        await client.aclose()
+
+
+async def test_command_stream_malformed_chunk_raises() -> None:
+    sid = uuid4()
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"delta":"a","source":"ai","done":false}\nnot-json\n')
+
+    from anglerfish.lure.bridge_client import BridgeUnavailableError
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(BridgeUnavailableError, match="malformed chunk"):
+            async for _ in client.command_stream(sid, "ls"):
+                pass
+    finally:
+        await client.aclose()
+
+
+async def test_command_stream_chunk_missing_fields_raises() -> None:
+    sid = uuid4()
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"done":false}\n')
+
+    from anglerfish.lure.bridge_client import BridgeUnavailableError
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(BridgeUnavailableError, match="missing delta/source"):
+            async for _ in client.command_stream(sid, "ls"):
+                pass
+    finally:
+        await client.aclose()

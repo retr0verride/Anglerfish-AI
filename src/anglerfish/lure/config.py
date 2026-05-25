@@ -107,6 +107,17 @@ class LureConfig(BaseModel):
     bridge_base_url: HttpUrl = Field(default=HttpUrl("http://127.0.0.1:8421/"))
     bridge_request_timeout_s: float = Field(default=30.0, gt=0.0, le=120.0)
     bridge_connect_timeout_s: float = Field(default=2.0, gt=0.0, le=30.0)
+    bridge_stream_enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, the lure uses protocol v3 ?stream=1 against the "
+            "bridge command endpoint so attacker terminals see output "
+            "appear progressively rather than as one buffered chunk. "
+            "Disable to revert to v2 buffered semantics; useful when "
+            "running a v3 lure against a v2-only rolled-back bridge "
+            "(the bridge would 422 on the unknown ?stream= query)."
+        ),
+    )
 
     # Native-command timing-jitter defence so native vs bridge response
     # latency is not an attacker fingerprint. See

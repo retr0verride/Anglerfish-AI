@@ -524,13 +524,12 @@ async def _process_handler(
     # Exec mode: client sent one command with `conn.run("...")` or
     # `ssh user@host "cmd"`. Run it once, write the response, exit.
     if process.command:
-        response, _close_after = await _handle_one_command(
+        await _handle_one_command(
             container,
             lure_session,
             process.command,
+            process.stdout.write,
         )
-        if response:
-            process.stdout.write(response)
         with contextlib.suppress(Exception):
             process.exit(0)
         return
@@ -544,13 +543,12 @@ async def _process_handler(
             if not line.strip():
                 process.stdout.write(_render_prompt(lure_session))
                 continue
-            response, close_after = await _handle_one_command(
+            close_after = await _handle_one_command(
                 container,
                 lure_session,
                 line,
+                process.stdout.write,
             )
-            if response:
-                process.stdout.write(response)
             if close_after:
                 break
             process.stdout.write(_render_prompt(lure_session))
@@ -573,8 +571,15 @@ async def _handle_one_command(
     container: LureServer,
     session: LureSessionContext,
     line: str,
-) -> tuple[str, bool]:
-    """Dispatch one command and return ``(response_text, close_after)``."""
+    write: Callable[[str], None],
+) -> bool:
+    """Dispatch one command, write output via ``write``, return ``close_after``.
+
+    Owns the output side of the lure shell: native commands write the
+    full response in one call; bridge commands either stream chunks
+    (when ``config.bridge_stream_enabled`` and the bridge supports
+    protocol v3) or write the full buffered response in one call.
+    """
     # Lure-side cap. The design intentionally caps closer to the
     # attacker than the bridge's max_input_chars.
     sanitised = line[: container.config.max_command_chars]
@@ -589,10 +594,76 @@ async def _handle_one_command(
             command=sanitised[:200],
             session_id=str(session.session_id),
         )
-        return native.text, native.close_after
+        if native.text:
+            write(native.text)
+        return native.close_after
 
-    # Bridge route. fs_context rides along so the LLM stays
-    # consistent with the static fakefs.
+    # Bridge route.
+    if container.config.bridge_stream_enabled:
+        await _handle_bridge_stream(container, session, sanitised, write)
+    else:
+        await _handle_bridge_buffered(container, session, sanitised, write)
+    return False
+
+
+async def _handle_bridge_stream(
+    container: LureServer,
+    session: LureSessionContext,
+    sanitised: str,
+    write: Callable[[str], None],
+) -> None:
+    """Stream the bridge response chunk-by-chunk to the attacker terminal."""
+    bridge_uuid = session.session_id
+    start = time.monotonic()
+    wrote_any = False
+    try:
+        async for chunk in container.bridge_client.command_stream(
+            bridge_uuid,
+            sanitised,
+            fs_context=system_prompt_summary(),
+        ):
+            if chunk.delta:
+                write(chunk.delta)
+                wrote_any = True
+        latency_ms = (time.monotonic() - start) * 1000.0
+    except BridgeUnavailableError as exc:
+        # Mid-stream failure: emit the lure-side fallback only if we
+        # have not already written any AI text (would otherwise duck
+        # in mid-sentence with a "command not found"). If we did
+        # write something, just stop - the partial reply looks like
+        # a hung command, the lure's existing fallback path doesn't
+        # apply.
+        latency_ms = (time.monotonic() - start) * 1000.0
+        _audit_bridge_failure(container, session, sanitised, exc)
+        if not wrote_any:
+            _write_fallback(container, session, sanitised, write)
+            return
+        # Ensure newline so the next prompt sits cleanly.
+        write("\n")
+        return
+
+    container.commands.record_bridge_latency(latency_ms)
+    session.record(sanitised, response_source="bridge")
+    container.audit.record(
+        "lure.command_bridge",
+        source_ip=session.source_ip,
+        command=sanitised[:200],
+        latency_ms=latency_ms,
+        session_id=str(session.session_id),
+    )
+    # Bridge chunks don't include a trailing newline; add one so the
+    # next prompt sits on its own line.
+    if wrote_any:
+        write("\n")
+
+
+async def _handle_bridge_buffered(
+    container: LureServer,
+    session: LureSessionContext,
+    sanitised: str,
+    write: Callable[[str], None],
+) -> None:
+    """Submit the command and write the full buffered response (v2 path)."""
     bridge_uuid = session.session_id
     start = time.monotonic()
     try:
@@ -611,36 +682,57 @@ async def _handle_one_command(
             latency_ms=latency_ms,
             session_id=str(session.session_id),
         )
-        # Bridge responses do not include a trailing prompt; ensure
-        # we end with a newline so the prompt sits on its own line.
         if response and not response.endswith("\n"):
             response = response + "\n"
-        return response, False
+        if response:
+            write(response)
     except BridgeUnavailableError as exc:
-        container.audit.record(
-            "lure.bridge_unavailable",
-            source_ip=session.source_ip,
-            reason="submit_command_failed",
-            error_type=type(exc).__name__,
-            session_id=str(session.session_id),
-        )
-        scripted = fallback_with_default(
-            sanitised,
-            hostname=session.hostname,
-            username=session.username,
-            cwd=session.cwd,
-        )
-        session.record(sanitised, response_source="fallback")
-        container.audit.record(
-            "lure.fallback_served",
-            source_ip=session.source_ip,
-            command=sanitised[:200],
-            reason=type(exc).__name__,
-            session_id=str(session.session_id),
-        )
-        if scripted and not scripted.endswith("\n"):
-            scripted = scripted + "\n"
-        return scripted, False
+        _audit_bridge_failure(container, session, sanitised, exc)
+        _write_fallback(container, session, sanitised, write)
+
+
+def _audit_bridge_failure(
+    container: LureServer,
+    session: LureSessionContext,
+    sanitised: str,
+    exc: BridgeUnavailableError,
+) -> None:
+    """Audit a bridge failure (shared between streaming and buffered paths)."""
+    container.audit.record(
+        "lure.bridge_unavailable",
+        source_ip=session.source_ip,
+        reason="submit_command_failed",
+        error_type=type(exc).__name__,
+        session_id=str(session.session_id),
+    )
+    container.audit.record(
+        "lure.fallback_served",
+        source_ip=session.source_ip,
+        command=sanitised[:200],
+        reason=type(exc).__name__,
+        session_id=str(session.session_id),
+    )
+
+
+def _write_fallback(
+    container: LureServer,
+    session: LureSessionContext,
+    sanitised: str,
+    write: Callable[[str], None],
+) -> None:
+    """Render the scripted fallback for ``sanitised`` and write it."""
+    del container  # unused but kept for symmetry with the other helpers
+    scripted = fallback_with_default(
+        sanitised,
+        hostname=session.hostname,
+        username=session.username,
+        cwd=session.cwd,
+    )
+    session.record(sanitised, response_source="fallback")
+    if scripted and not scripted.endswith("\n"):
+        scripted = scripted + "\n"
+    if scripted:
+        write(scripted)
 
 
 def _strip_c0(text: str) -> str:

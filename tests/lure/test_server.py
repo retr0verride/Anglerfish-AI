@@ -102,6 +102,10 @@ def _make_lure_config(host_key_dir: Path, **overrides: Any) -> LureConfig:
         "bridge_connect_timeout_s": 1.0,
         "timing_jitter_enabled": False,  # disable for deterministic tests
         "keepalive_interval_s": 0,  # disable keepalive in tests
+        # Default the existing tests to the v2 buffered path; the
+        # streaming path has its own dedicated tests below that flip
+        # this back on.
+        "bridge_stream_enabled": False,
     }
     base.update(overrides)
     return LureConfig(**base)
@@ -400,6 +404,103 @@ async def test_unknown_command_routes_to_bridge(
         assert seen[0]["command"] == "apt-get install hax"
         # fs_context rides protocol v2.
         assert "fs_context" in seen[0]
+    finally:
+        await server.stop(drain_timeout_s=2.0)
+        await server.bridge_client.aclose()
+        await server.credential_store.aclose()
+
+
+async def test_streaming_path_writes_chunks_in_order(
+    tmp_path: Path,
+    audit_log: AuditLog,
+) -> None:
+    """With bridge_stream_enabled=True the lure consumes ?stream=1 NDJSON."""
+    import json as _json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/session":
+            return httpx.Response(200, json={"session_id": str(uuid4())})
+        if request.url.path.endswith("/command"):
+            assert request.url.params.get("stream") == "1"
+            ndjson = (
+                _json.dumps({"delta": "hel", "source": "ai", "done": False})
+                + "\n"
+                + _json.dumps({"delta": "lo", "source": "ai", "done": False})
+                + "\n"
+                + _json.dumps(
+                    {
+                        "delta": "",
+                        "source": "ai",
+                        "done": True,
+                        "latency_ms": 12.3,
+                        "cwd": "/root",
+                    },
+                )
+                + "\n"
+            )
+            return httpx.Response(
+                200,
+                content=ndjson.encode("utf-8"),
+                headers={"content-type": "application/x-ndjson"},
+            )
+        return httpx.Response(404)
+
+    server = await _make_lure(
+        tmp_path,
+        audit_log,
+        handler,
+        bridge_stream_enabled=True,
+    )
+    await server.start()
+    try:
+        async with asyncssh.connect(
+            "127.0.0.1",
+            port=server.get_port(),
+            username="alice",
+            password="x",
+            known_hosts=None,
+        ) as conn:
+            result = await conn.run("apt-get install hax", timeout=3.0)
+        # Both deltas concatenated, with a trailing newline appended.
+        assert (result.stdout or "").startswith("hello")
+    finally:
+        await server.stop(drain_timeout_s=2.0)
+        await server.bridge_client.aclose()
+        await server.credential_store.aclose()
+
+
+async def test_streaming_path_falls_back_when_bridge_5xx_with_no_chunks(
+    tmp_path: Path,
+    audit_log: AuditLog,
+) -> None:
+    """Mid-stream 5xx before any chunks: lure writes its scripted fallback."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/session":
+            return httpx.Response(200, json={"session_id": str(uuid4())})
+        if request.url.path.endswith("/command"):
+            return httpx.Response(503, content=b"")
+        return httpx.Response(404)
+
+    server = await _make_lure(
+        tmp_path,
+        audit_log,
+        handler,
+        bridge_stream_enabled=True,
+    )
+    await server.start()
+    try:
+        async with asyncssh.connect(
+            "127.0.0.1",
+            port=server.get_port(),
+            username="alice",
+            password="x",
+            known_hosts=None,
+        ) as conn:
+            result = await conn.run("apt-get install hax", timeout=3.0)
+        # Lure-side fallback fires because nothing was streamed.
+        out = result.stdout or ""
+        assert "command not found" in out or out  # non-empty fallback
     finally:
         await server.stop(drain_timeout_s=2.0)
         await server.bridge_client.aclose()

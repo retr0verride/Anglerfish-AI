@@ -14,7 +14,10 @@ mode to handle; the network shape stays hidden behind the abstraction.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Self
 from uuid import UUID
 
@@ -24,13 +27,31 @@ from pydantic import HttpUrl
 __all__ = [
     "PROTOCOL_VERSION_HEADER",
     "BridgeClient",
+    "BridgeStreamChunk",
     "BridgeUnavailableError",
 ]
 
 
 PROTOCOL_VERSION_HEADER = "X-Anglerfish-Protocol"
-_LURE_PROTOCOL_VERSION = "2"
+_LURE_PROTOCOL_VERSION = "3"
 _DEFAULT_USERNAME_MAX_LEN = 64
+
+
+@dataclass(frozen=True)
+class BridgeStreamChunk:
+    """One streamed chunk parsed from the bridge's ``?stream=1`` response.
+
+    Mirrors the NDJSON shape the bridge emits: ``delta`` is the
+    incremental text, ``source`` is ``"ai"`` / ``"fallback"`` /
+    ``"rejected"``, ``done`` flags the terminal chunk, and
+    ``latency_ms`` / ``cwd`` are populated only on the terminal chunk.
+    """
+
+    delta: str
+    source: str
+    done: bool
+    latency_ms: float | None = None
+    cwd: str | None = None
 
 
 class BridgeUnavailableError(RuntimeError):
@@ -149,6 +170,78 @@ class BridgeClient:
             )
         return text
 
+    async def command_stream(
+        self,
+        session_id: UUID,
+        command: str,
+        *,
+        fs_context: str | None = None,
+    ) -> AsyncIterator[BridgeStreamChunk]:
+        """Stream one command's response from the bridge as NDJSON chunks.
+
+        Protocol v3 only. Yields one :class:`BridgeStreamChunk` per
+        NDJSON line; the terminal chunk has ``done=True`` and may
+        carry ``latency_ms`` + ``cwd``. Caller is responsible for
+        writing each delta to the attacker terminal as it arrives.
+
+        Any network failure, non-2xx response, or malformed chunk
+        raises :class:`BridgeUnavailableError` so the lure's existing
+        fallback path applies uniformly. Failures mid-stream leave
+        any already-yielded chunks intact - the caller has already
+        written them to the attacker.
+        """
+        payload: dict[str, Any] = {"command": command}
+        if fs_context is not None:
+            payload["fs_context"] = fs_context
+        path = f"/api/v1/session/{session_id}/command"
+        try:
+            async with self._http.stream(
+                "POST",
+                path,
+                params={"stream": "1"},
+                json=payload,
+            ) as response:
+                await self._raise_for_stream_status(response, path)
+                async for line in response.aiter_lines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    yield _parse_stream_chunk(stripped, path)
+        except httpx.HTTPError as exc:
+            raise BridgeUnavailableError(
+                f"bridge {path} network failure: {type(exc).__name__}: {exc}",
+            ) from exc
+
+    async def _raise_for_stream_status(
+        self,
+        response: httpx.Response,
+        path: str,
+    ) -> None:
+        """Translate the stream's HTTP status into BridgeUnavailableError."""
+        if response.status_code == 426:
+            self._logger.error(
+                "bridge protocol mismatch at %s: server rejected protocol %s",
+                path,
+                _LURE_PROTOCOL_VERSION,
+            )
+            raise BridgeUnavailableError(
+                f"bridge {path}: protocol mismatch (server returned 426)",
+            )
+        if response.status_code == 401:
+            raise BridgeUnavailableError(
+                f"bridge {path}: authentication rejected (401); "
+                "check ANGLERFISH_BRIDGE__SHARED_SECRET",
+            )
+        if response.status_code >= 500:
+            raise BridgeUnavailableError(
+                f"bridge {path}: server error HTTP {response.status_code}",
+            )
+        if response.status_code >= 400:
+            body = await response.aread()
+            raise BridgeUnavailableError(
+                f"bridge {path}: client error HTTP {response.status_code}: {body[:200]!r}",
+            )
+
     async def close_session(self, session_id: UUID) -> None:
         """Release the bridge-side state for ``session_id``.
 
@@ -227,3 +320,34 @@ class BridgeClient:
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
+
+
+def _parse_stream_chunk(line: str, path: str) -> BridgeStreamChunk:
+    """Validate and parse one NDJSON line into a :class:`BridgeStreamChunk`."""
+    try:
+        data = json.loads(line)
+    except ValueError as exc:
+        raise BridgeUnavailableError(
+            f"bridge {path} returned malformed chunk: {exc}",
+        ) from exc
+    if not isinstance(data, dict):
+        raise BridgeUnavailableError(
+            f"bridge {path} chunk is not a JSON object: {type(data).__name__}",
+        )
+    delta = data.get("delta")
+    source = data.get("source")
+    if not isinstance(delta, str) or not isinstance(source, str):
+        raise BridgeUnavailableError(
+            f"bridge {path} chunk missing delta/source: {data!r}",
+        )
+    latency_raw = data.get("latency_ms")
+    latency_ms = float(latency_raw) if isinstance(latency_raw, (int, float)) else None
+    cwd_raw = data.get("cwd")
+    cwd = cwd_raw if isinstance(cwd_raw, str) else None
+    return BridgeStreamChunk(
+        delta=delta,
+        source=source,
+        done=bool(data.get("done", False)),
+        latency_ms=latency_ms,
+        cwd=cwd,
+    )
