@@ -69,6 +69,8 @@ Audit notes:
 
 Slices without an `Audit notes:` block are reworked into a new commit, not amended. Quoting the gates is not a substitute. If a section truly does not apply (no new parsers, no new async code), say "n/a" with one sentence why.
 
+Pre-`bfdf0e4` audit work is catalogued in [docs/AUDIT_TRAIL.md](docs/AUDIT_TRAIL.md) in the same structured format so the audit trail reads consistently across history.
+
 ## Branch + commit style
 
 - `main` is always shippable. CI is required to merge.
