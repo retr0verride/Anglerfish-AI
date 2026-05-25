@@ -146,6 +146,30 @@ class OllamaConfig(BaseModel):
             "raise to reduce idle GPU work in shared-host deployments."
         ),
     )
+    session_fast_token_cap: int = Field(
+        default=50_000,
+        ge=0,
+        le=10_000_000,
+        description=(
+            "Per-attacker-session ceiling on tokens billed against the "
+            "fast tier. When consumed, the bridge serves the scripted "
+            "fallback for further commands in that session - the "
+            "attacker sees indistinguishable responses but the LLM is "
+            "not called. 0 disables the fast tier for the session (all "
+            "commands hit fallback)."
+        ),
+    )
+    session_deep_token_cap: int = Field(
+        default=20_000,
+        ge=0,
+        le=10_000_000,
+        description=(
+            "Per-attacker-session ceiling on tokens billed against the "
+            "deep tier. Same semantics as session_fast_token_cap; lower "
+            "default because deep is reserved for Stage 7+ summarisation "
+            "(less frequent, more expensive per call)."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

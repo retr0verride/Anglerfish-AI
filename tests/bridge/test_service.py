@@ -970,3 +970,150 @@ _ = (
     RateLimitConfig,
     BridgeRateLimiter,
 )
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 slice 5: per-session token budget
+# ---------------------------------------------------------------------------
+
+
+async def test_budget_for_returns_same_instance_per_session(
+    settings: AnglerfishSettings,
+) -> None:
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": "ok"}, "done": True})
+
+    service = AIBridgeService(settings, client=_mock_ollama_client(handler))
+    try:
+        sid = uuid4()
+        b1 = service.budget_for(sid)
+        b2 = service.budget_for(sid)
+        assert b1 is b2
+    finally:
+        await service.aclose()
+
+
+async def test_end_session_budget_drops_the_instance(
+    settings: AnglerfishSettings,
+) -> None:
+    from anglerfish.llm import LLMRole
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": "ok"}, "done": True})
+
+    service = AIBridgeService(settings, client=_mock_ollama_client(handler))
+    try:
+        sid = uuid4()
+        b1 = service.budget_for(sid)
+        b1.consume(LLMRole.FAST, 999)
+        service.end_session_budget(sid)
+        b2 = service.budget_for(sid)
+        # New instance: counters reset
+        assert b2.consumed_fast == 0
+        assert b2 is not b1
+    finally:
+        await service.aclose()
+
+
+async def test_handle_command_consumes_session_budget(
+    settings: AnglerfishSettings,
+) -> None:
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {"content": "drwxr-xr-x"},
+                "prompt_eval_count": 10,
+                "eval_count": 5,
+                "done": True,
+            },
+        )
+
+    service = AIBridgeService(settings, client=_mock_ollama_client(handler))
+    session = _make_session()
+    try:
+        await service.handle_command(session, "ls /etc")
+        await service.handle_command(session, "ls /var")
+    finally:
+        await service.aclose()
+    budget = service.budget_for(session.session_id)
+    assert budget.consumed_fast == 30  # two calls of 15 tokens each
+
+
+async def test_handle_command_exhausted_budget_falls_back(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """Force zero-cap fast bucket: every call falls back without hitting Ollama."""
+    ollama_calls = 0
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        nonlocal ollama_calls
+        ollama_calls += 1
+        return httpx.Response(200, json={"message": {"content": "ok"}, "done": True})
+
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        ollama=OllamaConfig(
+            fast_model="fast:7b",
+            deep_model="deep:14b",
+            session_fast_token_cap=0,
+        ),
+    )
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        response = await service.handle_command(session, "ls /etc")
+    finally:
+        await service.aclose()
+    assert ollama_calls == 0
+    assert response.source == ResponseSource.FALLBACK
+    budget_events = [e for e in audit.events if e[0] == "bridge.budget_exhausted"]
+    assert len(budget_events) == 1
+    _, fields = budget_events[0]
+    assert fields["session_id"] == str(session.session_id)
+    assert isinstance(fields["budget"], dict)
+
+
+async def test_handle_command_stream_exhausted_budget_yields_fallback_chunk(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    ollama_calls = 0
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        nonlocal ollama_calls
+        ollama_calls += 1
+        return httpx.Response(200, content=b'{"done":true}\n')
+
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        ollama=OllamaConfig(
+            fast_model="fast:7b",
+            deep_model="deep:14b",
+            session_fast_token_cap=0,
+        ),
+    )
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        chunks = [c async for c in service.handle_command_stream(session, "ls")]
+    finally:
+        await service.aclose()
+    assert ollama_calls == 0
+    assert chunks[-1].done is True
+    assert chunks[-1].source == ResponseSource.FALLBACK
+    budget_events = [e for e in audit.events if e[0] == "bridge.budget_exhausted"]
+    assert len(budget_events) == 1

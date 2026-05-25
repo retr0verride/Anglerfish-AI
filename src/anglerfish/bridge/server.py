@@ -329,6 +329,7 @@ def create_bridge_app(
     async def end_session(session_id: UUID) -> None:
         async with lock:
             sessions.pop(session_id, None)
+        service.end_session_budget(session_id)
         logger.info("bridge.session_ended id=%s", session_id)
 
     @app.get("/api/v1/sessions")

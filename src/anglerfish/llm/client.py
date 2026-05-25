@@ -31,6 +31,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish.config.models import OllamaConfig
+from anglerfish.llm.budget import TokenBudget
 from anglerfish.llm.errors import OllamaResponseError, OllamaUnavailableError
 from anglerfish.llm.roles import LLMRole
 
@@ -131,13 +132,23 @@ class LLMClient:
         messages: Sequence[ChatMessage],
         *,
         role: LLMRole = LLMRole.FAST,
+        budget: TokenBudget | None = None,
     ) -> ChatResult:
         """Send ``messages`` for ``role``, return content + token usage.
 
+        When ``budget`` is supplied, the per-role remaining cap is
+        checked *before* the call - an exhausted role raises
+        :class:`BudgetExhaustedError` with no Ollama traffic. The
+        actual ``prompt_eval_count + eval_count`` reported on the
+        response is then added to ``budget.consumed_<role>``.
+
         Raises:
+            BudgetExhaustedError: ``budget`` supplied and exhausted.
             OllamaUnavailableError: network failure or 5xx response.
             OllamaResponseError: 4xx response or malformed body.
         """
+        if budget is not None:
+            budget.check(role)
         payload: dict[str, Any] = {
             "model": self.model_for(role),
             "stream": False,
@@ -186,13 +197,17 @@ class LLMClient:
             raise OllamaResponseError(
                 "Ollama response 'message.content' is not a string",
             )
-        return ChatResult(content=content, usage=_parse_usage(data))
+        usage = _parse_usage(data)
+        if budget is not None:
+            budget.consume(role, usage.prompt_tokens + usage.completion_tokens)
+        return ChatResult(content=content, usage=usage)
 
     async def stream_chat(
         self,
         messages: Sequence[ChatMessage],
         *,
         role: LLMRole = LLMRole.FAST,
+        budget: TokenBudget | None = None,
     ) -> AsyncIterator[ChatChunk]:
         """Stream a chat response from Ollama as :class:`ChatChunk` objects.
 
@@ -201,13 +216,22 @@ class LLMClient:
         terminal chunk carries ``done=True`` and a populated
         :class:`TokenUsage`.
 
-        Network or protocol failures before the first chunk surface as
-        the same exception types :meth:`chat` raises
-        (:class:`OllamaUnavailableError` / :class:`OllamaResponseError`).
-        Failures *during* iteration (transport reset, JSON parse error
-        on a chunk) raise :class:`OllamaUnavailableError` to the caller
-        so callers degrade to fallback uniformly.
+        When ``budget`` is supplied, the per-role remaining cap is
+        checked *before* the request is sent - an exhausted role
+        raises :class:`BudgetExhaustedError` with no Ollama traffic
+        and no chunks yielded. The terminal chunk's usage is added to
+        ``budget.consumed_<role>`` after the stream completes
+        successfully; partial-stream failures do not consume budget
+        (Ollama would not have charged for it either).
+
+        Raises:
+            BudgetExhaustedError: ``budget`` supplied and exhausted.
+            OllamaUnavailableError: network failure, 5xx response,
+                or malformed chunk mid-stream.
+            OllamaResponseError: 4xx response before the first chunk.
         """
+        if budget is not None:
+            budget.check(role)
         payload: dict[str, Any] = {
             "model": self.model_for(role),
             "stream": True,
@@ -232,6 +256,11 @@ class LLMClient:
                         f"{body_preview!r}",
                     )
                 async for chunk in self._iter_stream_lines(response):
+                    if chunk.done and chunk.usage is not None and budget is not None:
+                        budget.consume(
+                            role,
+                            chunk.usage.prompt_tokens + chunk.usage.completion_tokens,
+                        )
                     yield chunk
         except httpx.HTTPError as exc:
             raise OllamaUnavailableError(

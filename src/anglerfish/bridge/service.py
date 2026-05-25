@@ -24,6 +24,7 @@ import shlex
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Self
+from uuid import UUID
 
 from anglerfish.audit import AuditLog
 from anglerfish.bridge.defense import (
@@ -46,7 +47,8 @@ from anglerfish.bridge.rate_limit import BridgeRateLimiter
 from anglerfish.bridge.sanitize import cap_output, sanitize_command
 from anglerfish.bridge.session import SessionContext
 from anglerfish.config.settings import AnglerfishSettings
-from anglerfish.llm import LLMClient
+from anglerfish.llm import LLMClient, TokenBudget
+from anglerfish.llm.budget import BudgetExhaustedError
 from anglerfish.llm.errors import LLMError
 from anglerfish.models.session import BridgeChunk, BridgeResponse, ResponseSource
 
@@ -88,6 +90,10 @@ class AIBridgeService:
         )
         self._monotonic = monotonic
         self._logger = logger if logger is not None else logging.getLogger(__name__)
+        # Per-session token budgets. Created lazily on first command in a
+        # session and dropped via end_session_budget() from the HTTP DELETE
+        # path so the dict does not grow unbounded.
+        self._budgets: dict[UUID, TokenBudget] = {}
 
     @property
     def settings(self) -> AnglerfishSettings:
@@ -100,6 +106,21 @@ class AIBridgeService:
     @property
     def limiter(self) -> BridgeRateLimiter:
         return self._limiter
+
+    def budget_for(self, session_id: UUID) -> TokenBudget:
+        """Return (creating if needed) the per-session :class:`TokenBudget`."""
+        budget = self._budgets.get(session_id)
+        if budget is None:
+            budget = TokenBudget(
+                fast_token_cap=self._settings.ollama.session_fast_token_cap,
+                deep_token_cap=self._settings.ollama.session_deep_token_cap,
+            )
+            self._budgets[session_id] = budget
+        return budget
+
+    def end_session_budget(self, session_id: UUID) -> None:
+        """Drop the per-session budget. Safe to call for unknown ids."""
+        self._budgets.pop(session_id, None)
 
     async def handle_command(
         self,
@@ -169,6 +190,7 @@ class AIBridgeService:
             return BridgeResponse(text="", source=ResponseSource.AI, latency_ms=0.0)
 
         start = self._monotonic()
+        budget = self.budget_for(session.session_id)
         try:
             async with self._limiter.slot(session.session_id):
                 messages = build_messages(
@@ -177,7 +199,7 @@ class AIBridgeService:
                     cwd=session.cwd,
                     history=session.history(),
                 )
-                result = await self._client.chat(messages)
+                result = await self._client.chat(messages, budget=budget)
                 # Defense layer (Stage 1): cap FIRST, then scan. Capping
                 # before the filter prevents a misbehaving model (or an
                 # attacker-influenced context) from forcing the regex
@@ -207,6 +229,9 @@ class AIBridgeService:
                         f"{output_verdict.detector} fired (score={output_verdict.score})",
                     )
                 source = ResponseSource.AI
+        except BudgetExhaustedError as exc:
+            self._record_budget_exhausted(session, exc)
+            text, source = self._fallback(session, sanitised, reason=exc)
         except (
             OllamaUnavailableError,
             OllamaResponseError,
@@ -299,6 +324,7 @@ class AIBridgeService:
         start = self._monotonic()
         accumulated: list[str] = []
         error: LLMError | None = None
+        budget = self.budget_for(session.session_id)
         try:
             async with self._limiter.slot(session.session_id):
                 messages = build_messages(
@@ -308,7 +334,7 @@ class AIBridgeService:
                     history=session.history(),
                 )
                 try:
-                    async for chunk in self._client.stream_chat(messages):
+                    async for chunk in self._client.stream_chat(messages, budget=budget):
                         if chunk.delta:
                             accumulated.append(chunk.delta)
                             yield BridgeChunk(
@@ -316,6 +342,9 @@ class AIBridgeService:
                                 source=ResponseSource.AI,
                                 done=False,
                             )
+                except BudgetExhaustedError as exc:
+                    self._record_budget_exhausted(session, exc)
+                    error = exc
                 except (OllamaUnavailableError, OllamaResponseError) as exc:
                     error = exc
         except (SessionRateLimitedError, GlobalQueueTimeoutError) as exc:
@@ -396,6 +425,22 @@ class AIBridgeService:
             snippet=verdict.snippet,
             session_id=str(session.session_id),
             attacker_ip=session.source_ip,
+        )
+
+    def _record_budget_exhausted(
+        self,
+        session: SessionContext,
+        exc: BudgetExhaustedError,
+    ) -> None:
+        """Audit a per-session token-budget exhaustion."""
+        budget = self._budgets.get(session.session_id)
+        budget_snapshot = budget.as_dict() if budget is not None else {}
+        self._audit_log.record(
+            "bridge.budget_exhausted",
+            session_id=str(session.session_id),
+            attacker_ip=session.source_ip,
+            error=str(exc),
+            budget=budget_snapshot,
         )
 
     def _record_scan_truncated(
