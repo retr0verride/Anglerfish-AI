@@ -139,9 +139,11 @@ def bridge_serve(
     # results (startup) both write to the same JSONL append-only log.
     audit_log = AuditLog(settings.audit.log_path)
     ai_client = OllamaClient(settings.ollama)
+    # Slice 1 of Stage 5 verifies just the fast model. Slice 2 extends
+    # ModelIntegrity to walk every configured role.
     integrity = ModelIntegrity(
         settings.defense,
-        settings.ollama.model,
+        settings.ollama.fast_model,
         audit_log,
     )
 

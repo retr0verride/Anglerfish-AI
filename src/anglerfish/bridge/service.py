@@ -26,14 +26,12 @@ from collections.abc import Callable
 from typing import Self
 
 from anglerfish.audit import AuditLog
-from anglerfish.bridge.client import OllamaClient
 from anglerfish.bridge.defense import (
     DefenseVerdict,
     InjectionScorer,
     OutputFilter,
 )
 from anglerfish.bridge.errors import (
-    BridgeError,
     GlobalQueueTimeoutError,
     InjectionDetectedError,
     OllamaResponseError,
@@ -48,6 +46,8 @@ from anglerfish.bridge.rate_limit import BridgeRateLimiter
 from anglerfish.bridge.sanitize import cap_output, sanitize_command
 from anglerfish.bridge.session import SessionContext
 from anglerfish.config.settings import AnglerfishSettings
+from anglerfish.llm import LLMClient
+from anglerfish.llm.errors import LLMError
 from anglerfish.models.session import BridgeResponse, ResponseSource
 
 __all__ = ["AIBridgeService"]
@@ -63,7 +63,7 @@ class AIBridgeService:
         self,
         settings: AnglerfishSettings,
         *,
-        client: OllamaClient,
+        client: LLMClient,
         limiter: BridgeRateLimiter | None = None,
         audit_log: AuditLog | None = None,
         output_filter: OutputFilter | None = None,
@@ -94,7 +94,7 @@ class AIBridgeService:
         return self._settings
 
     @property
-    def client(self) -> OllamaClient:
+    def client(self) -> LLMClient:
         return self._client
 
     @property
@@ -181,7 +181,7 @@ class AIBridgeService:
                     cwd=session.cwd,
                     history=session.history(),
                 )
-                raw = await self._client.chat(messages)
+                result = await self._client.chat(messages)
                 # Defense layer (Stage 1): cap FIRST, then scan. Capping
                 # before the filter prevents a misbehaving model (or an
                 # attacker-influenced context) from forcing the regex
@@ -189,7 +189,7 @@ class AIBridgeService:
                 # also normalises trailing whitespace which gives the
                 # filter cleaner input.
                 text = cap_output(
-                    raw,
+                    result.content,
                     max_chars=self._settings.ollama.max_response_chars,
                 )
                 output_verdict = self._output_filter.check(text)
@@ -274,7 +274,7 @@ class AIBridgeService:
         session: SessionContext,
         command: str,
         *,
-        reason: BridgeError,
+        reason: LLMError,
     ) -> tuple[str, ResponseSource]:
         self._logger.warning(
             "bridge.fallback session=%s reason=%s message=%s",

@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from anglerfish.bridge.client import ChatMessage
 from anglerfish.config.models import BridgeConfig
+from anglerfish.llm import ChatMessage
 from anglerfish.models.session import CommandTurn
 
 __all__ = ["build_messages", "build_system_prompt"]

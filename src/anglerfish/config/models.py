@@ -24,7 +24,7 @@ import ipaddress
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
@@ -105,17 +105,28 @@ class OllamaConfig(BaseModel):
             "When set, base_url is permitted to point at this IP and no other."
         ),
     )
-    model: str = Field(
+    fast_model: str = Field(
         default="qwen3:14b",
         min_length=1,
         max_length=128,
         description=(
-            "Ollama model tag. Default is qwen3:14b — Apache-2.0 "
-            "licensed, Hugging Face-distributed, 14B params fits in "
-            "12GB VRAM at Q4. Avoid deepseek-coder for production "
-            "deployments: third-party security reviews have flagged "
-            "CCP-aligned content moderation that surfaces in shell "
-            "honeypot contexts. See docs/MODEL_SETUP.md."
+            "Tag of the fast tier model — handles every attacker "
+            "command. Default qwen3:14b: Apache-2.0, 14B params at "
+            "Q4 fits in 12GB VRAM. Avoid deepseek-coder; third-"
+            "party security reviews have flagged CCP-aligned content "
+            "moderation that surfaces in shell honeypot contexts. "
+            "See docs/MODEL_SETUP.md."
+        ),
+    )
+    deep_model: str = Field(
+        default="phi-4",
+        min_length=1,
+        max_length=128,
+        description=(
+            "Tag of the deep tier model — used by Stage 7+ for "
+            "intent extraction and session summarisation. Heavier "
+            "reasoning, slower; not called per-command. Default "
+            "phi-4: 14B params, strong structured output."
         ),
     )
     request_timeout_s: float = Field(default=45.0, gt=0.0, le=600.0)
@@ -124,6 +135,30 @@ class OllamaConfig(BaseModel):
     max_response_chars: int = Field(default=8192, gt=0, le=65536)
     temperature: float = Field(default=0.4, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_model_shim(cls, data: Any) -> Any:
+        """Accept the pre-Stage-5 `model=` key as an alias for fast_model.
+
+        Operators upgrading from Stage 1-4.x have
+        ``ANGLERFISH_OLLAMA__MODEL=<tag>`` in their env file. Pydantic-
+        settings passes it as ``model=`` on construction; this validator
+        renames it to ``fast_model`` if ``fast_model`` is not already
+        supplied. After one release cycle the shim is removed and the
+        wizard's ``--reconfigure`` writes both new keys.
+        """
+        if not isinstance(data, dict) or "model" not in data:
+            return data
+        # Work on a copy so the validator stays pure. Pop the alias
+        # first, then route the value if fast_model wasn't supplied.
+        # Both-supplied case (operators mid-migration with both keys in
+        # their env file): explicit fast_model wins, alias drops
+        # silently rather than raise.
+        new_data = dict(data)
+        legacy_value = new_data.pop("model")
+        new_data.setdefault("fast_model", legacy_value)
+        return new_data
 
     @model_validator(mode="after")
     def _validate_endpoint_host(self) -> Self:

@@ -53,7 +53,10 @@ async def test_chat_returns_assistant_content() -> None:
         result = await client.chat([ChatMessage(role="user", content="ls /etc")])
     finally:
         await client.aclose()
-    assert result == "drwxr-xr-x 2 root root 4096"
+    # Stage 5 swapped the return type from str to ChatResult; the
+    # bridge.client alias keeps the import path alive for one release
+    # cycle but call sites must unwrap result.content.
+    assert result.content == "drwxr-xr-x 2 root root 4096"
 
 
 async def test_chat_5xx_is_unavailable() -> None:
@@ -162,7 +165,7 @@ async def test_async_context_manager_closes_owned_client() -> None:
     client = OllamaClient(OllamaConfig(), http_client=tracking)
     async with client:
         result = await client.chat([ChatMessage(role="user", content="x")])
-    assert result == "ok"
+    assert result.content == "ok"
     # We did NOT own the injected client, so aclose() should not have been called.
     assert closed == []
     # Caller still has to close their injected client.
@@ -182,7 +185,10 @@ async def test_client_creates_own_transport_when_none_provided(
             super().__init__(*args, **kwargs)
             created.append(self)
 
-    monkeypatch.setattr("anglerfish.bridge.client.httpx.AsyncClient", _Spy)
+    # The real httpx.AsyncClient construction now lives in the
+    # anglerfish.llm.client module (Stage 5 moved the class there);
+    # bridge.client is a re-export shim. Patch where it's used.
+    monkeypatch.setattr("anglerfish.llm.client.httpx.AsyncClient", _Spy)
     client = OllamaClient(OllamaConfig())
     assert len(created) == 1
     await client.aclose()

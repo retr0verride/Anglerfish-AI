@@ -45,8 +45,32 @@ def test_log_level_members() -> None:
 def test_ollama_defaults_are_loopback() -> None:
     cfg = OllamaConfig()
     assert cfg.base_url.host == "127.0.0.1"
-    assert cfg.model == "qwen3:14b"
+    assert cfg.fast_model == "qwen3:14b"
+    assert cfg.deep_model == "phi-4"
     assert cfg.trusted_remote_host is None
+
+
+def test_ollama_legacy_model_key_routes_to_fast_model() -> None:
+    """Pre-Stage-5 operators had ANGLERFISH_OLLAMA__MODEL=<tag>; the
+    backward-compat shim renames it to fast_model on construction."""
+    cfg = OllamaConfig(model="custom-fast:7b")  # type: ignore[call-arg]
+    assert cfg.fast_model == "custom-fast:7b"
+
+
+def test_ollama_explicit_fast_model_wins_over_legacy_alias() -> None:
+    """During the deprecation window operators may have both keys in
+    their env file simultaneously. fast_model takes precedence."""
+    cfg = OllamaConfig(
+        model="legacy:tag",  # type: ignore[call-arg]
+        fast_model="explicit:tag",
+    )
+    assert cfg.fast_model == "explicit:tag"
+
+
+def test_ollama_mixed_roles_one_explicit_other_default() -> None:
+    cfg = OllamaConfig(deep_model="custom-deep:14b")
+    assert cfg.fast_model == "qwen3:14b"
+    assert cfg.deep_model == "custom-deep:14b"
 
 
 @pytest.mark.parametrize(
@@ -123,7 +147,7 @@ def test_ollama_field_bounds() -> None:
 def test_ollama_is_frozen() -> None:
     cfg = OllamaConfig()
     with pytest.raises(ValidationError):
-        cfg.model = "other:1b"  # type: ignore[misc]
+        cfg.fast_model = "other:1b"  # type: ignore[misc]
 
 
 def test_ollama_extra_fields_forbidden() -> None:

@@ -75,7 +75,9 @@ async def ollama_health(
     return {
         "reachable": reachable,
         "reachable_at": checked_at,
-        "model": settings.ollama.model,
+        # Reports the fast tier (handles every command). Slice 2 of
+        # Stage 5 extends this to per-role status.
+        "model": settings.ollama.fast_model,
         "integrity_check": integrity,
     }
 

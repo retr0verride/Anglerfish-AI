@@ -19,7 +19,6 @@ Errors raised by the bridge are exported from
 
 from __future__ import annotations
 
-from anglerfish.bridge.client import ChatMessage, OllamaClient
 from anglerfish.bridge.errors import (
     BridgeError,
     GlobalQueueTimeoutError,
@@ -40,6 +39,13 @@ from anglerfish.bridge.server import (
 )
 from anglerfish.bridge.service import AIBridgeService
 from anglerfish.bridge.session import SessionContext
+
+# Stage 5 moved these to anglerfish.llm; importing them through the
+# anglerfish.bridge.client deprecation shim would re-enter this
+# package init mid-load (anglerfish.llm.client imports from
+# anglerfish.bridge.errors). Source from the new home directly.
+from anglerfish.llm import ChatMessage
+from anglerfish.llm import LLMClient as OllamaClient
 
 __all__ = [
     "AIBridgeService",
