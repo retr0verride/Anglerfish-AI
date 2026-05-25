@@ -13,6 +13,7 @@ from anglerfish.models.credentials import CredentialRecord, CredentialStats
 from anglerfish.models.fingerprint import SessionFingerprint, SshBannerInfo
 from anglerfish.models.geo import GeoRecord
 from anglerfish.models.session import (
+    BridgeChunk,
     BridgeResponse,
     CommandTurn,
     ResponseSource,
@@ -21,6 +22,7 @@ from anglerfish.models.session import (
 from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
 
 __all__ = [
+    "BridgeChunk",
     "BridgeResponse",
     "CommandTurn",
     "CredentialRecord",

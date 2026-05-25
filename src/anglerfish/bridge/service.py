@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import shlex
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Self
 
 from anglerfish.audit import AuditLog
@@ -48,7 +48,7 @@ from anglerfish.bridge.session import SessionContext
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.llm import LLMClient
 from anglerfish.llm.errors import LLMError
-from anglerfish.models.session import BridgeResponse, ResponseSource
+from anglerfish.models.session import BridgeChunk, BridgeResponse, ResponseSource
 
 __all__ = ["AIBridgeService"]
 
@@ -219,6 +219,169 @@ class AIBridgeService:
         latency_ms = (self._monotonic() - start) * 1000.0
         session.record(sanitised, text, source=source, latency_ms=latency_ms)
         return BridgeResponse(text=text, source=source, latency_ms=latency_ms)
+
+    async def handle_command_stream(
+        self,
+        session: SessionContext,
+        command: str,
+    ) -> AsyncIterator[BridgeChunk]:
+        """Stream the shell response for ``command`` as :class:`BridgeChunk`s.
+
+        Mirrors :meth:`handle_command` but yields chunks progressively
+        for the lure to write to the attacker's terminal as they
+        arrive. The terminal chunk carries ``done=True`` and
+        ``latency_ms``; intermediate chunks have ``done=False`` and
+        ``latency_ms=None``.
+
+        Per the Stage 5 design, the OutputFilter runs once on the
+        assembled string after the stream completes. If it fires, the
+        defense audit event records the leak (the detection signal is
+        the value) but no rollback of already-emitted chunks is
+        attempted; doing so would just paint a more obvious tell.
+
+        Bridge-level failures degrade to a single fallback chunk if
+        no AI content was streamed yet, or close the stream cleanly
+        with what was already shipped otherwise.
+        """
+        sanitised = sanitize_command(
+            command,
+            max_chars=self._settings.bridge.max_input_chars,
+        )
+
+        if not sanitised.strip():
+            session.record(sanitised, "", source=ResponseSource.AI, latency_ms=0.0)
+            yield BridgeChunk(
+                delta="",
+                source=ResponseSource.AI,
+                done=True,
+                latency_ms=0.0,
+            )
+            return
+
+        injection_verdict = self._injection_scorer.score(sanitised)
+        if injection_verdict.truncated:
+            self._record_scan_truncated(
+                session,
+                kind="injection",
+                input_length=len(sanitised),
+                verdict=injection_verdict,
+            )
+        if injection_verdict.fired:
+            start = self._monotonic()
+            self._record_defense_fire(session, injection_verdict)
+            text, source = self._fallback(
+                session,
+                sanitised,
+                reason=InjectionDetectedError(
+                    f"{injection_verdict.detector} fired (score={injection_verdict.score})",
+                ),
+            )
+            latency_ms = (self._monotonic() - start) * 1000.0
+            session.record(sanitised, text, source=source, latency_ms=latency_ms)
+            yield BridgeChunk(
+                delta=text,
+                source=source,
+                done=True,
+                latency_ms=latency_ms,
+            )
+            return
+
+        if self._handle_cd(session, sanitised):
+            session.record(sanitised, "", source=ResponseSource.AI, latency_ms=0.0)
+            yield BridgeChunk(
+                delta="",
+                source=ResponseSource.AI,
+                done=True,
+                latency_ms=0.0,
+            )
+            return
+
+        start = self._monotonic()
+        accumulated: list[str] = []
+        error: LLMError | None = None
+        try:
+            async with self._limiter.slot(session.session_id):
+                messages = build_messages(
+                    sanitised,
+                    config=self._settings.bridge,
+                    cwd=session.cwd,
+                    history=session.history(),
+                )
+                try:
+                    async for chunk in self._client.stream_chat(messages):
+                        if chunk.delta:
+                            accumulated.append(chunk.delta)
+                            yield BridgeChunk(
+                                delta=chunk.delta,
+                                source=ResponseSource.AI,
+                                done=False,
+                            )
+                except (OllamaUnavailableError, OllamaResponseError) as exc:
+                    error = exc
+        except (SessionRateLimitedError, GlobalQueueTimeoutError) as exc:
+            error = exc
+
+        latency_ms = (self._monotonic() - start) * 1000.0
+
+        if error is None:
+            # Post-stream defense filter. Detection only; the chunks
+            # already left the bridge so we cannot redact them. The
+            # audit event is the operator signal.
+            full_text = cap_output(
+                "".join(accumulated),
+                max_chars=self._settings.ollama.max_response_chars,
+            )
+            output_verdict = self._output_filter.check(full_text)
+            if output_verdict.truncated:
+                self._record_scan_truncated(
+                    session,
+                    kind="output",
+                    input_length=len(full_text),
+                    verdict=output_verdict,
+                )
+            if output_verdict.fired:
+                self._record_defense_fire(session, output_verdict)
+            session.record(
+                sanitised,
+                full_text,
+                source=ResponseSource.AI,
+                latency_ms=latency_ms,
+            )
+            yield BridgeChunk(
+                delta="",
+                source=ResponseSource.AI,
+                done=True,
+                latency_ms=latency_ms,
+            )
+            return
+
+        # Errored. If we already streamed AI content, close cleanly
+        # and let the partial reply stand. Otherwise serve the
+        # scripted fallback as a single chunk.
+        if accumulated:
+            full_text = "".join(accumulated)
+            session.record(
+                sanitised,
+                full_text,
+                source=ResponseSource.AI,
+                latency_ms=latency_ms,
+            )
+            yield BridgeChunk(
+                delta="",
+                source=ResponseSource.AI,
+                done=True,
+                latency_ms=latency_ms,
+            )
+            return
+
+        text, source = self._fallback(session, sanitised, reason=error)
+        session.record(sanitised, text, source=source, latency_ms=latency_ms)
+        yield BridgeChunk(
+            delta=text,
+            source=source,
+            done=True,
+            latency_ms=latency_ms,
+        )
 
     def _record_defense_fire(
         self,

@@ -162,14 +162,15 @@ def test_no_secret_configured_means_no_auth_check(open_client: TestClient) -> No
 
 
 def test_protocol_version_constant() -> None:
-    # Stage 2A bumped to "2" to add CommandRequest.fs_context.
-    # Protocol "1" (the Cowrie shim's version) was dropped from
-    # SUPPORTED_PROTOCOLS alongside the 2026-05 Cowrie removal.
-    assert PROTOCOL_VERSION == "2"
+    # Stage 2A bumped to "2" (add CommandRequest.fs_context).
+    # Stage 5 slice 4 bumps to "3" (add ?stream=1 on the command
+    # endpoint). v2 stays accepted for one release cycle so a
+    # rolled-back lure keeps working against a v3 bridge.
+    assert PROTOCOL_VERSION == "3"
     assert PROTOCOL_VERSION in SUPPORTED_PROTOCOLS
 
 
 def test_legacy_protocol_v1_is_rejected() -> None:
     """The Cowrie shim's v1 acceptance was removed in 2026-05."""
     assert "1" not in SUPPORTED_PROTOCOLS
-    assert frozenset({"2"}) == SUPPORTED_PROTOCOLS
+    assert frozenset({"2", "3"}) == SUPPORTED_PROTOCOLS

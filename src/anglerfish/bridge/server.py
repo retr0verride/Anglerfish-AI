@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -54,13 +55,16 @@ __all__ = [
 
 
 # Bumped only on breaking changes to the bridge wire protocol.
-PROTOCOL_VERSION = "2"
+PROTOCOL_VERSION = "3"
 
 # Versions the server still accepts on incoming requests. Stage 2A
-# bumped the version to "2" to add CommandRequest.fs_context for the
-# lure. Protocol "1" was the Cowrie shim's version; both Cowrie and
-# its v1 acceptance path were removed in 2026-05.
-SUPPORTED_PROTOCOLS: frozenset[str] = frozenset({"2"})
+# bumped to "2" to add CommandRequest.fs_context. Stage 5 slice 4
+# bumps to "3" to add the additive ``?stream=1`` flag on the command
+# endpoint (NDJSON streaming response). v2 stays accepted for one
+# release cycle so a rolled-back lure keeps working against a v3
+# bridge. Protocol "1" was the Cowrie shim's version; both Cowrie
+# and its v1 acceptance path were removed in 2026-05.
+SUPPORTED_PROTOCOLS: frozenset[str] = frozenset({"2", "3"})
 
 _PROTOCOL_HEADER = "X-Anglerfish-Protocol"
 _AUTH_HEADER = "Authorization"
@@ -117,6 +121,29 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
 def _constant_time_equals(a: str, b: str) -> bool:
     """Length-aware constant-time string compare to resist timing oracles."""
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+async def _stream_command(
+    service: AIBridgeService,
+    ctx: SessionContext,
+    command: str,
+) -> AsyncIterator[bytes]:
+    """Render :meth:`AIBridgeService.handle_command_stream` as NDJSON bytes.
+
+    One JSON object per line. Terminal line (``done=true``) carries
+    ``latency_ms`` and ``cwd`` so the lure can update its prompt without
+    a separate request.
+    """
+    async for chunk in service.handle_command_stream(ctx, command):
+        payload: dict[str, object] = {
+            "delta": chunk.delta,
+            "source": str(chunk.source),
+            "done": chunk.done,
+        }
+        if chunk.done:
+            payload["latency_ms"] = chunk.latency_ms
+            payload["cwd"] = ctx.cwd
+        yield (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 class SessionStartRequest(BaseModel):
@@ -267,15 +294,29 @@ def create_bridge_app(
             fake_cwd=ctx.cwd,
         )
 
-    @app.post("/api/v1/session/{session_id}/command", response_model=CommandResponse)
+    @app.post("/api/v1/session/{session_id}/command", response_model=None)
     async def handle_command(
         session_id: UUID,
         req: CommandRequest,
-    ) -> CommandResponse:
+        stream: bool = False,
+    ) -> CommandResponse | StreamingResponse:
+        """Submit one command for the session.
+
+        Set ``?stream=1`` (protocol v3) for an NDJSON streaming
+        response: one JSON object per line with ``delta``, ``source``,
+        and ``done``; the terminal ``done=true`` line also carries
+        ``latency_ms`` and ``cwd``. Without the flag, returns a single
+        :class:`CommandResponse` body (protocol v2 behaviour).
+        """
         async with lock:
             ctx = sessions.get(session_id)
         if ctx is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        if stream:
+            return StreamingResponse(
+                _stream_command(service, ctx, req.command),
+                media_type="application/x-ndjson",
+            )
         result = await service.handle_command(ctx, req.command)
         return CommandResponse(
             text=result.text,

@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "BridgeChunk",
     "BridgeResponse",
     "CommandTurn",
     "ResponseSource",
@@ -59,6 +60,23 @@ class BridgeResponse(BaseModel):
     text: str
     source: ResponseSource
     latency_ms: float = Field(ge=0.0)
+
+
+class BridgeChunk(BaseModel):
+    """One streamed slice of an :class:`AIBridgeService` response.
+
+    Yielded by :meth:`anglerfish.bridge.AIBridgeService.handle_command_stream`.
+    Intermediate chunks carry ``done=False`` and the AI delta;
+    ``latency_ms`` is populated only on the terminal ``done=True``
+    chunk and is the total wall-clock time the call took.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    delta: str
+    source: ResponseSource
+    done: bool = False
+    latency_ms: float | None = Field(default=None, ge=0.0)
 
 
 class SessionSnapshot(BaseModel):

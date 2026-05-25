@@ -157,3 +157,107 @@ def test_command_request_rejects_unknown_field(client: TestClient) -> None:
         json={"command": "ls", "bogus_field": "x"},
     )
     assert cr.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 slice 4b: ?stream=1 returns NDJSON; absent / 0 keeps v2 JSON body.
+# ---------------------------------------------------------------------------
+
+
+def _ndjson_streaming_handler(
+    chunks: list[dict[str, object]],
+) -> Callable[[httpx.Request], httpx.Response]:
+    import json as _json
+
+    body = "\n".join(_json.dumps(c) for c in chunks) + "\n"
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=body.encode("utf-8"),
+            headers={"content-type": "application/x-ndjson"},
+        )
+
+    return handler
+
+
+def test_command_stream_returns_ndjson(settings: AnglerfishSettings) -> None:
+    handler = _ndjson_streaming_handler(
+        [
+            {"message": {"content": "hello "}, "done": False},
+            {"message": {"content": "world"}, "done": False},
+            {"done": True, "prompt_eval_count": 1, "eval_count": 2},
+        ],
+    )
+    service = AIBridgeService(settings, client=_mock_client(handler))
+    app = create_bridge_app(service)
+    with TestClient(app) as c:
+        sid = c.post(
+            "/api/v1/session",
+            json={"source_ip": "1.1.1.1", "username": "root"},
+        ).json()["session_id"]
+        with c.stream(
+            "POST",
+            f"/api/v1/session/{sid}/command?stream=1",
+            json={"command": "echo hi"},
+        ) as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/x-ndjson")
+            lines = [line for line in response.iter_lines() if line]
+
+    import json as _json
+
+    decoded = [_json.loads(line) for line in lines]
+    deltas = [c["delta"] for c in decoded]
+    assert "hello " in deltas
+    assert "world" in deltas
+    # Terminal chunk
+    assert decoded[-1]["done"] is True
+    assert decoded[-1]["latency_ms"] is not None
+    assert decoded[-1]["cwd"] == "/root"
+
+
+def test_command_stream_zero_returns_json_body(client: TestClient) -> None:
+    sid = client.post(
+        "/api/v1/session",
+        json={"source_ip": "1.1.1.1", "username": "root"},
+    ).json()["session_id"]
+    # ?stream=0 (or absent) keeps the v2 JSON shape.
+    r = client.post(
+        f"/api/v1/session/{sid}/command?stream=0",
+        json={"command": "ls"},
+    )
+    assert r.status_code == 200
+    assert "delta" not in r.json()
+    assert r.json()["text"] == "drwxr-xr-x"
+
+
+def test_command_stream_cd_yields_terminal_chunk_only(settings: AnglerfishSettings) -> None:
+    """cd is handled deterministically - streaming path yields one done chunk."""
+    called = False
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(500)
+
+    service = AIBridgeService(settings, client=_mock_client(handler))
+    app = create_bridge_app(service)
+    with TestClient(app) as c:
+        sid = c.post(
+            "/api/v1/session",
+            json={"source_ip": "1.1.1.1", "username": "root"},
+        ).json()["session_id"]
+        with c.stream(
+            "POST",
+            f"/api/v1/session/{sid}/command?stream=1",
+            json={"command": "cd /tmp"},
+        ) as response:
+            lines = [line for line in response.iter_lines() if line]
+    import json as _json
+
+    decoded = [_json.loads(line) for line in lines]
+    assert len(decoded) == 1
+    assert decoded[0]["done"] is True
+    assert decoded[0]["cwd"] == "/tmp"
+    assert called is False
