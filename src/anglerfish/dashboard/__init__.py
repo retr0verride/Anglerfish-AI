@@ -9,11 +9,12 @@ Public surface:
   and publish to subscribers. The pub/sub is ephemeral; the
   WebSocket endpoint consumes via :meth:`DashboardState.subscribe`.
 
-  As of Stage 4 there is no production writer wired into the
-  dashboard process. The bridge tracks sessions in its own in-
-  memory dict and does not push events to DashboardState. Stage
-  4.2 introduces a bridge→dashboard sink (forwarder-routed HTTP
-  push) so the store and pub/sub actually see production traffic.
+  Stage 4.2 wired :class:`AuditTailer` as the production writer:
+  the dashboard process tails ``/var/log/anglerfish/audit.jsonl``
+  in the background, translates lure session events into
+  ``update_session`` / ``record_turn`` / ``end_session`` calls,
+  and the existing pub/sub fans them out to WebSocket subscribers.
+  See ``docs/design/STAGE_4_2_audit_tailer.md``.
 * :class:`DashboardEvent`, :class:`DashboardEventKind` — wire types
   used by the WebSocket protocol.
 """

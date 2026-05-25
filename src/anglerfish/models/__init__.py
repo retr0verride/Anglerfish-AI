@@ -3,7 +3,8 @@
 These are not configuration — they are the runtime record types
 (sessions, command turns, bridge responses, threat assessments,
 network fingerprints, geo records, credential records) that producer
-subsystems emit and that the forwarder and dashboard consume.
+subsystems emit and that the persistent session store, the dashboard,
+and the credential store consume.
 """
 
 from __future__ import annotations

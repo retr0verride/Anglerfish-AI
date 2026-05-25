@@ -140,15 +140,18 @@ def bridge_serve(
     audit_log = AuditLog(settings.audit.log_path)
     ai_client = OllamaClient(settings.ollama)
 
-    # Pre-uvicorn integrity check: walk every configured LLM role
-    # (Stage 5 ships fast + deep). Runs BEFORE uvicorn.run() so any
-    # failure surfaces as a structured Console panel + clean
-    # typer.Exit(2), not a raw traceback in journalctl. The lifespan
-    # path stays available for tests of create_bridge_app in isolation
-    # (we pass integrity=None below so it doesn't double-check).
-    # Per-role budget: 10s times number of roles (two today).
-    roles_verified = 2
-    timeout_s = 10.0 * roles_verified
+    # Pre-uvicorn integrity check: walk every configured LLM role.
+    # Runs BEFORE uvicorn.run() so any failure surfaces as a
+    # structured Console panel + clean typer.Exit(2), not a raw
+    # traceback in journalctl. The lifespan path stays available for
+    # tests of create_bridge_app in isolation (we pass integrity=None
+    # below so it doesn't double-check).
+    # Per-role budget: 10s times the count of LLMRole members. When
+    # Stage 8 adds EMBED, this scales automatically.
+    from anglerfish.llm import LLMRole
+
+    per_role_budget_s = 10.0
+    timeout_s = per_role_budget_s * len(LLMRole)
     try:
         asyncio.run(
             asyncio.wait_for(

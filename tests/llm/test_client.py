@@ -78,22 +78,23 @@ async def test_chat_with_deep_role_picks_deep_model() -> None:
 
 
 def test_model_for_unknown_role_raises() -> None:
-    """Synthetic guard: should never trigger in production today
-    because LLMRole only defines FAST/DEEP, but the path is exercised
-    so the Stage 8 EMBED addition has a failure mode to reuse."""
+    """Regression coverage for the fail-loud invariant in model_for().
+
+    LLMRole defines FAST + DEEP today, so the raise is unreachable
+    in normal production use. This test exists to catch the
+    refactor that silently returns an empty string (or None) when a
+    new role is added to the enum without updating model_for(). The
+    Stage 8 EMBED addition is the first realistic trigger; until
+    then this is a regression guard, not a behavioural assertion.
+    """
     from enum import StrEnum
 
     class _PhantomRole(StrEnum):
         UNKNOWN = "unknown"
 
     client = LLMClient(OllamaConfig())
-    try:
-        with pytest.raises(ValueError, match="unknown role"):
-            client.model_for(_PhantomRole.UNKNOWN)  # type: ignore[arg-type]
-    finally:
-        # Owns its http client; close synchronously via the loop in
-        # the async tests above. Here we never opened a connection.
-        pass
+    with pytest.raises(ValueError, match="unknown role"):
+        client.model_for(_PhantomRole.UNKNOWN)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

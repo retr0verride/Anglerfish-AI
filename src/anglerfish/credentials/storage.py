@@ -184,8 +184,9 @@ class CredentialStore:
                 if existing_count >= cap:
                     # Cap reached for this source IP. Drop the new unique
                     # attempt to bound disk growth — the per-attempt event
-                    # is still emitted to Splunk by the forwarder, so the
-                    # operator can still see what was tried.
+                    # still lands in the audit log via the lure's
+                    # lure.login_attempt record, so the operator can still
+                    # see what was tried.
                     return False
             self._conn.execute(
                 """

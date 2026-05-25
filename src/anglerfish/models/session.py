@@ -1,8 +1,9 @@
 """Shared runtime data models for sessions and bridge responses.
 
-These types travel between the bridge, the forwarder, the threat engine,
-and the dashboard. They are frozen Pydantic models so that consumers can
-safely cache or pass them across task boundaries.
+These types travel between the bridge, the lure, the threat engine,
+the persistent session store, and the dashboard. They are frozen
+Pydantic models so that consumers can safely cache or pass them
+across task boundaries.
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ class SessionSnapshot(BaseModel):
     """Immutable summary of a session at a point in time.
 
     Produced by :meth:`anglerfish.bridge.SessionContext.snapshot` and
-    consumed by the forwarder and dashboard.
+    consumed by the persistent session store and the dashboard.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

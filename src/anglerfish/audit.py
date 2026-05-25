@@ -12,15 +12,30 @@ supported filesystems (ext2/3/4, btrfs, xfs), upgrading the
 convention to a filesystem-level invariant: even root can't truncate
 or rewrite past records without first removing the attribute. The
 file can still be deleted by root; pair with off-host shipping
-(Splunk HEC) for true tamper-evidence.
+(syslog forwarder, backup job, your SIEM of choice) for true
+tamper-evidence.
 
-Events recorded today:
+Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
 
-* ``wizard.run`` — every wizard execution (first-boot + ``--reconfigure``).
-* ``wizard.secrets_regenerated`` — which secrets were freshly issued.
-* ``credentials.key_rotated`` — when the credentials master key changes.
-* ``dashboard.login_success`` / ``dashboard.login_failure``.
-* ``threat.alert_fired`` — when a high-severity alert was dispatched.
+* Wizard: ``wizard.run``, ``wizard.secrets_regenerated``.
+* Credentials: ``credentials.key_rotated``.
+* Dashboard: ``dashboard.login_success``, ``dashboard.login_failure``,
+  ``login_rate_limited``, ``dashboard.export_served``.
+* Bridge: ``bridge.defense_fired``, ``bridge.scan_truncated``,
+  ``bridge.model_integrity_verified``, ``bridge.model_integrity_failed``,
+  ``bridge.model_integrity_skipped``.
+* Lure: ``lure.server_started``, ``lure.server_stopped``,
+  ``lure.session_opened``, ``lure.session_closed``,
+  ``lure.command_native``, ``lure.command_bridge``,
+  ``lure.fallback_served``, ``lure.bridge_unavailable``,
+  ``lure.rate_limited``, ``lure.subsystem_refused``,
+  ``lure.fingerprint_observed``, ``lure.login_attempt``.
+* Threat: ``threat.alert_fired``.
+* Geo: ``geo.update_succeeded``, ``geo.update_failed``.
+
+The Stage 4.2 audit-log tailer in
+:mod:`anglerfish.dashboard.audit_tailer` consumes the per-session
+``lure.*`` events to populate the persistent session store.
 
 The log is best-effort: a write failure logs a warning but never raises.
 The audit log MUST NOT itself crash the application — losing it would
