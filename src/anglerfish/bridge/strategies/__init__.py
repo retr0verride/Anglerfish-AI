@@ -22,8 +22,7 @@ Slice 6.1 ships only the ``off`` implementation; ``light`` and
 
 from __future__ import annotations
 
-import logging
-
+from anglerfish.bridge.strategies.aggressive import AggressiveStrategy
 from anglerfish.bridge.strategies.base import (
     StrategyContext,
     StrategyPreEffect,
@@ -33,6 +32,7 @@ from anglerfish.bridge.strategies.light import LightStrategy
 from anglerfish.bridge.strategies.off import OffStrategy
 
 __all__ = [
+    "AggressiveStrategy",
     "LightStrategy",
     "OffStrategy",
     "StrategyContext",
@@ -42,25 +42,20 @@ __all__ = [
 ]
 
 
-_logger = logging.getLogger(__name__)
-
-
 def get_strategy(name: str) -> WastingStrategyBase:
     """Return a strategy instance for ``name``.
 
-    Slice 6.2 added :class:`LightStrategy`; ``aggressive`` is still
-    routed to :class:`OffStrategy` until slice 6.3 lands. Unknown
-    names raise :class:`ValueError`; the caller treats this as a
-    misconfiguration and falls back to the bridge's static config.
+    All three documented strategies are now wired. Slice 6.3 added
+    :class:`AggressiveStrategy` (delays only; the clarification
+    injection mode the design doc describes lands in slice 6.4).
+    Unknown names raise :class:`ValueError`; the caller treats this
+    as a misconfiguration and falls back to the bridge's static
+    config.
     """
     if name == "off":
         return OffStrategy()
     if name == "light":
         return LightStrategy()
     if name == "aggressive":
-        # Stage 6 slice 2: real implementation lands in slice 6.3.
-        # Falling back to OffStrategy keeps the cross-process channel
-        # exercisable end-to-end without behaviour change yet.
-        _logger.debug("wasting_strategy=aggressive requested; slice 6.2 routes to off")
-        return OffStrategy()
+        return AggressiveStrategy()
     raise ValueError(f"unknown wasting strategy: {name!r}")

@@ -48,14 +48,11 @@ def test_get_strategy_off_returns_off_instance() -> None:
     assert isinstance(get_strategy("off"), OffStrategy)
 
 
-def test_get_strategy_aggressive_routes_to_off_until_slice_63() -> None:
-    """Slice 6.2 routes aggressive to OffStrategy until 6.3 lands.
-
-    The name is accepted (no ValueError) so dashboard-driven strategy
-    changes do not 500 the bridge during the slice-2 deploy window;
-    slice 6.3 ships the real aggressive implementation.
-    """
-    assert isinstance(get_strategy("aggressive"), OffStrategy)
+def test_get_strategy_off_returns_off_distinct_from_other_names() -> None:
+    """All three names now resolve to distinct strategy classes."""
+    assert isinstance(get_strategy("off"), OffStrategy)
+    assert get_strategy("light").name == "light"
+    assert get_strategy("aggressive").name == "aggressive"
 
 
 def test_get_strategy_unknown_name_raises_value_error() -> None:
