@@ -42,9 +42,7 @@ _HEADER = (
 
 _DEFAULT_DASHBOARD_PORT = 8420
 _DEFAULT_BRIDGE_PORT = 8421
-# Native SSH lure listener port. Pre-Stage-2 deployments ran Cowrie
-# on the same 2222/2223 ports; the lure inherited the default to keep
-# attacker-facing surface stable across the Cowrie removal.
+# Native SSH lure listener port.
 _DEFAULT_LURE_PORT = 2222
 
 

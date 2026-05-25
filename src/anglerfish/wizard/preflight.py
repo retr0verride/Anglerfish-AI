@@ -7,12 +7,9 @@ Two services may need a sanity check:
   anything < 500 because many webhook receivers reject HEAD/OPTIONS
   while still accepting POST.
 
-Each check has a hard timeout (default 5 s). Failures are advisory —
+Each check has a hard timeout (default 5 s). Failures are advisory:
 the wizard logs the result and continues. Operators get a final
 "continue anyway?" prompt if anything failed.
-
-Pre-Stage-2 deployments also probed Splunk HEC here; that check was
-removed alongside the Cowrie integration and the forwarder package.
 """
 
 from __future__ import annotations
@@ -48,6 +45,7 @@ class CheckResult:
         return "ok" if self.success else "fail"
 
     def render(self) -> str:
+        """Render this result as ``[OK|FAIL] service: detail`` for the wizard log."""
         return f"[{self.status.upper()}] {self.service}: {self.detail}"
 
 

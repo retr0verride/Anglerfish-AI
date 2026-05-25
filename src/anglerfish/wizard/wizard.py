@@ -30,6 +30,7 @@ from pathlib import Path
 from pydantic import HttpUrl, ValidationError
 
 from anglerfish.audit import AuditLog
+from anglerfish.dashboard.auth import hash_password
 from anglerfish.wizard.answers import NetworkConfig, WizardAnswers, WizardOutput
 from anglerfish.wizard.network import list_interfaces
 from anglerfish.wizard.persistence import save_answers
@@ -334,15 +335,13 @@ def prompt_for_answers(
     plain_password = prompt(password_prompt_label, "").strip()
     dashboard_admin_password_hash: str | None
     if plain_password:
-        from anglerfish.dashboard.auth import hash_password
-
         dashboard_admin_password_hash = hash_password(plain_password)
     elif keep_existing_hash:
-        # We *only* reach this branch when defaults is not None and its
-        # dashboard_admin_password_hash is not None — the keep_existing_hash
+        # Only reachable when defaults is not None and its
+        # dashboard_admin_password_hash is not None; the keep_existing_hash
         # guard above guarantees both.
         dashboard_admin_password_hash = (
-            defaults.dashboard_admin_password_hash  # type: ignore[union-attr]
+            defaults.dashboard_admin_password_hash  # type: ignore[union-attr]  # narrowed by keep_existing_hash guard above
         )
     else:
         dashboard_admin_password_hash = None

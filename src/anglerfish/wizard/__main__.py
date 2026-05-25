@@ -37,7 +37,7 @@ __all__ = ["app"]
 
 app = typer.Typer(
     name="anglerfish-wizard",
-    help="Anglerfish AI — first-boot configuration wizard.",
+    help="Anglerfish AI first-boot configuration wizard.",
     add_completion=False,
     no_args_is_help=False,
 )

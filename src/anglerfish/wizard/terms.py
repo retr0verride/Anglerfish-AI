@@ -11,7 +11,7 @@ __all__ = ["TERMS"]
 
 
 TERMS: str = """\
-ANGLERFISH AI — TERMS OF RESPONSIBLE USE
+ANGLERFISH AI: TERMS OF RESPONSIBLE USE
 
 By proceeding past this screen you affirm each of the following:
 

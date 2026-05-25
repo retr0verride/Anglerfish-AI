@@ -4,10 +4,15 @@ The wizard writes ``/etc/anglerfish/wizard.json`` (mode 0600) after a
 successful run. ``anglerfish-wizard --reconfigure`` reads it back and
 uses the values as defaults in the interactive prompts.
 
-The file deliberately excludes secrets. Run-to-run, the wizard always
-regenerates the bridge shared secret, the dashboard session secret,
-and the credentials encryption key. Operators using ``--reconfigure``
-should restart the bridge, the lure, and the dashboard afterwards.
+The file excludes the values the wizard regenerates run-to-run:
+the bridge shared secret, the dashboard session secret, and the
+credentials encryption key. It does retain the dashboard
+admin-password bcrypt hash and the MaxMind licence key so
+``--reconfigure`` can offer "blank to keep" semantics. The file
+is written 0600 (root-owned in production); see TODO-7 for the
+SecretStr-vs-round-trip trade-off that prevents Pydantic
+SecretStr typing here. Operators using ``--reconfigure`` should
+restart the bridge, the lure, and the dashboard afterwards.
 """
 
 from __future__ import annotations

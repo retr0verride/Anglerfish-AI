@@ -117,9 +117,8 @@ class WizardAnswers(BaseModel):
     fake_hostname: str = Field(default="srv-prod-01", min_length=1, max_length=63)
     fake_username: str = Field(default="root", min_length=1, max_length=32)
 
-    # Threat-alert webhook (optional). Note: pre-Stage-2 deployments
-    # also surfaced Splunk HEC forwarding here; that path was removed
-    # alongside the Cowrie integration in 2026-05.
+    # Optional threat-alert webhook (Slack, PagerDuty, ...). Bridge fires
+    # against this URL on alert; absence is fine.
     threat_alert_webhook: HttpUrl | None = None
 
     # Geo enrichment — MaxMind licence key is optional; without it

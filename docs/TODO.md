@@ -158,3 +158,43 @@ make the behaviour change inline; logged here for a follow-up.
 
 Owner: TBD. Surfaced during the Stage 5 retroactive audit sweep of
 the sessions + credentials subsystems.
+
+## TODO-7: `WizardAnswers` secret fields stored as bare `str`
+
+`src/anglerfish/wizard/answers.py` declares both
+``dashboard_admin_password_hash`` and ``maxmind_license_key`` as
+``str | None``. Both are credentials and should ideally be
+``SecretStr | None`` so they do not leak in tracebacks or repr
+output.
+
+The straightforward SecretStr upgrade breaks the persistence
+round-trip:
+
+- ``save_answers`` calls ``model_dump(mode="json")`` which by
+  default serialises ``SecretStr`` as the literal string
+  ``"**********"``.
+- ``load_answers`` then validates the loaded payload back into a
+  ``SecretStr`` whose ``.get_secret_value()`` returns
+  ``"**********"``.
+- The ``--reconfigure`` "blank to keep the previously-configured
+  password" flow (wizard.py:340) depends on the saved hash
+  round-tripping intact; the SecretStr default would silently
+  replace it with the masked string.
+
+Two viable fixes (both deferred):
+
+- Custom ``@model_serializer`` on ``WizardAnswers`` that unwraps
+  SecretStr fields to plaintext for the on-disk JSON (the file is
+  already 0600 / trusted operator-only). This makes the SecretStr
+  type cosmetic but preserves the repr-leak protection.
+- Move secret-bearing fields out of ``WizardAnswers`` entirely so
+  they live only in transient memory during the prompt + render
+  flow and are never persisted; the wizard would prompt for the
+  password every ``--reconfigure`` rather than offering "blank to
+  keep".
+
+Current protection: ``wizard.json`` is written 0600 in
+``persistence.save_answers``, no code path logs the answers object
+beyond the file path (verified during the Stage 5 audit sweep).
+Surfaced during the Stage 5 retroactive audit sweep of the
+config and wizard subsystems. Owner: TBD.
