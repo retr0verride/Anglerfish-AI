@@ -10,11 +10,13 @@ trip, plain text. It does not survive what stages 6-12 need:
 * **Streaming** so the attacker sees output appear progressively.
   Time-wasting (Stage 6) depends on this; a 20-second buffered
   reply that arrives in one chunk is implausible and obvious.
-* **Multi-model orchestration.** Stages 7-8 need a slower
-  reasoning model (intent extraction, session summarisation) and
-  an embedding model (behavioural clustering). Both need to
-  coexist with the fast model that handles every command. Single
-  `settings.ollama.model` cannot represent three roles.
+* **Multi-model orchestration.** Stage 7 needs a slower reasoning
+  model (intent extraction, session summarisation) alongside the
+  fast model that handles every command. Stage 8 adds an
+  embedding model on top for behavioural clustering. Single
+  `settings.ollama.model` cannot represent multiple roles. Stage
+  5 lands the fast/deep roles; Stage 8 adds embed when its
+  consumer exists to validate the shape.
 * **Structured output with schema validation.** Intent extraction
   (Stage 7) produces a Pydantic record; a free-form LLM string is
   the wrong shape. The current client returns `str` and has no
@@ -85,7 +87,8 @@ Stage 2 Cowrie pattern).
 
 ### Configuration shape
 
-`OllamaConfig` grows from one model field to three:
+`OllamaConfig` grows from one model field to two roles (embed
+deferred to Stage 8):
 
 ```python
 class OllamaConfig(BaseModel):
@@ -93,12 +96,11 @@ class OllamaConfig(BaseModel):
     trusted_remote_host: IPvAnyAddress | None = None
     fast_model: str = "qwen3:14b"
     deep_model: str = "phi-4"
-    embed_model: str = "nomic-embed-text"
     # Existing single-model knobs become per-role under a nested
     # OllamaModelConfig (temperature, top_p, num_predict, timeouts).
     fast: OllamaModelConfig = Field(default_factory=...)
     deep: OllamaModelConfig = Field(default_factory=...)
-    embed: OllamaModelConfig = Field(default_factory=...)
+    # Stage 8 adds: embed_model + embed: OllamaModelConfig
 ```
 
 Backward compatibility: a `model_validator(mode="before")` accepts
@@ -106,7 +108,7 @@ the legacy `model=` key and routes it to `fast_model`. Operators
 who upgraded from Stage 1-4.x with a single `ANGLERFISH_OLLAMA__MODEL`
 keep working. After one release cycle the shim is removed; the
 deprecation lands in CHANGELOG with a wizard `--reconfigure` prompt
-that writes the three keys.
+that writes the two keys.
 
 ### LLMClient
 
@@ -114,7 +116,7 @@ that writes the three keys.
 class LLMRole(StrEnum):
     FAST = "fast"
     DEEP = "deep"
-    EMBED = "embed"
+    # Stage 8 adds: EMBED = "embed"
 
 
 class LLMClient:
@@ -158,12 +160,7 @@ class LLMClient:
         max_retries: int = 2,
     ) -> T: ...
 
-    async def embed(
-        self,
-        text: str,
-        *,
-        budget: TokenBudget | None = None,
-    ) -> EmbeddingVector: ...
+    # Stage 8 adds: async def embed(text, *, budget) -> EmbeddingVector
 
     async def aclose(self) -> None: ...
 ```
@@ -243,10 +240,9 @@ class TokenBudget:
 
     fast_token_cap: int = 50_000
     deep_token_cap: int = 20_000
-    embed_token_cap: int = 10_000
     consumed_fast: int = 0
     consumed_deep: int = 0
-    consumed_embed: int = 0
+    # Stage 8 adds: embed_token_cap + consumed_embed
 ```
 
 The bridge maintains a `dict[UUID, TokenBudget]` keyed on
@@ -285,9 +281,9 @@ input routes to `fast` via the same backward-compat shim as the
 model name.
 
 Verification runs once per role at startup with the existing
-10s budget per role (not 10s total — three roles get 30s).
-Hash mismatch on any role still hard-fails the bridge process,
-same as Stage 1.4.
+10s budget per role (not 10s total — two roles in Stage 5 get
+20s; Stage 8 adds a third). Hash mismatch on any role still
+hard-fails the bridge process, same as Stage 1.4.
 
 ### Defense layer interaction
 
@@ -310,7 +306,7 @@ would force two passes for no security gain.
 | Budget exhausted                         | `BudgetExhaustedError`. Bridge serves scripted fallback. Audit event `bridge.budget_exhausted` fires.              |
 | Structured output validation fails after max_retries | `StructuredOutputError` raised to caller (Stage 7+). Stage 5 does not call structured_chat itself; no production caller in 5.       |
 | Warmup permanently failing               | Audit event per refresh cycle; dashboard health panel shows `warmed_at: null`. No request blocking.                |
-| Operator config has only legacy `model=` | Shim routes to `fast_model`, `deep_model` defaults to qwen3:14b too, embed defaults. Wizard `--reconfigure` resolves. |
+| Operator config has only legacy `model=` | Shim routes to `fast_model`; `deep_model` defaults to phi-4. Wizard `--reconfigure` resolves.                          |
 | Hash mismatch on one role                | Bridge fails to start, same as Stage 1.4 single-model behaviour. Operator sees which role mismatched in the error. |
 
 ## Non-goals
@@ -347,17 +343,17 @@ to maxint). Code path stays live but never trips.
 
 `tests/llm/` is the new package. Targets:
 
-* `test_client.py` (~20): role selection, error mapping (parity
-  with existing `tests/bridge/test_client.py`), usage parsing,
-  budget decrement.
+* `test_client.py` (~20): role selection (fast/deep), error
+  mapping (parity with existing `tests/bridge/test_client.py`),
+  usage parsing, budget decrement.
 * `test_streaming.py` (~10): NDJSON chunk iteration, partial
   stream interruption, final usage chunk parsing, OutputFilter
   applied to assembled string.
 * `test_structured.py` (~10): valid JSON first try, validation
   failure → retry → success, validation failure exhausted →
   `StructuredOutputError`, budget covers retries.
-* `test_budget.py` (~8): per-role decrement, exhaustion raises,
-  thread-safety under concurrent calls.
+* `test_budget.py` (~8): per-role decrement (fast vs deep),
+  exhaustion raises, thread-safety under concurrent calls.
 * `test_warmup.py` (~6): startup + refresh schedule, failure
   swallows, audit event emission.
 * `test_defense_integration.py` (~5): OutputFilter wraps
@@ -372,43 +368,42 @@ Existing tests updated:
   in place of `OllamaClient`; assertions on `result.content`
   unchanged.
 * `tests/config/test_models.py`: legacy `model=` shim test;
-  three-role positive test; mixed (one explicit role, others
+  two-role positive test; mixed (one explicit role, the other
   default) test.
-
-If review prefers the **5A/5B split**, the natural cut is right
-after `test_warmup.py` — every test above that line is foundation;
-streaming + budgets + structured form 5B and ship as one PR a
-release later.
 
 Quality gates: ruff clean, ruff format clean, mypy --strict
 clean, pytest ≥ 90% total coverage. Same gates as Stage 4.
 
-## Open questions for review
+## Decisions (locked during operator review)
 
-1. **5A vs unified Stage 5.** Foundation + warmup ships clean;
-   streaming + budgets + structured is operator-visible work
-   that justifies its own review. Or all five together and one
-   PR? Recommendation: unified, with the implementation order
-   listed in "Scope decision" above so each slice is shippable
-   green mid-flight.
-2. **Embedding model in Stage 5.** Stage 8 (behavioural
-   clustering) is the first real consumer. Including it now means
-   defining `EmbeddingVector` (numpy? plain tuple?) and the
-   embed call shape without a production caller to validate it.
-   Defer the embed method to Stage 8 and ship Stage 5 with
-   fast + deep only?
-3. **Bridge HTTP protocol v3.** Additive `?stream=1` flag (chosen
-   above) keeps the response format compatible for non-streaming
-   callers. Alternative: separate `/api/v1/session/{id}/stream`
-   endpoint. New endpoint is easier to deprecate but doubles the
-   surface. Recommendation: stick with the flag.
-4. **Budget defaults.** Fast 50k / Deep 20k / Embed 10k tokens
-   per session are guesses based on "long-lived attacker session
-   with a couple deep-model summary calls." Worth shipping these
-   and tuning, or pull defaults from operator-supplied env vars
-   only (no defaults, force a wizard prompt)?
-5. **Structured output schema location.** Stage 5 ships the
-   `structured_chat()` API but no production caller. The
-   `IntentSummary` schema shown above is illustrative — should
-   we land an unused stub in `anglerfish.models.intent` to lock
-   the shape, or wait for Stage 7 to own it?
+1. **Unified Stage 5.** One PR, one review pass. Implementation
+   order inside the stage: foundation (module + multi-model config
+   + LLMClient parity) → warm-pool → streaming → token budgets →
+   structured output. Each slice ships green mid-flight so a
+   review pause never leaves the tree broken.
+2. **Defer embed to Stage 8.** Stage 5 ships fast + deep only.
+   `EmbeddingVector`, the `embed()` method, `LLMRole.EMBED`, and
+   `embed_model` config land in Stage 8 alongside the clustering
+   code that consumes them. The shape (numpy ndarray vs tuple vs
+   dedicated type) gets designed against a real caller, not in
+   the abstract. The interface sketches below are pre-edited to
+   remove embed; the doc keeps the original three-role
+   `MODEL_SETUP.md` doc-of-record intact since operators will
+   already be planning the embed model rollout.
+3. **Additive `?stream=1` flag on the existing command endpoint.**
+   Protocol version bumps v2 → v3 with the additive flag. Mirrors
+   the Stage 2A `fs_context` pattern. Avoids doubling the bridge
+   HTTP surface with a parallel `/stream` endpoint that would
+   then need its own auth + rate-limit + audit wiring.
+4. **Ship budget defaults; tune in production.** Fast 50k / Deep
+   20k per session land as `LLMBudgetConfig` defaults. Forcing a
+   wizard prompt with no data behind the chosen numbers just
+   moves the guesswork to the operator. Defaults are overridable
+   via the existing Stage 3 `/api/settings/bridge` endpoint.
+5. **Schema location: Stage 7 owns it.** Stage 5 ships the
+   `structured_chat[T: BaseModel](messages, schema=T)` API but no
+   production caller and no concrete schema. `IntentSummary` is
+   illustrative only in this doc — Stage 7 introduces
+   `anglerfish.models.intent` with the real shape. Locking the
+   schema here would freeze it before the consumer (the intent
+   extractor's prompt design) gets to validate it.
