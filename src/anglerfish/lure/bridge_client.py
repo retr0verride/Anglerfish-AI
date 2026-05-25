@@ -325,29 +325,29 @@ class BridgeClient:
 def _parse_stream_chunk(line: str, path: str) -> BridgeStreamChunk:
     """Validate and parse one NDJSON line into a :class:`BridgeStreamChunk`."""
     try:
-        data = json.loads(line)
+        payload = json.loads(line)
     except ValueError as exc:
         raise BridgeUnavailableError(
             f"bridge {path} returned malformed chunk: {exc}",
         ) from exc
-    if not isinstance(data, dict):
+    if not isinstance(payload, dict):
         raise BridgeUnavailableError(
-            f"bridge {path} chunk is not a JSON object: {type(data).__name__}",
+            f"bridge {path} chunk is not a JSON object: {type(payload).__name__}",
         )
-    delta = data.get("delta")
-    source = data.get("source")
+    delta = payload.get("delta")
+    source = payload.get("source")
     if not isinstance(delta, str) or not isinstance(source, str):
         raise BridgeUnavailableError(
-            f"bridge {path} chunk missing delta/source: {data!r}",
+            f"bridge {path} chunk missing delta/source: {payload!r}",
         )
-    latency_raw = data.get("latency_ms")
+    latency_raw = payload.get("latency_ms")
     latency_ms = float(latency_raw) if isinstance(latency_raw, (int, float)) else None
-    cwd_raw = data.get("cwd")
+    cwd_raw = payload.get("cwd")
     cwd = cwd_raw if isinstance(cwd_raw, str) else None
     return BridgeStreamChunk(
         delta=delta,
         source=source,
-        done=bool(data.get("done", False)),
+        done=bool(payload.get("done", False)),
         latency_ms=latency_ms,
         cwd=cwd,
     )

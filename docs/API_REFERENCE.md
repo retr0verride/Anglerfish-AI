@@ -88,17 +88,20 @@ is a UUIDv4 used in every subsequent call.
 Request:
 
 ```json
-{ "command": "uname -a" }
+{ "command": "uname -a", "fs_context": "/etc/passwd: root, daemon" }
 ```
 
-| Field     | Type   | Constraints           |
-| --------- | ------ | --------------------- |
-| `command` | string | 1 – 32768 chars       |
+| Field        | Type   | Constraints                                                               |
+| ------------ | ------ | ------------------------------------------------------------------------- |
+| `command`    | string | 1 – 32768 chars                                                           |
+| `fs_context` | string | optional, ≤ 4096 chars; compact summary of the lure's static fakefs (v2+) |
 
 The command is length-capped and stripped of C0 control characters before
 reaching the prompt template, see [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
-Response `200`:
+Two response shapes, selected by the optional `?stream=` query parameter.
+
+**Buffered (default, protocol v2+)** — response `200`:
 
 ```json
 {
@@ -116,17 +119,36 @@ Response `200`:
 | `latency_ms` | number           | Wall-clock time to produce the response                   |
 | `cwd`        | string           | Working-directory the session thinks it's in              |
 
-When `source = "fallback"` the LLM call failed or rate-limited and a
-scripted response was substituted. When `source = "rejected"` the LLM
-failed *and* fallbacks were disabled, the attacker receives an empty
-reply. Either way the response always returns 200; the operator
-distinguishes the cases via `source` and via the threat engine's
-notes field, not via HTTP status.
+**Streaming (`?stream=1`, protocol v3+)** — response `200`,
+`Content-Type: application/x-ndjson`. One JSON object per line:
+
+```text
+{"delta":"Linux ","source":"ai","done":false}
+{"delta":"prod-app-04 ","source":"ai","done":false}
+{"delta":"5.10.0-19-cloud-amd64 ...","source":"ai","done":false}
+{"delta":"","source":"ai","done":true,"latency_ms":412.7,"cwd":"/root"}
+```
+
+| Field        | Type    | Meaning                                                                   |
+| ------------ | ------- | ------------------------------------------------------------------------- |
+| `delta`      | string  | Incremental token text; empty on the terminal chunk                       |
+| `source`     | enum    | Same values as the buffered shape                                         |
+| `done`       | bool    | `true` on the final chunk only                                            |
+| `latency_ms` | number  | Total wall-clock time; present only on the terminal chunk                 |
+| `cwd`        | string  | Working-directory after the command; present only on the terminal chunk   |
+
+Source semantics: `source = "fallback"` means the LLM call failed or
+rate-limited and a scripted response was substituted. `source =
+"rejected"` means the LLM failed *and* fallbacks were disabled, the
+attacker receives an empty reply. Either shape always returns 200;
+the operator distinguishes the cases via `source` and via the
+threat engine's notes field, not via HTTP status.
 
 Errors:
 
 - `404` - `session_id` is unknown or already ended
 - `422` - request body fails Pydantic validation
+- `426` - `X-Anglerfish-Protocol` header sent and unsupported
 
 ### `DELETE /api/v1/session/{session_id}`
 

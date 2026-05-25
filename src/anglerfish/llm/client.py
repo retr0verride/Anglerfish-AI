@@ -284,23 +284,23 @@ class LLMClient:
             if not line:
                 continue
             try:
-                data = json.loads(line)
+                payload = json.loads(line)
             except ValueError as exc:
                 raise OllamaUnavailableError(
                     f"Ollama stream chunk was not valid JSON: {exc}",
                 ) from exc
-            if not isinstance(data, dict):
+            if not isinstance(payload, dict):
                 raise OllamaUnavailableError(
-                    f"Ollama stream chunk is not a JSON object: {type(data).__name__}",
+                    f"Ollama stream chunk is not a JSON object: {type(payload).__name__}",
                 )
-            message = data.get("message")
+            message = payload.get("message")
             delta = ""
             if isinstance(message, dict):
                 content = message.get("content")
                 if isinstance(content, str):
                     delta = content
-            done = bool(data.get("done", False))
-            usage: TokenUsage | None = _parse_usage(data) if done else None
+            done = bool(payload.get("done", False))
+            usage: TokenUsage | None = _parse_usage(payload) if done else None
             yield ChatChunk(delta=delta, done=done, usage=usage)
 
     async def structured_chat(
@@ -366,12 +366,12 @@ class LLMClient:
                 response_format="json",
             )
             try:
-                data = json.loads(result.content)
+                payload = json.loads(result.content)
             except json.JSONDecodeError as exc:
                 last_error = f"invalid JSON: {exc.msg}"
                 continue
             try:
-                return schema.model_validate(data)
+                return schema.model_validate(payload)
             except ValidationError as exc:
                 last_error = f"schema validation failed: {exc.error_count()} error(s)"
                 # Stash the assistant's actual JSON so the correction

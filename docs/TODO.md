@@ -198,3 +198,65 @@ Current protection: ``wizard.json`` is written 0600 in
 beyond the file path (verified during the Stage 5 audit sweep).
 Surfaced during the Stage 5 retroactive audit sweep of the
 config and wizard subsystems. Owner: TBD.
+
+## TODO-8: bridge per-session state leaks if lure skips DELETE
+
+`AIBridgeService._budgets` (Stage 5 slice 5) and the existing
+`bridge.server.sessions` dict are both populated at session open and
+drained by the `DELETE /api/v1/session/{id}` endpoint. An attacker
+who hangs up without a clean session-close (the lure's normal
+behaviour on TCP reset is to send DELETE, but failures swallow) or
+a bridge restart leaves entries behind:
+
+- ``sessions`` grows by one ``SessionContext`` per orphaned session
+  (~1 KB plus the per-session history window).
+- ``_budgets`` grows by one ``TokenBudget`` per orphaned session
+  (small but unbounded).
+
+In practice the rate-limiter's bucket eviction (5-minute idle) and
+the lure's keepalive (3 missed = disconnect) keep things bounded
+in the hot path. A long-running bridge with attacker churn still
+accumulates dead entries.
+
+Two viable fixes (both deferred):
+
+- Idle-timeout sweep on the sessions dict, mirroring the rate
+  limiter's ``bucket_idle_eviction_s`` pattern. Drop budget +
+  context for sessions with no commands in the last N minutes.
+- Have the bridge HTTP middleware notice the lure-side
+  ``X-Anglerfish-Last-Activity-At`` (a new header) and use it to
+  prune. More plumbing, less reliable than a server-side sweep.
+
+The pre-existing ``sessions`` leak predates Stage 5 (Stage 1A);
+Stage 5 slice 5 added the symmetric ``_budgets`` leak. Surfaced
+during the Stage 5 retroactive audit. Owner: TBD.
+
+## TODO-9: per-chunk size cap on the bridge streaming response
+
+`LLMClient.stream_chat` and `BridgeClient.command_stream` both
+iterate NDJSON lines from the upstream without per-line size
+enforcement. Ollama controls chunk size on the bridge side; the
+lure trusts the bridge (and the bridge enforces overall
+``ollama.max_response_chars`` only on the buffered path).
+
+In the streaming path:
+
+- `defense.scan_max_chars` is only applied to the assembled string
+  after the stream completes; an oversized chunk could be
+  reflected straight to the attacker terminal before the assembly
+  pass runs.
+- A pathological Ollama (compromised model output, attacker
+  steering toward megabyte responses) could push the lure to
+  buffer arbitrary memory inside a single chunk while
+  ``aiter_lines`` waits for the next newline.
+
+Fixes to consider:
+
+- Add a `max_chunk_chars` config knob (mirrors `max_response_chars`)
+  enforced inside ``_iter_stream_lines`` and ``_parse_stream_chunk``;
+  raising on oversized chunks aborts the stream cleanly.
+- Bound the assembled-text accumulator in `handle_command_stream`
+  so a flood of small chunks cannot grow it past
+  ``ollama.max_response_chars``.
+
+Surfaced during the Stage 5 retroactive audit sweep. Owner: TBD.

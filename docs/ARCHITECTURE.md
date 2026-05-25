@@ -318,17 +318,31 @@ first-class systemd unit is tracked as TODO-3 in
 
 * Loopback HTTP (`127.0.0.1:8421`).
 * Bearer-token auth on every endpoint except `/api/health`.
-* Protocol version header `X-Anglerfish-Protocol: 2`.
-* JSON request bodies; responses are JSON envelopes carrying
-  `text`, `source`, `latency_ms`.
+* Protocol version header `X-Anglerfish-Protocol: 3` (Stage 5).
+  v2 is still accepted for one release cycle so a rolled-back
+  lure keeps working against a v3 bridge.
+* JSON request bodies. Responses are either a JSON envelope
+  (`text`, `source`, `latency_ms`, `cwd`) or, when the lure
+  sets `?stream=1` on the command endpoint, an NDJSON stream of
+  `{delta, source, done}` chunks terminated by a `done=true`
+  chunk that carries `latency_ms` and `cwd`.
 
 ### 3.2 Bridge → Ollama
 
 * HTTP (loopback or one configured trusted IP).
-* JSON to `/api/chat`. The bridge pins the model tag and history
-  window from config.
-* Timeout: `OllamaConfig.timeout_s` (default 30 s).
-* No streaming: simpler error handling, modest latency cost.
+* JSON to `/api/chat`. Per-role model tags (`fast_model` /
+  `deep_model`) selected via the `role` argument on
+  `LLMClient.chat` / `stream_chat`; history window pinned from
+  config.
+* Timeout: `OllamaConfig.request_timeout_s` (default 45 s).
+* Streaming via `stream=true` on `/api/chat` (NDJSON). The bridge
+  uses streaming for attacker-facing commands so terminal output
+  appears progressively; the post-stream OutputFilter pass
+  detects leaks after the chunks ship (detection, not
+  redaction - see Stage 5 design).
+* Warm-pool keeps each configured role resident via no-op
+  `/api/generate` calls with `keep_alive=-1` every
+  `warmup_refresh_seconds`.
 
 ### 3.3 Dashboard → bridge state
 
