@@ -87,7 +87,7 @@ def test_get_settings_returns_provenance_fields(authed_client: TestClient) -> No
     r = authed_client.get("/api/settings")
     assert r.status_code == 200
     body = r.json()
-    assert body["applies_to"] == "dashboard_process"
+    assert body["applies_to"] == "dashboard_process_and_bridge"
     assert "Service restart" in body["note"]
     assert "applied_at" in body
     assert "bridge" in body

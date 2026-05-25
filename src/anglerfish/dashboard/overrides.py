@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from anglerfish.config.settings import AnglerfishSettings
@@ -40,10 +40,12 @@ WastingStrategy = Literal["off", "light", "aggressive"]
 class BridgeRuntimeOverrides:
     """Mutable per-process snapshot of the bridge knobs the dashboard exposes.
 
-    Initialised from ``settings.rate_limit`` at app startup; the
-    ``wasting_strategy`` is dashboard-only until Stage 6 adds the
-    matching ``BridgeConfig.wasting_strategy`` field and the bridge
-    learns to consume it.
+    Initialised from ``settings.rate_limit`` and
+    ``settings.bridge.wasting_strategy`` at app startup. Stage 6
+    landed the bridge-side reader; the dashboard publishes this
+    snapshot to ``dashboard.overrides_publish_path`` after every
+    successful POST to /api/settings/* so the bridge picks up the
+    change within its poll TTL.
     """
 
     max_concurrent_requests: int
@@ -95,10 +97,11 @@ class RuntimeOverrides:
                 "counter_deception": self.features.counter_deception,
             },
             "applied_at": self.applied_at.isoformat(),
-            "applies_to": "dashboard_process",
+            "applies_to": "dashboard_process_and_bridge",
             "note": (
                 "Service restart reverts to env-file values. "
-                "Bridge-side propagation lands in a later stage."
+                "Bridge polls dashboard.overrides_publish_path on each "
+                "request (TTL-cached) to pick up dashboard changes."
             ),
         }
 
@@ -196,11 +199,15 @@ def build_runtime_overrides(settings: AnglerfishSettings) -> RuntimeOverrides:
     callers carry around their own copy, which is exactly the
     cross-process drift problem Stage 3 is scoped to avoid.
     """
+    # Stage 6: seed the initial wasting_strategy from BridgeConfig so the
+    # operator's env-file default is what the dashboard advertises until
+    # the first POST. cast() because BridgeConfig stores it as `str` with
+    # a regex constraint; runtime guarantees one of the three literals.
     return RuntimeOverrides(
         bridge=BridgeRuntimeOverrides(
             max_concurrent_requests=settings.rate_limit.max_concurrent_requests,
             requests_per_session_per_minute=(settings.rate_limit.requests_per_session_per_minute),
-            wasting_strategy="off",
+            wasting_strategy=cast("WastingStrategy", settings.bridge.wasting_strategy),
         ),
         features=FeatureFlagOverrides(),
     )

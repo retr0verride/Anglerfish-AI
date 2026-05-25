@@ -47,7 +47,10 @@ def test_features_default_all_false() -> None:
 def test_snapshot_shape_has_provenance_fields() -> None:
     overrides = build_runtime_overrides(_settings())
     snap = overrides.snapshot()
-    assert snap["applies_to"] == "dashboard_process"
+    # Stage 6 updated "applies_to" from dashboard_process to
+    # dashboard_process_and_bridge once the publisher/reader
+    # channel shipped.
+    assert snap["applies_to"] == "dashboard_process_and_bridge"
     assert "Service restart reverts to env-file values" in snap["note"]
     assert "applied_at" in snap
     assert "bridge" in snap

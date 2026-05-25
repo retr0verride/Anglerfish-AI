@@ -23,7 +23,10 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   ``login_rate_limited``, ``dashboard.export_served``.
 * Bridge: ``bridge.defense_fired``, ``bridge.defense_scan_truncated``,
   ``bridge.model_integrity_verified``, ``bridge.model_integrity_failed``,
-  ``bridge.model_integrity_skipped``, ``bridge.budget_exhausted``.
+  ``bridge.model_integrity_skipped``, ``bridge.budget_exhausted``,
+  ``bridge.overrides_read_failed``.
+* Dashboard (Stage 6): ``dashboard.overrides_published``,
+  ``dashboard.overrides_publish_failed``.
 * Lure: ``lure.server_started``, ``lure.server_stopped``,
   ``lure.session_opened``, ``lure.session_closed``,
   ``lure.command_native``, ``lure.command_bridge``,

@@ -8,6 +8,7 @@ together with the auth + session middleware.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,7 @@ from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.dashboard.audit_tailer import AuditTailer
 from anglerfish.dashboard.auth import build_auth_router
 from anglerfish.dashboard.overrides import build_runtime_overrides
+from anglerfish.dashboard.overrides_publisher import RuntimeOverridesPublisher
 from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.dashboard.routes import build_router
 from anglerfish.dashboard.state import DashboardState
@@ -158,6 +160,33 @@ def create_app(
     # update. Reset on dashboard restart back to env-file values; see
     # docs/design/STAGE_3_dashboard_control_plane.md for the boundary.
     app.state.runtime_overrides = build_runtime_overrides(settings)
+    # Stage 6: publish snapshot to a tmpfs JSON so the bridge process
+    # can pick up operator-driven changes between restarts. ensure_writable
+    # validates the parent dir; if it cannot create or write the dir (the
+    # common case in tests + dev loops where /run/anglerfish/ does not
+    # exist) we log + leave the publisher attached so per-request publish()
+    # calls become no-ops via the same OSError swallow there. Operator-
+    # facing deployments stage the dir via the systemd unit.
+    publisher = RuntimeOverridesPublisher(
+        settings.dashboard.overrides_publish_path,
+        audit_log=audit_log,
+    )
+    try:
+        publisher.ensure_writable()
+    except PermissionError as exc:
+        logging.getLogger(__name__).warning(
+            "dashboard runtime-overrides publish path %s is not writable: %s; "
+            "bridge will fall back to its static wasting_strategy",
+            settings.dashboard.overrides_publish_path,
+            exc,
+        )
+    else:
+        # Publish the initial snapshot so a bridge starting after the
+        # dashboard does not see a missing-file fallback when the operator
+        # has not yet touched a setting. quiet=True so this synchronization
+        # publish does not pollute the audit log on every dashboard restart.
+        publisher.publish(app.state.runtime_overrides, quiet=True)
+    app.state.overrides_publisher = publisher
 
     templates = Jinja2Templates(directory=str(templates_path))
     app.include_router(

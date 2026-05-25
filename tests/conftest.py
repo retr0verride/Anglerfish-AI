@@ -26,6 +26,7 @@ from pydantic import SecretStr
 
 from anglerfish.config import (
     AnglerfishSettings,
+    BridgeConfig,
     CredentialsConfig,
     DashboardConfig,
 )
@@ -68,10 +69,18 @@ def settings(
     tmp_path: Path,
 ) -> AnglerfishSettings:
     """A fully-validated :class:`AnglerfishSettings` for use in tests."""
+    # Stage 6: pin the dashboard/bridge runtime-overrides paths into
+    # the per-test tmp_path so the publisher's ensure_writable() does
+    # not try to mkdir /run/anglerfish/ on the host running the suite.
+    overrides_path = tmp_path / "runtime_overrides.json"
     return AnglerfishSettings(
-        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        dashboard=DashboardConfig(
+            session_secret=SecretStr(session_secret),
+            overrides_publish_path=overrides_path,
+        ),
         credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
         sessions=SessionStoreConfig(database_path=tmp_path / "sessions.db"),
+        bridge=BridgeConfig(overrides_poll_path=overrides_path),
     )
 
 

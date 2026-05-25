@@ -279,6 +279,19 @@ class DashboardConfig(BaseModel):
             "origin. Add additional origins for reverse-proxy deployments."
         ),
     )
+    overrides_publish_path: Path = Field(
+        default=Path("/run/anglerfish/runtime_overrides.json"),
+        description=(
+            "Path the dashboard atomically writes its runtime-overrides "
+            "snapshot to after every successful POST to /api/settings/*. "
+            "The bridge polls this file (BridgeConfig.overrides_poll_path) "
+            "to pick up operator-driven changes between restarts. tmpfs is "
+            "the intended filesystem; the dashboard validates the parent "
+            "directory is writable at startup. Path mismatch with the "
+            "bridge fails open: the bridge falls back to its static "
+            "BridgeConfig.wasting_strategy."
+        ),
+    )
 
     @field_validator("session_secret")
     @classmethod
@@ -328,6 +341,40 @@ class BridgeConfig(BaseModel):
             "Bearer token required on every bridge HTTP request. The wizard "
             "generates a 32-byte URL-safe token and writes it to the env "
             "file shared by the bridge daemon and the lure."
+        ),
+    )
+    wasting_strategy: str = Field(
+        default="off",
+        pattern=r"^(off|light|aggressive)$",
+        description=(
+            "Static fallback for the active time-wasting strategy "
+            "(Stage 6). The dashboard's runtime overrides JSON wins at "
+            "request time; this value is the boot-time default and the "
+            "fallback when the overrides file is missing or unreadable. "
+            "Set via ANGLERFISH_BRIDGE__WASTING_STRATEGY in the env file "
+            "for headless deployments."
+        ),
+    )
+    overrides_poll_path: Path = Field(
+        default=Path("/run/anglerfish/runtime_overrides.json"),
+        description=(
+            "Path the bridge polls for dashboard-published runtime "
+            "overrides. Must match DashboardConfig.overrides_publish_path "
+            "for the channel to work; mismatched or missing files fail "
+            "open (the bridge uses its static wasting_strategy)."
+        ),
+    )
+    overrides_cache_ttl_s: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=60.0,
+        description=(
+            "Minimum interval between disk reads of the runtime-overrides "
+            "JSON. Per-request reads are bounded by this TTL: within the "
+            "TTL the cached value wins; after the TTL the bridge checks "
+            "mtime and re-reads only if changed. Default 1s keeps per-"
+            "request overhead negligible while propagating operator "
+            "changes within one second."
         ),
     )
 

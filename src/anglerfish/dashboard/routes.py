@@ -69,6 +69,16 @@ def _get_audit(request: Request) -> AuditLog:
     return cast("AuditLog", audit)
 
 
+def _get_overrides_publisher(request: Request) -> Any:
+    """Return the runtime-overrides publisher, or None if not attached.
+
+    Older test fixtures construct create_app paths that omit the
+    publisher; the routes degrade to in-process-only override updates
+    in that case so existing tests continue to pass.
+    """
+    return getattr(request.app.state, "overrides_publisher", None)
+
+
 # ---------------------------------------------------------------------------
 # Stage 3 request bodies for the settings POSTs. Kept here rather than in
 # overrides.py because they are HTTP-layer schemas (Pydantic + bounds);
@@ -213,6 +223,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         body: _BridgeSettingsUpdate = Body(...),  # noqa: B008
         overrides: RuntimeOverrides = Depends(_get_overrides),  # noqa: B008
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
+        publisher: Any = Depends(_get_overrides_publisher),  # noqa: B008
     ) -> dict[str, Any]:
         diff = overrides.apply_bridge(
             max_concurrent_requests=body.max_concurrent_requests,
@@ -226,6 +237,8 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
                 diff={k: {"old": v[0], "new": v[1]} for k, v in diff.items()},
                 actor=_actor(request),
             )
+            if publisher is not None:
+                publisher.publish(overrides)
         snapshot = overrides.snapshot()
         snapshot["changed_fields"] = sorted(diff.keys())
         return snapshot
@@ -239,6 +252,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         body: _FeatureFlagsUpdate = Body(...),  # noqa: B008
         overrides: RuntimeOverrides = Depends(_get_overrides),  # noqa: B008
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
+        publisher: Any = Depends(_get_overrides_publisher),  # noqa: B008
     ) -> dict[str, Any]:
         diff = overrides.apply_features(
             time_wasting=body.time_wasting,
@@ -254,6 +268,8 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
                 new=new,
                 actor=_actor(request),
             )
+        if diff and publisher is not None:
+            publisher.publish(overrides)
         snapshot = overrides.snapshot()
         snapshot["changed_fields"] = sorted(diff.keys())
         return snapshot

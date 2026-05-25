@@ -19,6 +19,7 @@ and the attacker is never shown an exception.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shlex
 import time
@@ -41,11 +42,18 @@ from anglerfish.bridge.errors import (
     SessionRateLimitedError,
 )
 from anglerfish.bridge.fallback import fallback_response
+from anglerfish.bridge.overrides_reader import BridgeOverridesReader
 from anglerfish.bridge.path import normalise_path
 from anglerfish.bridge.prompts import build_messages
 from anglerfish.bridge.rate_limit import BridgeRateLimiter
 from anglerfish.bridge.sanitize import cap_output, sanitize_command
 from anglerfish.bridge.session import SessionContext
+from anglerfish.bridge.strategies import (
+    StrategyContext,
+    StrategyPreEffect,
+    WastingStrategyBase,
+    get_strategy,
+)
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.llm import LLMClient, TokenBudget
 from anglerfish.llm.budget import BudgetExhaustedError
@@ -70,6 +78,8 @@ class AIBridgeService:
         audit_log: AuditLog | None = None,
         output_filter: OutputFilter | None = None,
         injection_scorer: InjectionScorer | None = None,
+        overrides_reader: BridgeOverridesReader | None = None,
+        sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -94,6 +104,15 @@ class AIBridgeService:
         # session and dropped via end_session_budget() from the HTTP DELETE
         # path so the dict does not grow unbounded.
         self._budgets: dict[UUID, TokenBudget] = {}
+        # Stage 6: reader for dashboard-published runtime overrides. None
+        # in tests + dev loops where no dashboard process is running;
+        # _current_strategy() falls back to settings.bridge.wasting_strategy.
+        self._overrides_reader = overrides_reader
+        # Injected for tests so strategy delays do not park real wall-clock
+        # time during the suite. Defaults to asyncio.sleep at construct.
+        self._sleep: Callable[[float], asyncio.Future[None]] = (
+            sleep if sleep is not None else asyncio.sleep  # type: ignore[assignment]
+        )
 
     @property
     def settings(self) -> AnglerfishSettings:
@@ -106,6 +125,45 @@ class AIBridgeService:
     @property
     def limiter(self) -> BridgeRateLimiter:
         return self._limiter
+
+    async def _apply_pre_effect(
+        self,
+        pre_effect: StrategyPreEffect,
+        accumulated: list[str],
+    ) -> AsyncIterator[BridgeChunk]:
+        """Yield the strategy's pre-message chunk (if any) and apply delays."""
+        if pre_effect.pre_message is not None:
+            if pre_effect.pre_message_delay_ms > 0:
+                await self._sleep(pre_effect.pre_message_delay_ms / 1000.0)
+            accumulated.append(pre_effect.pre_message)
+            yield BridgeChunk(
+                delta=pre_effect.pre_message,
+                source=ResponseSource.AI,
+                done=False,
+            )
+        if pre_effect.pre_delay_ms > 0:
+            await self._sleep(pre_effect.pre_delay_ms / 1000.0)
+
+    def _current_strategy(self) -> WastingStrategyBase:
+        """Resolve the active wasting strategy for this command.
+
+        Reads the dashboard-published runtime overrides JSON if a
+        reader was wired in; otherwise falls back to the static
+        ``settings.bridge.wasting_strategy`` value. Unknown names from
+        the reader fall through to the static config too (the reader
+        already audits the failure).
+        """
+        if self._overrides_reader is not None:
+            try:
+                name = self._overrides_reader.current_wasting_strategy()
+            except ValueError:
+                name = self._settings.bridge.wasting_strategy
+        else:
+            name = self._settings.bridge.wasting_strategy
+        try:
+            return get_strategy(name)
+        except ValueError:
+            return get_strategy("off")
 
     def budget_for(self, session_id: UUID) -> TokenBudget:
         """Return (creating if needed) the per-session :class:`TokenBudget`."""
@@ -325,6 +383,17 @@ class AIBridgeService:
         accumulated: list[str] = []
         error: LLMError | None = None
         budget = self.budget_for(session.session_id)
+        strategy = self._current_strategy()
+        strategy_ctx = StrategyContext(
+            session_id=session.session_id,
+            command=sanitised,
+            wasted_ms_so_far=0,  # slice 6.5 wires the per-session cap
+            bridge_config=self._settings.bridge,
+        )
+        pre_effect = await strategy.pre_command(strategy_ctx)
+        async for pre_chunk in self._apply_pre_effect(pre_effect, accumulated):
+            yield pre_chunk
+
         try:
             async with self._limiter.slot(session.session_id):
                 messages = build_messages(
@@ -337,11 +406,15 @@ class AIBridgeService:
                     async for chunk in self._client.stream_chat(messages, budget=budget):
                         if chunk.delta:
                             accumulated.append(chunk.delta)
-                            yield BridgeChunk(
+                            bridge_chunk = BridgeChunk(
                                 delta=chunk.delta,
                                 source=ResponseSource.AI,
                                 done=False,
                             )
+                            yield bridge_chunk
+                            delay = await strategy.between_chunks(strategy_ctx, bridge_chunk)
+                            if delay > 0:
+                                await self._sleep(delay)
                 except BudgetExhaustedError as exc:
                     self._record_budget_exhausted(session, exc)
                     error = exc

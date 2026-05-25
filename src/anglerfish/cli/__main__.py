@@ -127,6 +127,7 @@ def bridge_serve(
 
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
     from anglerfish.bridge.defense import ModelIntegrityError, verify_all_roles
+    from anglerfish.bridge.overrides_reader import BridgeOverridesReader
     from anglerfish.llm import WarmPool
 
     try:
@@ -179,7 +180,18 @@ def bridge_serve(
         )
         raise typer.Exit(code=2) from exc
 
-    service = AIBridgeService(settings, client=ai_client, audit_log=audit_log)
+    overrides_reader = BridgeOverridesReader(
+        settings.bridge.overrides_poll_path,
+        cache_ttl_s=settings.bridge.overrides_cache_ttl_s,
+        static_fallback=settings.bridge.wasting_strategy,
+        audit_log=audit_log,
+    )
+    service = AIBridgeService(
+        settings,
+        client=ai_client,
+        audit_log=audit_log,
+        overrides_reader=overrides_reader,
+    )
     warm_pool = WarmPool(
         client=ai_client,
         config=settings.ollama,
