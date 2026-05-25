@@ -54,9 +54,8 @@ wish. We will not credit reporters who request anonymity.
 
 ### Out of scope (forward upstream)
 
-- Cowrie itself — https://github.com/cowrie/cowrie
-- Ollama — https://github.com/ollama/ollama
-- Splunk Enterprise / Cloud
+- [Ollama](https://github.com/ollama/ollama)
+- [asyncssh](https://github.com/ronf/asyncssh)
 - The Linux kernel and Debian base packages
 - MaxMind GeoLite2 databases
 
@@ -77,8 +76,7 @@ wish. We will not credit reporters who request anonymity.
 - AES-256-GCM for credential records (96-bit random nonces).
 - HMAC-SHA-256 for credential fingerprints, under a separate
   context-bound key.
-- Twisted SSH for Cowrie's bait protocol.
-- TLS for outbound Splunk HEC, with `verify_tls=True` by default.
+- asyncssh for the bait SSH protocol; host keys generated fresh per install.
 
 If you can break any of these primitives, please publish — that is a
 much bigger story than Anglerfish.

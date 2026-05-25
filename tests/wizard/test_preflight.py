@@ -75,37 +75,8 @@ def test_ollama_malformed_json_still_returns_ok(install_mock_transport: Any) -> 
     assert "unknown" in result.detail
 
 
-# ---------------------------------------------------------------------------
-# check_splunk_hec
-# ---------------------------------------------------------------------------
-
-
-def test_splunk_hec_health_ok(install_mock_transport: Any) -> None:
-    captured = install_mock_transport(lambda _r: httpx.Response(200, json={"text": "OK"}))
-    result = preflight.check_splunk_hec(
-        "https://splunk.test:8088/services/collector/event",
-    )
-    assert result.success is True
-    assert captured[0].url.path == "/services/collector/health/1.0"
-
-
-def test_splunk_hec_unhealthy(install_mock_transport: Any) -> None:
-    install_mock_transport(lambda _r: httpx.Response(503))
-    result = preflight.check_splunk_hec(
-        "https://splunk.test:8088/services/collector/event",
-    )
-    assert result.success is False
-    assert "503" in result.detail
-
-
-def test_splunk_hec_connect_error(install_mock_transport: Any) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("no route", request=request)
-
-    install_mock_transport(handler)
-    result = preflight.check_splunk_hec("https://splunk.test:8088/services/collector/event")
-    assert result.success is False
-
+# check_splunk_hec was removed alongside the Cowrie / forwarder
+# deletion in 2026-05. The preflight checker no longer probes Splunk.
 
 # ---------------------------------------------------------------------------
 # check_webhook
@@ -165,7 +136,6 @@ def test_preflight_runs_only_configured_checks(install_mock_transport: Any) -> N
     )
     results = preflight.PreflightChecker().run(
         ollama_url="http://127.0.0.1:11434/",
-        splunk_hec_url=None,
         webhook_url=None,
     )
     assert len(results) == 1
@@ -173,14 +143,13 @@ def test_preflight_runs_only_configured_checks(install_mock_transport: Any) -> N
     assert len(captured) == 1
 
 
-def test_preflight_runs_all_three(install_mock_transport: Any) -> None:
+def test_preflight_runs_all_checks(install_mock_transport: Any) -> None:
     install_mock_transport(lambda _r: httpx.Response(200, json={"version": "x"}))
     results = preflight.PreflightChecker().run(
         ollama_url="http://127.0.0.1:11434/",
-        splunk_hec_url="https://splunk.test:8088/services/collector/event",
         webhook_url="https://hooks.example/x",
     )
-    assert {r.service for r in results} == {"ollama", "splunk", "webhook"}
+    assert {r.service for r in results} == {"ollama", "webhook"}
 
 
 def test_preflight_rejects_non_positive_timeout() -> None:

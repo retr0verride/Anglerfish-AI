@@ -1,6 +1,6 @@
 """High-level AI bridge service.
 
-:class:`AIBridgeService` is the orchestrator that Cowrie's command
+:class:`AIBridgeService` is the orchestrator the lure's command
 handler talks to. Given a session and a command, it returns the
 response to print to the attacker's terminal. It wires together:
 
@@ -8,13 +8,13 @@ response to print to the attacker's terminal. It wires together:
 * the deterministic ``cd`` shortcut so cwd never depends on the LLM
 * :mod:`anglerfish.bridge.rate_limit` (global + per-session caps)
 * :mod:`anglerfish.bridge.prompts` (prompt construction)
-* :mod:`anglerfish.bridge.client` (Ollama HTTP call)
+* :mod:`anglerfish.llm` (Ollama HTTP call via :class:`LLMClient`)
 * :mod:`anglerfish.bridge.fallback` (scripted responses on failure)
 * :mod:`anglerfish.bridge.session` (per-attacker state recording)
 
 The service catches every bridge-level error and degrades to a
-fallback response so that Cowrie always gets a non-empty result and
-the attacker is never shown an exception.
+fallback response so that the lure always gets a non-empty result
+and the attacker is never shown an exception.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ __all__ = ["AIBridgeService"]
 
 
 class AIBridgeService:
-    """Cowrie-facing orchestrator.
+    """Lure-facing orchestrator.
 
     Construct once at startup; share across all sessions.
     """

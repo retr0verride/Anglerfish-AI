@@ -7,8 +7,8 @@ Public surface:
 * :func:`parse_ssh_banner` — RFC 4253 banner parser.
 * :class:`TorExitList` — async-safe IP-set wrapper around a
   refreshable exit-node list file.
-* :func:`compute_ja3`, :func:`compute_hassh` — pure hash helpers for
-  the Cowrie integration to call when constructing fingerprints.
+* :func:`compute_ja3`, :func:`compute_hassh` — pure hash helpers the
+  lure calls when constructing fingerprints.
 """
 
 from __future__ import annotations

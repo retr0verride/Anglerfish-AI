@@ -27,7 +27,7 @@ more than three hours of poking at a live system.
 | -------- | ----------------------------------------------------------------------------- | ------------- |
 | **SEV-1** | Suspected pivot / lateral movement / data exfil from the honeypot to elsewhere | Immediate     |
 | **SEV-2** | Operator credential / API key compromise; audit log gap; persistence detected  | < 30 minutes  |
-| **SEV-3** | Service crash loop, disk fill, Splunk outage, missing alerts                  | < 2 hours     |
+| **SEV-3** | Service crash loop, disk fill, missing alerts                                 | < 2 hours     |
 | **SEV-4** | Cosmetic - dashboard slow, geo lookups failing, etc.                          | Next business day |
 
 When in doubt, classify up. Downgrading mid-incident is fine.
@@ -106,8 +106,8 @@ sudo journalctl -u anglerfish-bridge.service --since '1 hour ago' \
 
 **Post-incident.**
 * If escape was confirmed: file a CVE-style disclosure with whoever
-  controls the upstream component that allowed it (Cowrie, Ollama, the
-  bridge's prompt sanitizer, etc.). The community needs to know.
+  controls the upstream component that allowed it (asyncssh, Ollama,
+  the bridge's prompt sanitizer, etc.). The community needs to know.
 * Update [`THREAT_MODEL.md`](THREAT_MODEL.md) - the threat you didn't
   mitigate is now a known limitation worth documenting.
 
@@ -117,7 +117,8 @@ sudo journalctl -u anglerfish-bridge.service --since '1 hour ago' \
 
 **Symptoms.** Dashboard login from an unfamiliar IP. `audit.jsonl`
 shows a `dashboard.login_success` from a source you don't recognize.
-Splunk alerts on session-creation outside operator hours.
+Your off-host alerting fires on session-creation outside operator
+hours.
 
 **Immediate.**
 ```bash
@@ -172,6 +173,11 @@ credentials in your DB as burned, they're public knowledge now.
 14:00 and 16:00 yesterday). `lsattr` shows the +a attribute is missing.
 File size is smaller than your last backup.
 
+The Splunk-forwarder cross-check that this scenario used to rely on
+no longer applies; the forwarder package was removed in the 2026-05
+Cowrie removal. Pre-incident off-host shipping (rsync, syslog drain,
+object-store push) is now the operator's responsibility.
+
 **Immediate.**
 ```bash
 # Confirm the gap.
@@ -191,12 +197,12 @@ sudo lsattr /var/log/anglerfish/audit.jsonl
 Someone with root access either truncated the file, removed +a, or
 deleted entries. Possibilities:
 
-1. **Splunk events for the gap window are intact.** Check Splunk -
-   the off-host stream is the canary. If Splunk has the missing
+1. **Your off-host copy has the gap window intact.** Whatever
+   pipeline you ship `audit.jsonl` to (rsync target, S3, syslog
+   drain) is the canary. If the off-host copy has the missing
    entries, someone modified the local file only.
-2. **Splunk also has a gap.** Either Splunk was unreachable (check
-   `journalctl -u anglerfish-bridge.service --since 'yesterday 14:00'`
-   for forwarder errors) or both were tampered.
+2. **Off-host also has a gap.** Either the off-host shipping was
+   stalled at the time, or both were tampered.
 3. **Filesystem corruption.** `dmesg | grep -i 'ext4\|btrfs\|xfs'`
    for filesystem errors. Run `fsck` from a recovery shell if
    you see any.
@@ -204,15 +210,16 @@ deleted entries. Possibilities:
 **Recovery.**
 1. Restore `audit.jsonl` from your last good backup.
 2. Re-apply `chattr +a`.
-3. If Splunk has the missing entries, replay them into a separate
-   `audit-recovered.jsonl` and document the source.
+3. If the off-host copy has the missing entries, replay them into
+   a separate `audit-recovered.jsonl` and document the source.
 4. If neither side has them, mark the time window as "evidence
    missing, see incident log YYYYMMDD" and treat any decisions made
    from that window as untrusted.
 
 **Post-incident.** This is exactly why audit logs need to be off-host.
-If Splunk also failed, you need a second sink, a different
-collector, an S3 bucket with object-lock, or a printer. Yes, a printer.
+If the primary off-host pipeline also failed, you need a second
+sink, a different collector, an S3 bucket with object-lock, or a
+printer. Yes, a printer.
 
 ---
 
@@ -230,13 +237,13 @@ sudo du -sh /var/lib/anglerfish/* /var/log/anglerfish/* /var/log/journal 2>/dev/
 
 The biggest disk fillers, in order of likelihood:
 
-1. **Splunk HEC down → JSONL fallback growing unbounded.**
+1. **SessionStore SQLite growing without bound.** Stage 4 grows
+   unboundedly by design (no GC).
    ```bash
-   ls -lh /var/lib/anglerfish/sessions.jsonl
-   # Compress and ship offline:
-   sudo gzip /var/lib/anglerfish/sessions.jsonl
-   sudo mv /var/lib/anglerfish/sessions.jsonl.gz ~/incidents/$(date +%Y%m%d)/
-   sudo systemctl restart anglerfish-bridge.service
+   ls -lh /var/lib/anglerfish/sessions.db
+   # Snapshot it off-host, then VACUUM in place:
+   sudo cp /var/lib/anglerfish/sessions.db ~/incidents/$(date +%Y%m%d)/sessions.db
+   sudo sqlite3 /var/lib/anglerfish/sessions.db 'VACUUM;'
    ```
 2. **Credentials DB growing past the cap.** Should be bounded by
    `ANGLERFISH_CREDENTIALS__MAX_UNIQUE_PER_SOURCE_IP` (default 1000).
@@ -257,7 +264,7 @@ they recover. Set a disk-usage monitor that alerts at 80%, not 100%.
 ### S5 - Bridge crash loop (SEV-3)
 
 **Symptoms.** `systemctl status anglerfish-bridge.service` shows
-`activating (auto-restart)` cycling repeatedly. Cowrie returns
+`activating (auto-restart)` cycling repeatedly. The lure returns
 fallback responses for every command.
 
 **Immediate.**
@@ -336,7 +343,7 @@ the actor reuses honeypot-harvested creds.
 
 ---
 
-### S7 - Upstream CVE (Cowrie, Ollama, FastAPI, etc.) (SEV-1 to SEV-3)
+### S7 - Upstream CVE (Ollama, asyncssh, FastAPI, etc.) (SEV-1 to SEV-3)
 
 **Symptoms.** A CVE drops for a component you use, with a working
 proof-of-concept that targets your version.
@@ -344,8 +351,8 @@ proof-of-concept that targets your version.
 **Immediate.**
 ```bash
 # Figure out what versions you're actually running.
-dpkg -l | grep -iE 'cowrie|ollama'
-/opt/anglerfish/venv/bin/pip list | grep -iE 'fastapi|uvicorn|pydantic|httpx'
+dpkg -l | grep -iE 'ollama'
+/opt/anglerfish/venv/bin/pip list | grep -iE 'asyncssh|fastapi|uvicorn|pydantic|httpx'
 
 # If the CVE is in a network-reachable component, take the bait NIC
 # down until you can patch.
@@ -372,7 +379,7 @@ Take it offline if any of these are true:
 * Confirmed lateral movement / pivot from the honeypot to elsewhere.
 * Confirmed operator credential breach AND the dashboard was reachable
   beyond the service network.
-* Audit log was tampered AND Splunk also has the gap.
+* Audit log was tampered AND the off-host copy also has the gap.
 * You can't explain what's happening within 30 minutes of starting IR.
 
 "Offline" means `qm stop`, not just `ip link set down`. A stopped VM

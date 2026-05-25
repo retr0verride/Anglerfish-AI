@@ -135,7 +135,7 @@ For a dry-run on your workstation:
 ./iso/smoke.sh ./build/anglerfish-ai-0.1.0.iso --memory 4G --cpus 4
 ```
 
-Host port 2222 → guest Cowrie SSH. Host port 8420 → guest dashboard.
+Host port 2222 → guest lure SSH. Host port 8420 → guest dashboard.
 The qcow2 disk is persistent under `iso/smoke/`; delete it for a
 clean run. `Ctrl-A x` to terminate QEMU.
 
@@ -162,9 +162,8 @@ QEMU's `-nographic`). The full prompt list:
 | 12   | Ollama model tag                                      | Default `qwen3:14b` (Apache-2.0, Hugging Face). The bridge `ollama pull`s lazily. |
 | 13   | Fake hostname for the AI shell                        | Default `srv-prod-01` - what the attacker sees in `hostname`. |
 | 14   | Fake username for the AI shell                        | Default `root`.                                              |
-| 15   | Splunk HEC                                            | `n` to skip; otherwise prompts for URL + token.              |
-| 16   | Threat alert webhook URL                              | Optional.                                                    |
-| 17   | MaxMind GeoLite2 licence key                          | Optional. Without it, geo lookups return empty records.      |
+| 15   | Threat alert webhook URL                              | Optional.                                                    |
+| 16   | MaxMind GeoLite2 licence key                          | Optional. Without it, geo lookups return empty records.      |
 
 After the wizard:
 
@@ -174,7 +173,9 @@ After the wizard:
 * `getty@tty1` is re-enabled so you can log in on console.
 * `anglerfish-geo-update.service` runs once if a licence key was
   supplied.
-* Cowrie + the bridge + the dashboard start.
+* The bridge and dashboard start. The native lure (`anglerfish lure
+  serve`) is not yet auto-started by a systemd unit; operators run
+  it manually until TODO-3 (`docs/TODO.md`) lands.
 
 The bridge starts but **the fast-tier LLM model is not yet pulled** -
 the wizard configures the model *tag* but the actual model blob
@@ -235,7 +236,7 @@ curl -s http://<service-ip>:8420/api/health
 # 3. Authenticated dashboard call
 curl -s -u admin:<password> http://<service-ip>:8420/api/stats
 
-# 4. Hit Cowrie on the bait NIC from a throwaway box
+# 4. Hit the lure on the bait NIC from a throwaway box
 ssh -p 2222 root@<bait-ip>
 ```
 
@@ -255,9 +256,9 @@ sudo anglerfish-wizard --reconfigure
 ```
 
 Secrets in `/etc/anglerfish/anglerfish.env` regenerate on every run;
-expect to restart `anglerfish-bridge.service` and `cowrie.service`
-afterwards. The credentials DB keeps its encryption key unless you
-rotate it explicitly via `anglerfish credentials rotate-key`.
+expect to restart `anglerfish-bridge.service` and the running lure
+process afterwards. The credentials DB keeps its encryption key
+unless you rotate it explicitly via `anglerfish credentials rotate-key`.
 
 ---
 

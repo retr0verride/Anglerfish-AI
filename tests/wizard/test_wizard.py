@@ -29,7 +29,6 @@ def _answers(**overrides: object) -> WizardAnswers:
         "service_interface": "eth1",
         "ollama_endpoint": HttpUrl("http://127.0.0.1:11434/"),
         "ollama_model": "qwen3:14b",
-        "splunk_enabled": False,
         "fake_hostname": "srv-prod-01",
         "fake_username": "root",
     }
@@ -60,7 +59,6 @@ def test_run_wizard_writes_every_artefact(tmp_path: Path) -> None:
 
     assert output.env_path.exists()
     assert output.nftables_path.exists()
-    assert output.cowrie_cfg_path.exists()
     assert output.bait_network_path.exists()
     assert output.service_network_path.exists()
     assert output.hostname_path.exists()
@@ -128,7 +126,6 @@ def test_run_wizard_explicit_artefact_paths(tmp_path: Path) -> None:
     paths = WizardPaths(
         env_path=tmp_path / "anglerfish.env",
         nftables_path=tmp_path / "custom" / "anglerfish.nft",
-        cowrie_cfg_path=tmp_path / "elsewhere" / "cowrie.cfg",
         bait_network_path=tmp_path / "systemd" / "10-bait.network",
         service_network_path=tmp_path / "systemd" / "20-service.network",
         hostname_path=tmp_path / "etc-hostname",
@@ -142,9 +139,7 @@ def test_run_wizard_explicit_artefact_paths(tmp_path: Path) -> None:
         run_preflight=False,
     )
     assert output.nftables_path == paths.nftables_path
-    assert output.cowrie_cfg_path == paths.cowrie_cfg_path
     assert paths.nftables_path.exists()
-    assert paths.cowrie_cfg_path.exists()
 
 
 def test_run_wizard_persists_answers(tmp_path: Path) -> None:
@@ -255,7 +250,7 @@ def _make_prompter(
 
 
 def test_prompt_for_answers_happy_path_dhcp() -> None:
-    confirms = [True, True, True, False]
+    confirms = [True, True, True]
     prompts = [
         "anglerfish-vm",  # vm_hostname
         "eth0",  # bait_interface
@@ -282,11 +277,10 @@ def test_prompt_for_answers_happy_path_dhcp() -> None:
     assert answers.bait_network.dhcp is True
     assert answers.service_network.dhcp is True
     assert answers.operator_ssh_pubkey is None
-    assert answers.splunk_enabled is False
 
 
 def test_prompt_for_answers_static_network() -> None:
-    confirms = [True, False, True, False]
+    confirms = [True, False, True]
     prompts = [
         "anglerfish-vm",
         "eth0",
@@ -422,38 +416,12 @@ def test_prompt_for_answers_static_invalid_gateway_raises() -> None:
         )
 
 
-def test_prompt_for_answers_splunk_enabled_collects_url_and_token() -> None:
-    confirms = [True, True, True, True]
-    prompts = [
-        "anglerfish-vm",
-        "eth0",
-        "eth1",
-        "anglerfish-ops",
-        "",
-        "admin",
-        "",
-        "http://127.0.0.1:11434/",
-        "qwen3:14b",
-        "srv-prod-01",
-        "root",
-        "https://splunk.test:8088/services/collector/event",
-        "secret-token-12345",
-        "",
-        "",  # maxmind_license_key
-    ]
-    _prompt, _confirm = _make_prompter(confirms=confirms, prompts=prompts)
-    answers = prompt_for_answers(
-        prompt=_prompt,
-        confirm=_confirm,
-        available_interfaces=[],
-        output=lambda _s: None,
-    )
-    assert answers.splunk_enabled is True
-    assert answers.splunk_hec_token == "secret-token-12345"
+# The Splunk-enabled prompt test was removed in 2026-05 alongside
+# the Cowrie / forwarder removal; Splunk is no longer asked about.
 
 
 def test_prompt_for_answers_remote_ollama_with_trusted_host() -> None:
-    confirms = [True, True, True, False]
+    confirms = [True, True, True]
     prompts = [
         "anglerfish-vm",
         "eth0",

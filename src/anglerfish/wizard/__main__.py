@@ -7,7 +7,7 @@ Run interactively as ``anglerfish-wizard`` (the entry point) or
 * ``--reconfigure`` — loads the previously-saved
   ``/etc/anglerfish/wizard.json`` and pre-fills every prompt with the
   current value. Operators using this mode should restart the bridge
-  + Cowrie afterwards because the shared secret rotates.
+  + dashboard afterwards because the shared secret rotates.
 
 System path overrides (``--systemd-network-dir`` etc.) exist for tests
 and unusual deployments. Production deployments accept the defaults.
@@ -70,7 +70,7 @@ def run(
         bool,
         typer.Option(
             "--skip-preflight",
-            help="Skip reachability checks against Ollama / Splunk / webhook.",
+            help="Skip reachability checks against Ollama and the alert webhook.",
         ),
     ] = False,
     systemd_network_dir: Annotated[
@@ -152,7 +152,6 @@ def run(
 
     console.print(f"[green]Wrote configuration to[/green] {result.env_path}")
     console.print(f"  nftables:        {result.nftables_path}")
-    console.print(f"  cowrie.cfg:      {result.cowrie_cfg_path}")
     console.print(f"  bait network:    {result.bait_network_path}")
     console.print(f"  service network: {result.service_network_path}")
     console.print(f"  hostname:        {result.hostname_path}")
@@ -170,7 +169,7 @@ def run(
     if reconfigure:
         console.print(
             "[yellow]Note:[/yellow] secrets were regenerated. "
-            "Restart anglerfish-bridge, anglerfish-dashboard, and cowrie "
+            "Restart anglerfish-bridge and anglerfish-dashboard "
             "to pick up the new values.",
         )
 

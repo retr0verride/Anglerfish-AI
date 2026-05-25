@@ -74,47 +74,8 @@ def test_ollama_endpoint_surfaces_recent_integrity_skip(
     assert body["integrity_check"]["expected_hash_present"] is False
 
 
-# ---------------------------------------------------------------------------
-# /api/health/forwarder
-# ---------------------------------------------------------------------------
-
-
-def test_forwarder_endpoint_reports_unknown_when_no_events(
-    client: TestClient,
-) -> None:
-    body = client.get("/api/health/forwarder").json()
-    assert body["splunk_enabled"] is False
-    assert body["last_delivery_status"] == "unknown"
-    assert body["last_delivery_at"] is None
-    # Fallback file doesn't exist -> 0 bytes (not 500).
-    assert body["fallback_queue_depth_bytes"] == 0
-
-
-def test_forwarder_endpoint_reports_recent_success(
-    client: TestClient,
-    audit_path: Path,
-) -> None:
-    audit_path.write_text(
-        '{"ts":"2026-05-24T12:00:00+00:00","event_type":"forwarder.hec_delivered"}\n',
-        encoding="utf-8",
-    )
-    body = client.get("/api/health/forwarder").json()
-    assert body["last_delivery_status"] == "success"
-    assert body["last_delivery_at"] == "2026-05-24T12:00:00+00:00"
-
-
-def test_forwarder_endpoint_picks_latest_event_only(
-    client: TestClient,
-    audit_path: Path,
-) -> None:
-    audit_path.write_text(
-        '{"ts":"2026-05-24T11:00:00+00:00","event_type":"forwarder.hec_delivered"}\n'
-        '{"ts":"2026-05-24T12:00:00+00:00","event_type":"forwarder.hec_failed"}\n',
-        encoding="utf-8",
-    )
-    body = client.get("/api/health/forwarder").json()
-    assert body["last_delivery_status"] == "failed"
-
+# /api/health/forwarder was removed in 2026-05 alongside the
+# Cowrie integration; the forwarder package itself is gone.
 
 # ---------------------------------------------------------------------------
 # /api/health/sessions
@@ -175,5 +136,4 @@ def test_unauthenticated_health_alias_still_open(client: TestClient) -> None:
     # exercised end-to-end.
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/health/ollama").status_code == 200
-    assert client.get("/api/health/forwarder").status_code == 200
     assert client.get("/api/health/sessions").status_code == 200

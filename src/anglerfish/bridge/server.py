@@ -1,9 +1,8 @@
 """HTTP transport in front of :class:`AIBridgeService`.
 
-Cowrie runs as a separate process; the bridge must be reachable from
-that process. Rather than embedding the bridge in Cowrie's Python (an
-intrusive patch), Anglerfish exposes a small loopback-only HTTP API
-that Cowrie's output plugin and command handler call.
+The lure runs as a separate process; the bridge must be reachable
+from that process. Anglerfish exposes a small loopback-only HTTP API
+that the lure's bridge client calls.
 
 The API has three endpoints:
 
@@ -15,9 +14,10 @@ The API has three endpoints:
   attacker disconnects.
 
 Sessions are kept in memory: this server is intended to be co-located
-with Cowrie on the bait host and never has more than a few hundred
-concurrent sessions. Captured state is persisted by the forwarder /
-dashboard / credentials store, not by this server.
+with the lure on the bait host and never has more than a few hundred
+concurrent sessions. Captured state is persisted by the Stage 4
+session store (populated by the dashboard's audit-log tailer) and
+the credentials store, not by this server.
 """
 
 from __future__ import annotations
@@ -56,11 +56,9 @@ PROTOCOL_VERSION = "2"
 
 # Versions the server still accepts on incoming requests. Stage 2A
 # bumped the version to "2" to add CommandRequest.fs_context for the
-# lure. The Cowrie shim still ships "1" through the deprecation window;
-# both versions resolve to the same handlers because "2" only adds an
-# optional field. When Cowrie is removed in a later stage, drop "1"
-# from this set.
-SUPPORTED_PROTOCOLS: frozenset[str] = frozenset({"1", "2"})
+# lure. Protocol "1" was the Cowrie shim's version; both Cowrie and
+# its v1 acceptance path were removed in 2026-05.
+SUPPORTED_PROTOCOLS: frozenset[str] = frozenset({"2"})
 
 _PROTOCOL_HEADER = "X-Anglerfish-Protocol"
 _AUTH_HEADER = "Authorization"
@@ -145,8 +143,7 @@ class CommandRequest(BaseModel):
             "the lure is presenting, passed in protocol v2. The bridge "
             "prompt builder uses it to keep LLM-invented file contents "
             "consistent with what the lure already serves natively. "
-            "Cowrie shim (protocol v1) omits the field; older clients "
-            "stay compatible by virtue of the default."
+            "Omitting the field stays compatible by virtue of the default."
         ),
     )
 

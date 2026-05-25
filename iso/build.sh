@@ -5,7 +5,9 @@
 # Produces a bootable Debian 12 (bookworm) ISO that:
 #   * boots to a text console
 #   * runs the first-boot wizard on tty1
-#   * comes up with Cowrie + the bridge + the dashboard enabled
+#   * comes up with the bridge + the dashboard enabled (the native
+#     SSH lure ships in this tree but has no auto-start unit yet;
+#     operators run `anglerfish lure serve` themselves — see TODO-3)
 #
 # Run as root inside a Debian/Ubuntu host with `live-build` installed.
 #

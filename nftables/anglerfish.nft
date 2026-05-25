@@ -2,13 +2,13 @@
 # Anglerfish AI firewall rules.
 #
 # Two interfaces:
-#   * bait    — attacker-facing, hosts Cowrie's listener
-#   * service — operator-facing, hosts dashboard + outbound to Ollama/Splunk
+#   * bait    — attacker-facing, hosts the native SSH lure
+#   * service — operator-facing, hosts dashboard + outbound to Ollama
 #
-# Egress on the service interface is restricted to the three ports we
-# actually need: 11434 (Ollama), 8088 (Splunk HEC), and the configured
-# dashboard port. Egress on the bait interface is denied entirely so a
-# compromised honeypot cannot reach back to the operator network.
+# Egress on the service interface is restricted to the ports we
+# actually need: 11434 (Ollama) and the configured dashboard port.
+# Egress on the bait interface is denied entirely so a compromised
+# honeypot cannot reach back to the operator network.
 #
 # Interface names are templated via the wizard and injected at install
 # time by `envsubst`.
@@ -25,8 +25,8 @@ table inet anglerfish {
         # Loopback.
         iifname "lo" accept
 
-        # Cowrie listeners on the bait NIC.
-        iifname "${ANGLERFISH_BAIT_INTERFACE}" tcp dport { 2222, 2223 } accept
+        # Lure SSH listener on the bait NIC.
+        iifname "${ANGLERFISH_BAIT_INTERFACE}" tcp dport 2222 accept
 
         # Operator-facing dashboard on the service NIC.
         iifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport ${ANGLERFISH_DASHBOARD__PORT} accept
@@ -57,9 +57,8 @@ table inet anglerfish {
         oifname "${ANGLERFISH_BAIT_INTERFACE}" udp dport 53 accept
         oifname "${ANGLERFISH_BAIT_INTERFACE}" drop
 
-        # Outbound from the service NIC — only the three service ports.
+        # Outbound from the service NIC — Ollama and our own dashboard port.
         oifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport 11434 accept
-        oifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport 8088 accept
         oifname "${ANGLERFISH_SERVICE_INTERFACE}" tcp dport ${ANGLERFISH_DASHBOARD__PORT} accept
 
         # Allow DNS + NTP outbound on the service NIC for system upkeep.

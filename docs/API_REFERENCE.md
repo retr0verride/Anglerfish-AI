@@ -4,34 +4,34 @@ Anglerfish AI exposes two HTTP services:
 
 | Service       | Default bind                                | Purpose                                          | Auth                |
 | ------------- | ------------------------------------------- | ------------------------------------------------ | ------------------- |
-| **Bridge**    | `127.0.0.1:8421`                            | Cowrie output plugin and command handler         | `Bearer` token      |
+| **Bridge**    | `127.0.0.1:8421`                            | Lure command handler                             | `Bearer` token      |
 | **Dashboard** | `127.0.0.1:8420`                            | Operator UI, REST queries, live event stream     | Session cookie / Basic |
 
 Both bind to loopback by default. To expose the dashboard on the service
 NIC, set `ANGLERFISH_DASHBOARD__HOST` to the interface IP and front it
 with a reverse proxy that terminates TLS. The bridge **must** stay on
-loopback, its threat model assumes Cowrie is the only caller.
+loopback, its threat model assumes the lure is the only caller.
 
 All request and response bodies are JSON unless noted. Pydantic models are
 frozen with `extra="forbid"`: unknown fields are rejected, all timestamps
 are ISO-8601 UTC.
 
 The dashboard sends a `Server: Anglerfish-AI/<version>` header. The bridge
-adds `X-Anglerfish-Protocol: 1` on every response; clients should send the
+adds `X-Anglerfish-Protocol: 2` on every response; clients should send the
 same header on every request and treat a mismatch as a fatal version skew.
 
 ---
 
 ## Bridge API
 
-Internal API the Cowrie integration calls. Everything except `/api/health`
+Internal API the lure calls. Everything except `/api/health`
 requires `Authorization: Bearer <secret>`, where the secret is
 `ANGLERFISH_BRIDGE__SHARED_SECRET` from the wizard-generated `.env`.
 
 If the secret is unset (development mode only), authentication is
 bypassed entirely, every endpoint is open. Production deployments must
 set the secret; the wizard generates a 32-byte URL-safe token and writes
-it to the env file shared by the bridge daemon and Cowrie.
+it to the env file shared by the bridge daemon and the lure.
 
 ### Endpoints
 
@@ -191,7 +191,7 @@ curl -fsS -X DELETE "$BASE/api/v1/session/$SID" \
 ## Dashboard API
 
 The dashboard serves both the operator SPA (`GET /`) and a REST + WebSocket
-API used by that SPA and by external integrations (Splunk dashboards,
+API used by that SPA and by external integrations (SIEM dashboards,
 SOAR, custom tooling).
 
 ### Authentication
@@ -284,8 +284,8 @@ Clears the session cookie. `200 {"status": "ok"}`. Idempotent.
 }
 ```
 
-Counters are in-memory and reset on dashboard restart. Use the forwarder
-(Splunk HEC or JSONL) for durable history.
+Counters are in-memory and reset on dashboard restart. Use the
+SessionStore SQLite file for durable history.
 
 ### `GET /api/sessions`
 
@@ -315,14 +315,13 @@ Counters are in-memory and reset on dashboard restart. Use the forwarder
 
 Sorted by `last_activity_at` descending. Returns every session held in
 the in-memory ring buffer. Older sessions age out as new ones arrive;
-query the forwarder (Splunk HEC or the JSONL fallback) for historical
-data.
+query the SessionStore SQLite file for historical data.
 
 ### `GET /api/sessions/{session_id}`
 
 Same shape as one element of `/api/sessions`. `404` if the session is not
-in the ring buffer (older sessions are evicted; query the forwarder for
-historical data).
+in the ring buffer (older sessions are evicted; query the SessionStore
+SQLite file for historical data).
 
 ### `GET /api/commands`
 
@@ -487,8 +486,8 @@ discarded.
 
 Each connected client has its own queue (default size 256). If your
 client falls behind, **old events are dropped** to keep the queue from
-growing without bound. Use `/api/commands` or the Splunk forwarder for
-guaranteed delivery, the WebSocket is best-effort.
+growing without bound. Use `/api/commands` or query the SessionStore
+SQLite file for guaranteed delivery, the WebSocket is best-effort.
 
 ### Close codes
 
@@ -529,21 +528,17 @@ asyncio.run(main())
 
 ## Integration recipes
 
-### Pull recent threats into Splunk via REST
+### Pull recent threats for ingestion elsewhere
 
-Anglerfish pushes events to Splunk HEC via the forwarder. The REST API
-is for *pulling* historical data, which is useful for backfilling a
-Splunk index after a forwarder outage:
+The REST API is for *pulling* historical data. Tail it from a script
+and ship the result wherever your existing alert or SIEM pipeline
+lives:
 
 ```bash
 curl -fsS -u "operator:$PASSWORD" \
   'http://dashboard:8420/api/threats?limit=500' \
   | jq -c '.[]' \
-  | while read -r line; do
-      curl -fsS -k -H "Authorization: Splunk $HEC_TOKEN" \
-        "https://splunk:8088/services/collector/event" \
-        -d "{\"event\": $line, \"sourcetype\": \"anglerfish:threat\"}"
-    done
+  > threats.ndjson
 ```
 
 ### Notify Slack on high-severity threats
@@ -576,7 +571,8 @@ may be added under `/api/v1/…`, and new versions under `/api/v2/…` will
 ship alongside `/api/v1/…` for at least one minor release before v1
 removal.
 
-The `X-Anglerfish-Protocol` header (currently `1`) tracks the
-*wire-level* protocol between bridge and Cowrie. If you write a custom
-Cowrie integration and the bridge starts returning `X-Anglerfish-Protocol: 2`,
-treat your client as out of date and fail closed.
+The `X-Anglerfish-Protocol` header (currently `2`) tracks the
+*wire-level* protocol between bridge and lure. If you write a custom
+client and the bridge starts returning a higher
+`X-Anglerfish-Protocol` value, treat your client as out of date and
+fail closed.

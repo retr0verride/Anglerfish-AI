@@ -19,18 +19,18 @@ The honeypot is a two-NIC design:
              │
              ▼
    ┌───────────────────┐         ┌──────────────────────┐
-   │   bait NIC        │ Cowrie  │    LLM bridge        │
+   │   bait NIC        │  lure   │    LLM bridge        │
    │  vmbr-bait        │◀───────▶│    /var/lib/...      │
    └───────────────────┘         │    dashboard         │
                                  └──────────┬───────────┘
                                             │ service NIC
                                             ▼
-                                       operators + Ollama + Splunk
+                                       operators + Ollama
 ```
 
 `vmbr-bait` is exposed to attacker traffic and must NEVER be on the
 Proxmox management bridge. `vmbr-service` is the operator-facing
-side and reaches Ollama, Splunk HEC, and the dashboard.
+side and reaches Ollama and the dashboard.
 
 ---
 
@@ -103,8 +103,8 @@ Three reasons:
    honeypot's LLM is on the same box.
 3. **Latency + nftables simplicity.** Loopback is ~0.2ms; cross-VM
    service-net inference is ~1-5ms + TCP overhead. And co-located
-   keeps the nftables egress policy at "Splunk + dashboard, nothing
-   else"; no Ollama port to allow.
+   keeps the nftables egress policy at "dashboard, nothing else";
+   no Ollama port to allow.
 
 A GPU can only be passed through to one VM at a time on Proxmox.
 Switch it to Anglerfish:
@@ -172,7 +172,7 @@ Optional overrides:
 | `--template PATH`       | `./anglerfish.json`      | Custom VM defaults               |
 | `--storage NAME`        | `local`                  | ISO storage other than `local`   |
 | `--disk-storage NAME`   | `local-lvm`              | VM disk on a different storage   |
-| `--memory MIB`          | `4096`                   | LLM model + Cowrie need headroom |
+| `--memory MIB`          | `4096`                   | LLM model + lure need headroom   |
 | `--cores N`             | `4`                      | Per LLM throughput needs         |
 | `--dry-run`             | -                        | Print the `qm create` line only  |
 
@@ -231,11 +231,11 @@ ssh anglerfish-ops@<service-ip>
 curl -k https://<service-ip>:8420/api/health
 # {"status":"ok","version":"0.1.0"}
 
-# Driving Cowrie from a throwaway IP
+# Driving the lure from a throwaway IP
 ssh -p 2222 root@<bait-ip>
 ```
 
-If the dashboard responds and Cowrie greets you on `2222`, the
+If the dashboard responds and the lure greets you on `2222`, the
 honeypot is live.
 
 ---
@@ -314,7 +314,7 @@ QEMU/KVM with bait + service NICs already wired:
 ./iso/smoke.sh ./build/anglerfish-ai-0.1.0.iso --memory 4G
 ```
 
-Host port 2222 → guest 2222 (Cowrie); host port 8420 → guest 8420
+Host port 2222 → guest 2222 (lure); host port 8420 → guest 8420
 (dashboard). `Ctrl-A x` to terminate.
 
 The smoke harness uses a persistent `iso/smoke/anglerfish.qcow2`

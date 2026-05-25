@@ -6,7 +6,6 @@ working Anglerfish honeypot needs:
 
 * ``<base>/anglerfish.env`` — env file consumed by every systemd unit.
 * ``<base>/nftables/anglerfish.nft`` — firewall ruleset.
-* ``<base>/cowrie.cfg`` — Cowrie main config.
 * ``<systemd>/10-bait.network`` — bait NIC config (DHCP or static).
 * ``<systemd>/20-service.network`` — service NIC config.
 * ``/etc/hostname`` + ``/etc/hosts`` — VM hostname.
@@ -37,7 +36,6 @@ from anglerfish.wizard.persistence import save_answers
 from anglerfish.wizard.preflight import PreflightChecker
 from anglerfish.wizard.render import (
     render_authorized_keys,
-    render_cowrie_cfg,
     render_env,
     render_hostname_files,
     render_nftables,
@@ -78,7 +76,6 @@ class WizardPaths:
         env_path: Path,
         *,
         nftables_path: Path | None = None,
-        cowrie_cfg_path: Path | None = None,
         bait_network_path: Path | None = None,
         service_network_path: Path | None = None,
         hostname_path: Path | None = None,
@@ -91,9 +88,6 @@ class WizardPaths:
         self.env_path = env_path
         self.nftables_path = (
             nftables_path if nftables_path is not None else base / "nftables" / "anglerfish.nft"
-        )
-        self.cowrie_cfg_path = (
-            cowrie_cfg_path if cowrie_cfg_path is not None else base / "cowrie.cfg"
         )
         self.answers_path = answers_path if answers_path is not None else base / "wizard.json"
         # System paths default to real OS locations; tests override.
@@ -145,11 +139,6 @@ def run_wizard(
         checker = preflight if preflight is not None else PreflightChecker()
         results = checker.run(
             ollama_url=str(answers.ollama_endpoint),
-            splunk_hec_url=(
-                str(answers.splunk_hec_url)
-                if answers.splunk_enabled and answers.splunk_hec_url is not None
-                else None
-            ),
             webhook_url=(
                 str(answers.threat_alert_webhook)
                 if answers.threat_alert_webhook is not None
@@ -172,14 +161,12 @@ def run_wizard(
         bridge_secret=bridge_tok,
     )
     nft_content = render_nftables(answers)
-    cowrie_content = render_cowrie_cfg(answers)
     bait_net = render_systemd_network(answers.bait_interface, answers.bait_network)
     service_net = render_systemd_network(answers.service_interface, answers.service_network)
     etc_hostname, etc_hosts = render_hostname_files(answers.vm_hostname)
 
     _atomic_write(resolved.env_path, env_content, mode=0o600)
     _atomic_write(resolved.nftables_path, nft_content, mode=0o640)
-    _atomic_write(resolved.cowrie_cfg_path, cowrie_content, mode=0o640)
     _atomic_write(resolved.bait_network_path, bait_net, mode=0o644)
     _atomic_write(resolved.service_network_path, service_net, mode=0o644)
     _atomic_write(resolved.hostname_path, etc_hostname, mode=0o644)
@@ -210,7 +197,6 @@ def run_wizard(
     return WizardOutput(
         env_path=resolved.env_path,
         nftables_path=resolved.nftables_path,
-        cowrie_cfg_path=resolved.cowrie_cfg_path,
         bait_network_path=resolved.bait_network_path,
         service_network_path=resolved.service_network_path,
         hostname_path=resolved.hostname_path,
@@ -296,7 +282,7 @@ def prompt_for_answers(
 
     bait = prompt("Bait interface (exposed to attackers)", suggestion_bait).strip()
     service = prompt(
-        "Service interface (Ollama, Splunk, dashboard)",
+        "Service interface (Ollama, dashboard)",
         suggestion_service,
     ).strip()
 
@@ -401,28 +387,6 @@ def prompt_for_answers(
         defaults.fake_username if defaults is not None else "root",
     ).strip()
 
-    splunk_default = defaults.splunk_enabled if defaults is not None else False
-    splunk_enabled = confirm("Enable Splunk HEC forwarding?", splunk_default)
-    splunk_url: HttpUrl | None = None
-    splunk_token: str | None = None
-    if splunk_enabled:
-        hec_default = (
-            str(defaults.splunk_hec_url)
-            if defaults is not None and defaults.splunk_hec_url is not None
-            else "https://splunk.internal:8088/services/collector/event"
-        )
-        url_str = prompt("Splunk HEC URL", hec_default).strip()
-        try:
-            splunk_url = HttpUrl(url_str)
-        except ValidationError as exc:
-            raise ValueError(f"invalid Splunk HEC URL: {url_str!r}") from exc
-        token_default = (
-            defaults.splunk_hec_token
-            if defaults is not None and defaults.splunk_hec_token is not None
-            else None
-        )
-        splunk_token = prompt("Splunk HEC token", token_default).strip() or None
-
     webhook_default = (
         str(defaults.threat_alert_webhook)
         if defaults is not None and defaults.threat_alert_webhook is not None
@@ -464,9 +428,6 @@ def prompt_for_answers(
         ollama_endpoint=ollama_endpoint,
         ollama_trusted_remote_host=ollama_trusted,
         ollama_model=ollama_model,
-        splunk_enabled=splunk_enabled,
-        splunk_hec_url=splunk_url,
-        splunk_hec_token=splunk_token,
         threat_alert_webhook=webhook,
         maxmind_license_key=maxmind_license_key,
         fake_hostname=fake_hostname,

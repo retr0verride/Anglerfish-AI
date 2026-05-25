@@ -83,7 +83,8 @@ src/anglerfish/llm/
 
 `anglerfish.bridge.client` stays as a one-line re-export of the
 new client for one release cycle, then deletes (mirrors the
-Stage 2 Cowrie pattern).
+deprecation-window pattern Stage 2 used for the Cowrie shim
+before the 2026-05 removal).
 
 ### Configuration shape
 

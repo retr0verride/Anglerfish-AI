@@ -51,7 +51,7 @@ geo_app = typer.Typer(
 )
 lure_app = typer.Typer(
     name="lure",
-    help="Native SSH lure (Cowrie replacement) commands.",
+    help="Native SSH lure commands.",
     no_args_is_help=True,
 )
 app.add_typer(config_app)
@@ -116,7 +116,7 @@ def bridge_serve(
         typer.Option("--port", help="TCP port for the bridge HTTP server."),
     ] = 8421,
 ) -> None:  # pragma: no cover - exercised in integration
-    """Run the bridge HTTP API for Cowrie to consume.
+    """Run the bridge HTTP API for the lure to consume.
 
     This boots a Uvicorn server hosting :func:`anglerfish.bridge.create_bridge_app`.
     Use only with a configured ``.env`` (see ``anglerfish config show``).

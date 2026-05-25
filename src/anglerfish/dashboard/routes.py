@@ -32,7 +32,6 @@ from anglerfish.dashboard.export import (
     session_export_payload,
 )
 from anglerfish.dashboard.health import (
-    forwarder_health,
     ollama_health,
     sessions_health,
 )
@@ -269,13 +268,6 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
     ) -> dict[str, Any]:
         return await ollama_health(request.app.state.settings, audit)
-
-    @router.get("/api/health/forwarder", dependencies=[Depends(require_auth)])
-    async def health_forwarder(
-        request: Request,
-        audit: AuditLog = Depends(_get_audit),  # noqa: B008
-    ) -> dict[str, Any]:
-        return forwarder_health(request.app.state.settings, audit)
 
     @router.get("/api/health/sessions", dependencies=[Depends(require_auth)])
     async def health_sessions(

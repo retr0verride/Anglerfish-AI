@@ -32,7 +32,6 @@ _HAPPY_PATH_INPUTS = (
             "qwen3:14b",  # model
             "srv-prod-01",  # fake host
             "root",  # fake user
-            "n",  # splunk disabled
             "",  # webhook empty
             "",  # MaxMind licence key empty
         ],

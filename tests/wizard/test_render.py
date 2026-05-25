@@ -9,7 +9,7 @@ import pytest
 from pydantic import HttpUrl
 
 from anglerfish.wizard.answers import WizardAnswers
-from anglerfish.wizard.render import render_cowrie_cfg, render_env, render_nftables
+from anglerfish.wizard.render import render_env, render_nftables
 
 
 def _answers(**overrides: object) -> WizardAnswers:
@@ -19,7 +19,6 @@ def _answers(**overrides: object) -> WizardAnswers:
         "service_interface": "eth1",
         "ollama_endpoint": HttpUrl("http://127.0.0.1:11434/"),
         "ollama_model": "qwen3:14b",
-        "splunk_enabled": False,
         "fake_hostname": "srv-prod-01",
         "fake_username": "root",
     }
@@ -40,7 +39,6 @@ def test_render_env_minimal_loopback() -> None:
         bridge_secret="b" * 43,
     )
     assert "ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/" in out
-    assert "ANGLERFISH_SPLUNK__ENABLED=false" in out
     assert "ANGLERFISH_DASHBOARD__SESSION_SECRET=" in out
     assert "ANGLERFISH_BRIDGE__SHARED_SECRET=" + ("b" * 43) in out
     assert "ANGLERFISH_BRIDGE_URL=http://127.0.0.1:8421" in out
@@ -68,22 +66,6 @@ def test_render_env_omits_unset_optional_values() -> None:
     assert "ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST=" not in lines
 
 
-def test_render_env_splunk_enabled_emits_token() -> None:
-    out = render_env(
-        _answers(
-            splunk_enabled=True,
-            splunk_hec_url=HttpUrl("https://splunk.test:8088/services/collector/event"),
-            splunk_hec_token="topsecrettoken",
-        ),
-        session_secret="x",
-        encryption_key="y",
-        bridge_secret="z",
-    )
-    assert "ANGLERFISH_SPLUNK__ENABLED=true" in out
-    assert "ANGLERFISH_SPLUNK__HEC_URL=https://splunk.test:8088" in out
-    assert "ANGLERFISH_SPLUNK__HEC_TOKEN=topsecrettoken" in out
-
-
 def test_render_env_includes_threat_webhook_when_set() -> None:
     out = render_env(
         _answers(threat_alert_webhook=HttpUrl("https://hooks.test/x")),
@@ -101,7 +83,8 @@ def test_render_env_includes_threat_webhook_when_set() -> None:
 
 def test_render_nftables_uses_interface_names() -> None:
     out = render_nftables(_answers(bait_interface="ens1", service_interface="ens2"))
-    assert 'iifname "ens1" tcp dport { 2222, 2223 }' in out
+    # Post-Cowrie removal: lure-only ingress on the bait NIC at 2222.
+    assert 'iifname "ens1" tcp dport 2222 accept' in out
     assert 'oifname "ens2" tcp dport 11434' in out
     assert "policy drop" in out
     assert "table inet anglerfish" in out
@@ -122,24 +105,8 @@ def test_render_nftables_dashboard_port_override() -> None:
     assert "tcp dport 8442 accept" in out
 
 
-# ---------------------------------------------------------------------------
-# render_cowrie_cfg
-# ---------------------------------------------------------------------------
-
-
-def test_render_cowrie_cfg_includes_anglerfish_plugin() -> None:
-    out = render_cowrie_cfg(_answers())
-    assert "[output_anglerfish]" in out
-    assert "[honeypot]" in out
-    assert "hostname = srv-prod-01" in out
-    assert "listen_endpoints = tcp:2222:interface=0.0.0.0" in out
-
-
-def test_render_cowrie_cfg_port_overrides() -> None:
-    out = render_cowrie_cfg(_answers(), ssh_listen_port=2223, telnet_listen_port=2224)
-    assert "listen_endpoints = tcp:2223:interface=0.0.0.0" in out
-    assert "listen_endpoints = tcp:2224:interface=0.0.0.0" in out
-
+# render_cowrie_cfg was removed alongside the Cowrie integration in
+# 2026-05; tests for it lived here.
 
 # ---------------------------------------------------------------------------
 # Stage 2C: lure env-file rendering + nftables port wiring
@@ -180,19 +147,14 @@ def test_render_env_lure_listen_host_pulled_from_static_bait() -> None:
     assert "ANGLERFISH_LURE__LISTEN_HOST=192.0.2.10" in out
 
 
-def test_render_nftables_default_lure_port_shares_cowrie_rule() -> None:
-    """Default lure port (2222) coincides with Cowrie's SSH; one rule covers both."""
+def test_render_nftables_default_lure_port_accepted() -> None:
+    """The lure-only nftables rule accepts the configured bait port."""
     out = render_nftables(_answers())
-    # Cowrie SSH+telnet rule still emitted once.
-    assert out.count("tcp dport { 2222, 2223 }") == 1
-    # No separate per-lure-port rule when ports collide.
-    assert "native lure" not in out
+    assert "tcp dport 2222 accept" in out
 
 
-def test_render_nftables_distinct_lure_port_gets_separate_rule() -> None:
+def test_render_nftables_lure_port_override() -> None:
     out = render_nftables(_answers(), lure_listen_port=22)
     assert "tcp dport 22 accept" in out
-    assert "native lure" in out
-    assert "Cowrie (deprecation window)" in out
-    # Cowrie rule still emitted for the transition window.
-    assert "tcp dport { 2222, 2223 }" in out
+    # The default Cowrie-era 2222/2223 set rule is gone with Cowrie itself.
+    assert "tcp dport { 2222, 2223 }" not in out

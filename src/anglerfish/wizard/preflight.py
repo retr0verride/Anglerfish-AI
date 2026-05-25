@@ -1,10 +1,8 @@
 """Pre-flight reachability checks executed before the wizard commits.
 
-Three services may need a sanity check:
+Two services may need a sanity check:
 
 * **Ollama** — ``GET <base_url>/api/version`` (no auth).
-* **Splunk HEC** — ``GET <hec_base>/services/collector/health/1.0``
-  (no auth required; returns 200 when the receiver is up).
 * **Threat-alert webhook** — best-effort ``HEAD <url>``; we accept
   anything < 500 because many webhook receivers reject HEAD/OPTIONS
   while still accepting POST.
@@ -12,6 +10,9 @@ Three services may need a sanity check:
 Each check has a hard timeout (default 5 s). Failures are advisory —
 the wizard logs the result and continues. Operators get a final
 "continue anyway?" prompt if anything failed.
+
+Pre-Stage-2 deployments also probed Splunk HEC here; that check was
+removed alongside the Cowrie integration and the forwarder package.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -27,7 +27,6 @@ __all__ = [
     "CheckResult",
     "PreflightChecker",
     "check_ollama",
-    "check_splunk_hec",
     "check_webhook",
 ]
 
@@ -74,28 +73,6 @@ def check_ollama(base_url: str, *, timeout: float = _DEFAULT_TIMEOUT_S) -> Check
     return CheckResult("ollama", True, f"version {version}")
 
 
-def check_splunk_hec(
-    hec_url: str,
-    *,
-    timeout: float = _DEFAULT_TIMEOUT_S,
-) -> CheckResult:
-    """Hit Splunk HEC's no-auth health endpoint derived from ``hec_url``."""
-    health = _hec_health_url(hec_url)
-    try:
-        with httpx.Client(timeout=timeout, verify=True) as client:
-            response = client.get(health)
-    except httpx.HTTPError as exc:
-        return CheckResult("splunk", False, f"{type(exc).__name__}: {exc}")
-
-    if response.status_code != 200:
-        return CheckResult(
-            "splunk",
-            False,
-            f"health returned {response.status_code}",
-        )
-    return CheckResult("splunk", True, "HEC health endpoint responded 200")
-
-
 def check_webhook(
     webhook_url: str,
     *,
@@ -131,14 +108,6 @@ def _join(base: str, path: str) -> str:
     return base + path
 
 
-def _hec_health_url(hec_url: str) -> str:
-    """Map a Splunk HEC event URL to its no-auth health endpoint."""
-    parsed = urlparse(hec_url)
-    return urlunparse(
-        (parsed.scheme, parsed.netloc, "/services/collector/health/1.0", "", "", ""),
-    )
-
-
 class PreflightChecker:
     """Run all configured reachability checks and report results."""
 
@@ -155,15 +124,12 @@ class PreflightChecker:
         self,
         *,
         ollama_url: str | None,
-        splunk_hec_url: str | None,
         webhook_url: str | None,
     ) -> list[CheckResult]:
         """Execute each non-``None`` check in turn and return the results."""
         results: list[CheckResult] = []
         if ollama_url is not None:
             results.append(check_ollama(ollama_url, timeout=self._timeout))
-        if splunk_hec_url is not None:
-            results.append(check_splunk_hec(splunk_hec_url, timeout=self._timeout))
         if webhook_url is not None:
             results.append(check_webhook(webhook_url, timeout=self._timeout))
         for r in results:

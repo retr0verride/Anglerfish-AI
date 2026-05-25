@@ -1,12 +1,9 @@
 """Native asyncssh-based SSH honeypot frontend.
 
-Replaces the Cowrie integration. See
-``docs/design/STAGE_2_lure_subsystem.md`` for the full design.
-
-Stage 2A ships the scaffold (config, types, modules, tests) behind
-``ANGLERFISH_LURE__ENABLED=false``. The asyncssh server itself lands
-in Stage 2B. The HTTP/HTTPS lure stays a ``NotImplementedError`` stub
-through 2A and 2B; see TODO-1 in ``docs/TODO.md``.
+The sole attacker-facing SSH listener. See
+``docs/design/STAGE_2_lure_subsystem.md`` for the full design. The
+HTTP/HTTPS lure stays a ``NotImplementedError`` stub; see TODO-1 in
+``docs/TODO.md``.
 
 This package's ``__init__`` is intentionally empty (no eager
 re-exports). Eager re-exports would pull in submodules that depend

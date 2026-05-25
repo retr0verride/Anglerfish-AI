@@ -24,7 +24,6 @@ def _answers(**overrides: object) -> WizardAnswers:
         "service_interface": "eth1",
         "ollama_endpoint": HttpUrl("http://127.0.0.1:11434/"),
         "ollama_model": "qwen3:14b",
-        "splunk_enabled": False,
         "fake_hostname": "srv-prod-01",
         "fake_username": "root",
     }

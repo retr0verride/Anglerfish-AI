@@ -106,11 +106,11 @@ Shipped in three commits, each green at commit:
 | 2B    | `2e517e8` | runtime: `asyncssh`-backed `LureSSHServer`, `_PerIPLimiter`, `_process_handler` shell loop, `runner.py` signal handling, `anglerfish lure serve / validate-config` CLI, 33 integration tests against a real asyncssh client |
 | 2C    | (this PR) | env-file rendering + nftables wiring + operator docs + ROADMAP renumber |
 
-**Replaced:** the Cowrie integration shim. Cowrie itself stays in the
-tree through a deprecation window (one release cycle) so operators
-upgrading in place can run both. A later commit deletes
-`src/anglerfish/integration/cowrie*.py`, the `cowrie/` directory, the
-`CowrieConfig` model, and the related tests.
+**Replaced:** the Cowrie integration shim. The 2026-05 Cowrie
+removal commit deleted `src/anglerfish/integration/cowrie*.py`, the
+`cowrie/` directory, the forwarder package, the `CowrieConfig` and
+`SplunkConfig` models, the `cowrie.service` systemd unit, and the
+related tests. The lure is the sole bait-NIC listener.
 
 **Artifacts the rest of the roadmap depends on:**
 

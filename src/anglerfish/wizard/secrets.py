@@ -13,7 +13,7 @@ downstream consumers want different things:
   decodes it via :func:`base64.b64decode` and expects exactly 32 raw
   bytes back.
 * The **bridge shared secret** is a URL-safe 32-byte token used as the
-  ``Authorization: Bearer`` value between Cowrie and the bridge. It
+  ``Authorization: Bearer`` value between the lure and the bridge. It
   rides in a ``.env`` file so URL-safe alphabet avoids quoting drama.
 """
 

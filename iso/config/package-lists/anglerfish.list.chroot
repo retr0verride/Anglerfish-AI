@@ -12,13 +12,6 @@ curl
 wget
 gpg
 
-# Cowrie's runtime dependencies
-authbind
-libssl-dev
-libffi-dev
-build-essential
-git
-
 # Diagnostics
 htop
 less

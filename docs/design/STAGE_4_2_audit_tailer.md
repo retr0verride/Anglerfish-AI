@@ -26,9 +26,9 @@ auth token - the audit log itself is the wire format.
 
 The design is symmetric with the Stage 4 migration helper
 ([`sessions/migrate.py`](../../src/anglerfish/sessions/migrate.py)):
-that helper does a one-shot replay of Cowrie's forwarder JSONL into
-the store; the tailer does the same translation continuously against
-Anglerfish's own audit JSONL.
+that helper does a one-shot replay of the historical Cowrie
+forwarder JSONL into the store; the tailer does the same translation
+continuously against Anglerfish's own audit JSONL.
 
 ## Constraints discovered during design
 
@@ -219,11 +219,12 @@ session/stats endpoints just keep returning empty.
 - **Forwarder integration.** The forwarder fan-out path (Path γ in
   the design discussion) is out of scope. The audit log is the
   source of truth for 4.2.
-- **Splunk HEC parity.** Events still go to HEC via the forwarder
-  separately (when Cowrie is in use) or not at all (under the lure).
-  Audit-log → SessionStore is its own consumer, parallel to whatever
-  HEC pipeline exists. Bringing HEC parity to the lure is a future
-  decision.
+- **Splunk HEC parity.** Historical context: pre-removal, events
+  went to HEC via the forwarder when Cowrie was the bait listener.
+  The forwarder package was deleted in the 2026-05 Cowrie removal,
+  so there is no live HEC sink to keep parity with. Operators that
+  want HEC must build it on top of `/api/threats` and the
+  SessionStore.
 - **Cross-process notification.** The tailer runs in the dashboard
   process, so WebSocket fan-out works natively. Operators that want
   to run multiple dashboard replicas behind a load balancer get one
@@ -231,8 +232,8 @@ session/stats endpoints just keep returning empty.
   idempotently. Not recommended; this is a single-process honeypot
   not a microservices fleet.
 - **Backfill.** The Stage 4 `import_jsonl_into_store` migration
-  helper already covers historical Cowrie data; backfilling lure
-  events from a pre-4.2 audit log is the same idea and can be
+  helper already covers historical Cowrie-era JSONL; backfilling
+  lure events from a pre-4.2 audit log is the same idea and can be
   added later as a `--from-offset 0` CLI flag if operators need it.
 - **Response capture.** As above; left to the stage that actually
   needs response text (probably Stage 7 intent extraction).

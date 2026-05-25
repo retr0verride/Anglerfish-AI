@@ -11,7 +11,7 @@ Public surface:
 - :class:`BridgeRateLimiter` — combined global concurrency cap and
   per-session token bucket.
 - :func:`create_bridge_app` — FastAPI app factory exposing the
-  bridge service over HTTP for Cowrie integration.
+  bridge service over HTTP for the lure to consume.
 
 Errors raised by the bridge are exported from
 :mod:`anglerfish.bridge.errors`.

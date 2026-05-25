@@ -40,7 +40,6 @@ from pydantic import (
 __all__ = [
     "AuditConfig",
     "BridgeConfig",
-    "CowrieConfig",
     "CredentialsConfig",
     "DashboardConfig",
     "DefenseConfig",
@@ -50,7 +49,6 @@ __all__ = [
     "OllamaConfig",
     "RateLimitConfig",
     "SessionStoreConfig",
-    "SplunkConfig",
     "ThreatConfig",
 ]
 
@@ -209,57 +207,6 @@ class OllamaConfig(BaseModel):
             return None
 
 
-class SplunkConfig(BaseModel):
-    """Splunk HTTP Event Collector (HEC) forwarder configuration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    enabled: bool = Field(default=False)
-    hec_url: HttpUrl | None = Field(default=None)
-    hec_token: SecretStr | None = Field(default=None)
-    index: str = Field(default="anglerfish", min_length=1, max_length=64)
-    sourcetype: str = Field(default="anglerfish:session", min_length=1, max_length=64)
-    verify_tls: bool = Field(default=True)
-    timeout_s: float = Field(default=10.0, gt=0.0, le=120.0)
-    fallback_path: Path = Field(default=Path("/var/lib/anglerfish/sessions.jsonl"))
-
-    @model_validator(mode="after")
-    def _require_url_and_token_when_enabled(self) -> Self:
-        if self.enabled and (self.hec_url is None or self.hec_token is None):
-            raise ValueError(
-                "splunk.hec_url and splunk.hec_token are required when splunk.enabled is true.",
-            )
-        return self
-
-
-class CowrieConfig(BaseModel):
-    """Cowrie SSH/Telnet honeypot frontend configuration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    log_path: Path = Field(default=Path("/var/log/cowrie/cowrie.json"))
-    ssh_listen_port: int = Field(default=2222, ge=1, le=65535)
-    telnet_listen_port: int = Field(default=2223, ge=1, le=65535)
-    hostname: str = Field(default="srv-prod-01", min_length=1, max_length=63)
-
-    @field_validator("hostname")
-    @classmethod
-    def _validate_hostname(cls, v: str) -> str:
-        if not _HOSTNAME_RE.match(v):
-            raise ValueError(
-                f"hostname must be a valid RFC 1123 label, got {v!r}",
-            )
-        return v
-
-    @model_validator(mode="after")
-    def _ports_must_differ(self) -> Self:
-        if self.ssh_listen_port == self.telnet_listen_port:
-            raise ValueError(
-                "cowrie.ssh_listen_port and cowrie.telnet_listen_port must be different.",
-            )
-        return self
-
-
 class DashboardConfig(BaseModel):
     """FastAPI + WebSocket dashboard configuration."""
 
@@ -343,7 +290,7 @@ class BridgeConfig(BaseModel):
         description=(
             "Bearer token required on every bridge HTTP request. The wizard "
             "generates a 32-byte URL-safe token and writes it to the env "
-            "file shared by the bridge daemon and Cowrie."
+            "file shared by the bridge daemon and the lure."
         ),
     )
 
@@ -402,7 +349,7 @@ class ThreatConfig(BaseModel):
       typos and config-management mistakes that would post threat data
       to internal services. Hostnames are allowed (Slack needs DNS); the
       service-NIC nftables egress policy in
-      ``cowrie/nftables/anglerfish.nft`` is the runtime control.
+      ``nftables/anglerfish.nft`` is the runtime control.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

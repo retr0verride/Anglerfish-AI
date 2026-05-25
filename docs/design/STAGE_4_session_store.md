@@ -22,11 +22,12 @@ Three things this is wrong for:
    honeytoken registry. Each would otherwise need its own ring
    buffer or replay-from-JSONL pass.
 
-The forwarder's JSONL fallback at
-[`src/anglerfish/forwarder/jsonl.py`](../../src/anglerfish/forwarder/jsonl.py)
-is *not* a session store: it's an envelope-per-event append log
-written when Splunk HEC is unreachable. Reconstructing sessions
-from that file is possible but non-trivial.
+The historical forwarder JSONL fallback (now removed alongside
+Cowrie in 2026-05) was *not* a session store: it was an
+envelope-per-event append log written when Splunk HEC was
+unreachable. Reconstructing sessions from those legacy files is
+possible but non-trivial; the `sessions/migrate.py` helper handles
+it for operators upgrading off the Cowrie pipeline.
 
 Stage 4 ships an explicit session store: a SQLite database with a
 small async API mirroring [`CredentialStore`](../../src/anglerfish/credentials/storage.py).

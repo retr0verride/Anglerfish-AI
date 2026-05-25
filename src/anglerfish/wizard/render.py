@@ -1,14 +1,11 @@
 """Render the wizard's runtime artefacts.
 
-Six artefacts are produced from a single :class:`WizardAnswers`:
+Five artefacts are produced from a single :class:`WizardAnswers`:
 
 * :func:`render_env` — the ``/etc/anglerfish/anglerfish.env`` file
   consumed by every systemd unit's ``EnvironmentFile`` directive.
 * :func:`render_nftables` — the nftables ruleset enforcing the
   bait/service NIC egress split.
-* :func:`render_cowrie_cfg` — Cowrie's ``cowrie.cfg`` with the
-  Anglerfish output plugin enabled and the listener ports / hostname
-  baked in.
 * :func:`render_systemd_network` — a per-NIC ``systemd-networkd``
   config file (DHCP or static, per :class:`NetworkConfig`).
 * :func:`render_hostname_files` — ``/etc/hostname`` plus the matching
@@ -24,14 +21,12 @@ returns the paths.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from pathlib import Path
 
 from anglerfish.wizard.answers import NetworkConfig, WizardAnswers
 from anglerfish.wizard.sshkey import SshPubKey, parse_ssh_pubkey
 
 __all__ = [
     "render_authorized_keys",
-    "render_cowrie_cfg",
     "render_env",
     "render_hostname_files",
     "render_nftables",
@@ -47,12 +42,9 @@ _HEADER = (
 
 _DEFAULT_DASHBOARD_PORT = 8420
 _DEFAULT_BRIDGE_PORT = 8421
-_DEFAULT_SSH_PORT = 2222
-_DEFAULT_TELNET_PORT = 2223
-# Lure listener port. Same as Cowrie's 2222 by default so a single
-# bait-NIC nftables rule covers both during the Cowrie deprecation
-# window. Operators that want the lure on a distinct port set
-# ANGLERFISH_LURE__LISTEN_PORT in the env file and re-run the wizard.
+# Native SSH lure listener port. Pre-Stage-2 deployments ran Cowrie
+# on the same 2222/2223 ports; the lure inherited the default to keep
+# attacker-facing surface stable across the Cowrie removal.
 _DEFAULT_LURE_PORT = 2222
 
 
@@ -97,18 +89,7 @@ def render_env(
         _line("ANGLERFISH_BRIDGE__SHARED_SECRET", bridge_secret),
         _line("ANGLERFISH_BRIDGE_URL", f"http://127.0.0.1:{_DEFAULT_BRIDGE_PORT}"),
         "",
-        "# --- Cowrie (deprecated, retained for transition window) -----------------",
-        # Stage 2 replaces Cowrie with the native asyncssh lure. The
-        # Cowrie keys stay until a later commit deletes the integration,
-        # so operators upgrading in place can run both for an A/B
-        # window. New installs leave the Cowrie listener disabled (set
-        # ANGLERFISH_COWRIE__SSH_LISTEN_PORT to 0 if you want to be
-        # explicit) and rely on the lure.
-        _line("ANGLERFISH_COWRIE__HOSTNAME", answers.fake_hostname),
-        _line("ANGLERFISH_COWRIE__SSH_LISTEN_PORT", str(_DEFAULT_SSH_PORT)),
-        _line("ANGLERFISH_COWRIE__TELNET_LISTEN_PORT", str(_DEFAULT_TELNET_PORT)),
-        "",
-        "# --- Lure (native asyncssh SSH honeypot, replaces Cowrie) ----------------",
+        "# --- Lure (native asyncssh SSH honeypot) ---------------------------------",
         # The lure refuses to start unless LISTEN_HOST is a real local
         # interface IP. Static-network setups get the bait IP filled in
         # below; DHCP setups must edit this file once the lease is up
@@ -133,14 +114,6 @@ def render_env(
             "ANGLERFISH_DASHBOARD__ADMIN_PASSWORD_HASH",
             answers.dashboard_admin_password_hash,
         ),
-        "",
-        "# --- Splunk HEC ----------------------------------------------------------",
-        _line("ANGLERFISH_SPLUNK__ENABLED", "true" if answers.splunk_enabled else "false"),
-        _line(
-            "ANGLERFISH_SPLUNK__HEC_URL",
-            str(answers.splunk_hec_url) if answers.splunk_hec_url is not None else None,
-        ),
-        _line("ANGLERFISH_SPLUNK__HEC_TOKEN", answers.splunk_hec_token),
         "",
         "# --- Threat alerting -----------------------------------------------------",
         _line(
@@ -196,44 +169,22 @@ def render_nftables(
     answers: WizardAnswers,
     *,
     dashboard_port: int = _DEFAULT_DASHBOARD_PORT,
-    ssh_listen_port: int = _DEFAULT_SSH_PORT,
-    telnet_listen_port: int = _DEFAULT_TELNET_PORT,
     lure_listen_port: int = _DEFAULT_LURE_PORT,
 ) -> str:
     """Render the nftables ruleset for the bait/service NIC split.
 
     The ruleset enforces three invariants:
 
-    1. The lure SSH listener (Stage 2 replacement for Cowrie) is the
-       primary port open on the bait NIC. Cowrie's legacy SSH + Telnet
-       ports stay accepted through the deprecation window so operators
-       can run both during A/B; a later commit removes those rules
-       when Cowrie itself is deleted.
+    1. The native SSH lure listens on the bait NIC at
+       ``lure_listen_port`` and nothing else attacker-facing is open.
     2. Egress from the bait NIC is dropped entirely (only DNS is
        permitted, so the LLM's plausible-shell responses can still
        reference DNS-resolvable hostnames in passing).
     3. Egress from the service NIC is restricted to Ollama (11434),
-       Splunk HEC (8088), the dashboard's own port, DNS, NTP.
+       the dashboard's own port, DNS, NTP.
     """
     bait = _quote_iface(answers.bait_interface)
     service = _quote_iface(answers.service_interface)
-
-    # Build the bait-NIC accept rule. If the lure port matches Cowrie's
-    # SSH port (the default-aligned case), one rule covers both. If
-    # the operator picked a distinct lure port, emit a separate rule.
-    cowrie_ports = {ssh_listen_port, telnet_listen_port}
-    if lure_listen_port in cowrie_ports:
-        bait_accept = (
-            f"iifname {bait} tcp dport {{ {ssh_listen_port}, {telnet_listen_port} }} accept"
-        )
-    else:
-        bait_accept = (
-            f"iifname {bait} tcp dport {lure_listen_port} accept  "
-            "# native lure (Stage 2)\n        "
-            f"iifname {bait} tcp dport "
-            f"{{ {ssh_listen_port}, {telnet_listen_port} }} accept  "
-            "# Cowrie (deprecation window)"
-        )
 
     return f"""#!/usr/sbin/nft -f
 # Generated by anglerfish-wizard. Do not edit by hand;
@@ -248,8 +199,8 @@ table inet anglerfish {{
         ct state established,related accept
         iifname "lo" accept
 
-        # Bait NIC: lure (Stage 2) and Cowrie (legacy, transition window).
-        {bait_accept}
+        # Bait NIC: native SSH lure listener.
+        iifname {bait} tcp dport {lure_listen_port} accept
 
         # Dashboard + ops SSH on the service NIC.
         iifname {service} tcp dport {dashboard_port} accept
@@ -274,67 +225,13 @@ table inet anglerfish {{
         oifname {bait} udp dport 53 accept
         oifname {bait} drop
 
-        # Service egress: only Ollama, Splunk HEC, and our own dashboard port.
+        # Service egress: Ollama and the dashboard's own port. DNS+NTP
+        # outbound for system upkeep.
         oifname {service} tcp dport 11434 accept
-        oifname {service} tcp dport 8088 accept
         oifname {service} tcp dport {dashboard_port} accept
         oifname {service} udp dport {{ 53, 123 }} accept
     }}
 }}
-"""
-
-
-def render_cowrie_cfg(
-    answers: WizardAnswers,
-    *,
-    ssh_listen_port: int = _DEFAULT_SSH_PORT,
-    telnet_listen_port: int = _DEFAULT_TELNET_PORT,
-    log_path: Path = Path("/var/log/cowrie/cowrie.json"),
-) -> str:
-    """Render Cowrie's main configuration file.
-
-    Enables the Anglerfish output plugin and bakes in the wizard's
-    hostname + listener-port choices. Anything else uses Cowrie's
-    upstream defaults.
-    """
-    return f"""# Cowrie configuration generated by anglerfish-wizard.
-# Re-run `anglerfish-wizard --reconfigure` to regenerate.
-
-[honeypot]
-hostname = {answers.fake_hostname}
-log_path = /var/log/cowrie
-download_path = /var/lib/anglerfish/downloads
-data_path = /opt/cowrie/data
-
-ssh_version_string = SSH-2.0-OpenSSH_8.9p1 Debian-1ubuntu1
-banner_file =
-
-auth_class = AuthRandom
-auth_class_parameters = 2, 5, 10
-
-[ssh]
-enabled = true
-listen_endpoints = tcp:{ssh_listen_port}:interface=0.0.0.0
-sftp_enabled = false
-forwarding = false
-forward_redirect = false
-forward_tunnel = false
-
-[telnet]
-enabled = true
-listen_endpoints = tcp:{telnet_listen_port}:interface=0.0.0.0
-
-[output_anglerfish]
-enabled = true
-
-[output_jsonlog]
-enabled = true
-logfile = {log_path}
-epoch_timestamp = false
-
-[shell]
-filesystem = share/cowrie/fs.pickle
-processes = share/cowrie/cmdoutput.json
 """
 
 

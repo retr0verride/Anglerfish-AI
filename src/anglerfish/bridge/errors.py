@@ -6,7 +6,7 @@ want generic protection against bridge failures catch
 more specific subclass.
 
 The bridge service itself catches these internally and degrades to
-fallback responses so that Cowrie never sees an exception.
+fallback responses so that the lure never sees an exception.
 
 Stage 5 moved :class:`OllamaUnavailableError` and
 :class:`OllamaResponseError` to :mod:`anglerfish.llm.errors`; they

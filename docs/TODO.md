@@ -55,3 +55,25 @@ and surfaces config errors earlier. Pre-existing as of Stage 4; flagged
 during the Stage 4 scoped re-review.
 
 Owner: TBD. Verify the actual systemd unit text before picking a fix.
+
+## TODO-3: first-class `anglerfish-lure.service` systemd unit
+
+The native SSH lure has no systemd unit in this tree. Stage 2 shipped
+the lure as a CLI subcommand (`anglerfish lure serve`) and the ISO
+build was never updated to enable it; the only auto-started bait-NIC
+unit was `cowrie.service`, which the 2026-05 Cowrie removal deleted.
+Production deployments need a proper unit:
+
+- `systemd/anglerfish-lure.service` with the same sandboxing primitives
+  as `anglerfish-bridge.service` (ProtectSystem=strict, SystemCallFilter,
+  restricted capability bounding set; `CAP_NET_BIND_SERVICE` only if the
+  lure listens below 1024).
+- `iso/config/hooks/normal/0050-systemd-units.hook.chroot` installs +
+  enables the unit alongside bridge / dashboard.
+- The unit's `Environment=ANGLERFISH_LURE__LISTEN_HOST=...` must be
+  populated from the wizard's rendered bait-NIC IP — either via a
+  drop-in or by sourcing the env file (which already has
+  `ANGLERFISH_LURE__*`).
+
+Owner: TBD. Surfaced during the Cowrie removal; without this, every
+deployment that runs the bait NIC needs a hand-rolled systemd unit.

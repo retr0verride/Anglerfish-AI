@@ -121,7 +121,6 @@ def test_protocol_mismatch_is_426(authed_client: TestClient) -> None:
     assert "999" in body["detail"]
     # 426 response lists the supported versions so a misconfigured
     # client can self-correct without reading the source.
-    assert "1" in body["detail"]
     assert "2" in body["detail"]
 
 
@@ -163,14 +162,14 @@ def test_no_secret_configured_means_no_auth_check(open_client: TestClient) -> No
 
 
 def test_protocol_version_constant() -> None:
-    # Stage 2A bumped to "2" to add CommandRequest.fs_context. "1" stays
-    # in SUPPORTED_PROTOCOLS through the Cowrie deprecation window.
+    # Stage 2A bumped to "2" to add CommandRequest.fs_context.
+    # Protocol "1" (the Cowrie shim's version) was dropped from
+    # SUPPORTED_PROTOCOLS alongside the 2026-05 Cowrie removal.
     assert PROTOCOL_VERSION == "2"
     assert PROTOCOL_VERSION in SUPPORTED_PROTOCOLS
 
 
-def test_supported_protocols_includes_legacy() -> None:
-    # Cowrie shim still ships "1"; removing it from SUPPORTED_PROTOCOLS
-    # waits for the Cowrie-removal stage.
-    assert "1" in SUPPORTED_PROTOCOLS
-    assert "2" in SUPPORTED_PROTOCOLS
+def test_legacy_protocol_v1_is_rejected() -> None:
+    """The Cowrie shim's v1 acceptance was removed in 2026-05."""
+    assert "1" not in SUPPORTED_PROTOCOLS
+    assert frozenset({"2"}) == SUPPORTED_PROTOCOLS

@@ -1,18 +1,25 @@
-"""One-shot helper to import the forwarder's JSONL fallback into the store.
+"""One-shot helper to import the historical forwarder JSONL into the store.
 
-Operators that upgraded to Stage 4 from an earlier release have a
-``/var/lib/anglerfish/sessions.jsonl`` (the forwarder fallback file
-written when Splunk HEC is unreachable). The lines are individual
-event envelopes, not session snapshots; this module reconstructs
-sessions by grouping events by ``session`` (Cowrie's session-id
-field) and replaying ``connect`` / ``input`` / ``closed`` events
-into the store via the regular write API.
+**Deprecated transition helper.** Cowrie and the forwarder package
+were removed in 2026-05; the audit-log tailer at
+:mod:`anglerfish.dashboard.audit_tailer` now populates the session
+store live. This helper survives one release cycle so operators
+upgrading from a pre-removal install can replay their existing
+``/var/lib/anglerfish/sessions.jsonl`` (Cowrie's forwarder fallback,
+written when Splunk HEC was unreachable). A future release will
+delete the helper; operators who still need it should ship the
+JSONL off-host before that release.
+
+The lines are individual event envelopes, not session snapshots;
+this module reconstructs sessions by grouping events by ``session``
+(Cowrie's session-id field) and replaying ``connect`` / ``input`` /
+``closed`` events into the store via the regular write API.
 
 Intentionally not a CLI subcommand - the operation is one-shot per
 install and would otherwise be permanent maintenance surface in the
 typer parser. The :func:`import_jsonl_into_store` helper is the
-durable interface; the ``docs/RUNBOOK.md`` "Data migration" section
-documents the one-liner.
+durable interface; the ``docs/RUNBOOK.md`` "Import old forwarder
+JSONL" section documents the one-liner.
 
 Lines that fail Pydantic validation (malformed event, unrecognised
 shape, truncated mid-write) are logged at warning and skipped. The

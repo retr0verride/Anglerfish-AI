@@ -29,7 +29,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from anglerfish.config.models import (
     AuditConfig,
     BridgeConfig,
-    CowrieConfig,
     CredentialsConfig,
     DashboardConfig,
     DefenseConfig,
@@ -39,7 +38,6 @@ from anglerfish.config.models import (
     OllamaConfig,
     RateLimitConfig,
     SessionStoreConfig,
-    SplunkConfig,
     ThreatConfig,
 )
 from anglerfish.lure.config import LureConfig
@@ -70,8 +68,6 @@ class AnglerfishSettings(BaseSettings):
     data_dir: Path = Path("/var/lib/anglerfish")
 
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
-    splunk: SplunkConfig = Field(default_factory=SplunkConfig)
-    cowrie: CowrieConfig = Field(default_factory=CowrieConfig)
     dashboard: DashboardConfig
     bridge: BridgeConfig = Field(default_factory=BridgeConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)

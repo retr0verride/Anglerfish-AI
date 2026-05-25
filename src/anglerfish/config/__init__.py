@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from anglerfish.config.models import (
     BridgeConfig,
-    CowrieConfig,
     CredentialsConfig,
     DashboardConfig,
     DefenseConfig,
@@ -18,7 +17,6 @@ from anglerfish.config.models import (
     LogLevel,
     OllamaConfig,
     RateLimitConfig,
-    SplunkConfig,
     ThreatConfig,
 )
 from anglerfish.config.settings import AnglerfishSettings, load_settings
@@ -26,7 +24,6 @@ from anglerfish.config.settings import AnglerfishSettings, load_settings
 __all__ = [
     "AnglerfishSettings",
     "BridgeConfig",
-    "CowrieConfig",
     "CredentialsConfig",
     "DashboardConfig",
     "DefenseConfig",
@@ -35,7 +32,6 @@ __all__ = [
     "LogLevel",
     "OllamaConfig",
     "RateLimitConfig",
-    "SplunkConfig",
     "ThreatConfig",
     "load_settings",
 ]

@@ -1,19 +1,24 @@
 """Subsystem health probes for the dashboard's authenticated health panel.
 
-Three read-only endpoints sit on top of these helpers:
+Two read-only endpoints sit on top of these helpers:
 
 * ``GET /api/health/ollama`` reports Ollama reachability plus the
   most recent model-integrity check outcome read from the audit log.
-* ``GET /api/health/forwarder`` reports the Splunk HEC last-delivery
-  status, the size of the JSONL fallback queue on disk, and the
-  most recent forwarded event.
 * ``GET /api/health/sessions`` reports active session count vs the
   bridge's configured concurrency cap and a token-per-minute rate
-  derived from recent ``bridge.command_*`` audit events.
+  derived from recent ``bridge.command_*`` / ``lure.command_*``
+  audit events.
 
-Every probe is best-effort: a missing audit log, an unreachable
-Ollama, or a missing forwarder fallback file all produce a defined
-JSON response (``"unknown"`` / ``null`` / ``0``) rather than a 500.
+The ``GET /api/health/forwarder`` endpoint was removed alongside
+the Cowrie integration (the forwarder package was Cowrie's only
+production caller). Operators on installs that ran Cowrie before
+the deletion can use :func:`anglerfish.sessions.import_jsonl_into_store`
+to replay the historical JSONL fallback file into the session
+store; see ``docs/RUNBOOK.md`` "Import old forwarder JSONL".
+
+Every probe is best-effort: a missing audit log or an unreachable
+Ollama produces a defined JSON response (``"unknown"`` / ``null`` /
+``0``) rather than a 500.
 """
 
 from __future__ import annotations
@@ -32,7 +37,6 @@ if TYPE_CHECKING:
     from anglerfish.dashboard.state import DashboardState
 
 __all__ = [
-    "forwarder_health",
     "ollama_health",
     "sessions_health",
 ]
@@ -55,11 +59,6 @@ _INTEGRITY_EVENT_TYPES = frozenset(
         "bridge.model_integrity_skipped",
     },
 )
-_FORWARDER_SUCCESS_EVENT = "forwarder.hec_delivered"
-_FORWARDER_FAILURE_EVENT = "forwarder.hec_failed"
-_FORWARDER_EVENT_TYPES = frozenset(
-    {_FORWARDER_SUCCESS_EVENT, _FORWARDER_FAILURE_EVENT},
-)
 
 
 async def ollama_health(
@@ -79,24 +78,6 @@ async def ollama_health(
         # Stage 5 extends this to per-role status.
         "model": settings.ollama.fast_model,
         "integrity_check": integrity,
-    }
-
-
-def forwarder_health(
-    settings: AnglerfishSettings,
-    audit_log: AuditLog,
-) -> dict[str, Any]:
-    """Report Splunk HEC enablement, last delivery, and fallback queue depth."""
-    enabled = settings.splunk.enabled
-    fallback_path = settings.splunk.fallback_path
-    queue_depth = _fallback_queue_size(fallback_path)
-    last_delivery, last_event_at = _latest_forwarder_event(audit_log.path)
-    return {
-        "splunk_enabled": enabled,
-        "last_delivery_status": last_delivery,
-        "last_delivery_at": last_event_at,
-        "fallback_queue_depth_bytes": queue_depth,
-        "fallback_path": str(fallback_path),
     }
 
 
@@ -176,31 +157,6 @@ def _latest_integrity_check(audit_path: Path) -> dict[str, Any]:
         "last_checked_at": None,
         "expected_hash_present": False,
     }
-
-
-def _fallback_queue_size(path: Path) -> int:
-    """Return the byte size of the JSONL fallback queue, 0 if missing."""
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
-def _latest_forwarder_event(audit_path: Path) -> tuple[str, str | None]:
-    """Find the most recent forwarder delivery event.
-
-    Returns ``(status, iso_ts)`` where status is one of
-    ``"success" | "failed" | "unknown"`` and the timestamp is
-    ``None`` when no forwarder event has ever been audited.
-    """
-    for event in iter_events(audit_path):
-        event_type = event.get("event_type")
-        if event_type not in _FORWARDER_EVENT_TYPES:
-            continue
-        status = "success" if event_type == _FORWARDER_SUCCESS_EVENT else "failed"
-        ts = event.get("ts") if isinstance(event.get("ts"), str) else None
-        return status, ts
-    return "unknown", None
 
 
 def _command_rate_per_minute(audit_path: Path, window_minutes: int) -> float:

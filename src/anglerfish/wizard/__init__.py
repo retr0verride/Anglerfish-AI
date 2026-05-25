@@ -3,9 +3,8 @@
 Public surface:
 
 * :func:`run_wizard` — pure-function core. Takes a :class:`WizardAnswers`,
-  writes every artefact (env, nftables, cowrie.cfg, systemd-networkd,
-  hostname, authorized_keys, answers.json), and returns a
-  :class:`WizardOutput`.
+  writes every artefact (env, nftables, systemd-networkd, hostname,
+  authorized_keys, answers.json), and returns a :class:`WizardOutput`.
 * :func:`prompt_for_answers` — builds a :class:`WizardAnswers` from
   interactive prompts. Accepts injectable prompt/confirm callables so
   the prompt surface is testable without stdin pumping.
@@ -33,12 +32,10 @@ from anglerfish.wizard.preflight import (
     CheckResult,
     PreflightChecker,
     check_ollama,
-    check_splunk_hec,
     check_webhook,
 )
 from anglerfish.wizard.render import (
     render_authorized_keys,
-    render_cowrie_cfg,
     render_env,
     render_hostname_files,
     render_nftables,
@@ -71,7 +68,6 @@ __all__ = [
     "WizardOutput",
     "WizardPaths",
     "check_ollama",
-    "check_splunk_hec",
     "check_webhook",
     "generate_bridge_secret",
     "generate_encryption_key",
@@ -80,7 +76,6 @@ __all__ = [
     "parse_ssh_pubkey",
     "prompt_for_answers",
     "render_authorized_keys",
-    "render_cowrie_cfg",
     "render_env",
     "render_hostname_files",
     "render_nftables",

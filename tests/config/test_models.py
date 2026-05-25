@@ -11,7 +11,6 @@ from pydantic import HttpUrl, SecretStr, ValidationError
 
 from anglerfish.config.models import (
     BridgeConfig,
-    CowrieConfig,
     CredentialsConfig,
     DashboardConfig,
     DefenseConfig,
@@ -20,7 +19,6 @@ from anglerfish.config.models import (
     LogLevel,
     OllamaConfig,
     RateLimitConfig,
-    SplunkConfig,
     ThreatConfig,
 )
 
@@ -155,69 +153,8 @@ def test_ollama_extra_fields_forbidden() -> None:
         OllamaConfig(unknown=1)  # type: ignore[call-arg]
 
 
-# ---------------------------------------------------------------------------
-# SplunkConfig
-# ---------------------------------------------------------------------------
-
-
-def test_splunk_disabled_by_default() -> None:
-    cfg = SplunkConfig()
-    assert cfg.enabled is False
-    assert cfg.hec_url is None
-    assert cfg.hec_token is None
-
-
-def test_splunk_enabled_requires_url_and_token() -> None:
-    with pytest.raises(ValidationError) as exc:
-        SplunkConfig(enabled=True)
-    assert "hec_url" in str(exc.value)
-
-
-def test_splunk_enabled_with_token_no_url_fails() -> None:
-    with pytest.raises(ValidationError):
-        SplunkConfig(enabled=True, hec_token=SecretStr("x"))
-
-
-def test_splunk_enabled_fully_populated_passes() -> None:
-    cfg = SplunkConfig(
-        enabled=True,
-        hec_url=HttpUrl("https://splunk.internal:8088/services/collector/event"),
-        hec_token=SecretStr("abc"),
-    )
-    assert cfg.enabled is True
-
-
-# ---------------------------------------------------------------------------
-# CowrieConfig
-# ---------------------------------------------------------------------------
-
-
-def test_cowrie_defaults() -> None:
-    cfg = CowrieConfig()
-    assert cfg.ssh_listen_port == 2222
-    assert cfg.telnet_listen_port == 2223
-
-
-def test_cowrie_ports_must_differ() -> None:
-    with pytest.raises(ValidationError) as exc:
-        CowrieConfig(ssh_listen_port=2222, telnet_listen_port=2222)
-    assert "must be different" in str(exc.value)
-
-
-@pytest.mark.parametrize(
-    "hostname",
-    ["", "-foo", "foo-", "_bad", "a" * 64, "has spaces"],
-)
-def test_cowrie_invalid_hostnames(hostname: str) -> None:
-    with pytest.raises(ValidationError):
-        CowrieConfig(hostname=hostname)
-
-
-@pytest.mark.parametrize("hostname", ["srv-01", "host", "h", "a-b-c-d", "abc123"])
-def test_cowrie_valid_hostnames(hostname: str) -> None:
-    cfg = CowrieConfig(hostname=hostname)
-    assert cfg.hostname == hostname
-
+# SplunkConfig + CowrieConfig were removed alongside the Cowrie
+# integration / forwarder package in 2026-05.
 
 # ---------------------------------------------------------------------------
 # DashboardConfig

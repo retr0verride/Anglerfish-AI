@@ -9,8 +9,8 @@
 Anglerfish AI is a self-contained honeypot operating system. Boot the ISO,
 complete the first-boot wizard, and an AI-driven SSH honeypot is running
 in minutes. Attackers see a convincing fake Debian shell driven by a local
-LLM. You see structured intelligence in Splunk, a live dashboard, a
-MITRE ATT&CK-tagged threat timeline, and an encrypted credential database.
+LLM. You see a live dashboard, a MITRE ATT&CK-tagged threat timeline, and
+an encrypted credential database.
 
 ---
 
@@ -46,8 +46,7 @@ before any service is enabled.
                   │              ANGLERFISH AI VM                        │
                   │                                                      │
    bait NIC ──────┤  Lure (native asyncssh on :2222 by default)          │
-   (hostile)      │      │  (Stage 2 - replaces Cowrie; both can run     │
-                  │      │   side-by-side during the deprecation window) │
+   (hostile)      │      │                                               │
                   │      │ unknown commands  (HTTP, loopback :8421)      │
                   │      v                                               │
                   │  Bridge HTTP server                                  │
@@ -58,13 +57,13 @@ before any service is enabled.
                   │      v                                               │
                   │  ┌─────────────┐                                     │
                   │  │ Ollama LLM  │ <──── loopback or trusted IP ───── service NIC
-                  │  └─────────────┘       (deepseek-coder default)      │
+                  │  └─────────────┘       (qwen3:14b default)           │
                   │      │                                               │
                   │      v                                               │
                   │  Threat engine ── MITRE ATT&CK tagger ── webhook     │
                   │      │                                               │
                   │      v                                               │
-                  │  Forwarder ──► Splunk HEC  (JSONL fallback on disk)  │
+                  │  Session store (SQLite at /var/lib/anglerfish)       │
                   │      │                                               │
                   │      v                                               │
                   │  Dashboard (FastAPI + WebSockets) ─── operator UI ── service NIC
@@ -79,17 +78,15 @@ before any service is enabled.
 The honeypot VM has two network interfaces:
 
 * **Bait**: exposed to hostile traffic. Runs the lure SSH listener
-  (Stage 2, native asyncssh) on the configured port. The Cowrie
-  ports stay accepted through the deprecation window. Egress is
-  dropped at nftables level except for DNS.
+  (native asyncssh) on the configured port. Egress is dropped at
+  nftables level except for DNS.
 * **Service**: private, firewalled. Reaches Ollama (loopback or a
-  single trusted IP), Splunk HEC, and the operator dashboard. Nothing
-  else.
+  single trusted IP) and the operator dashboard. Nothing else.
 
 A compromised Anglerfish must not be able to pivot to other systems.
 nftables rules generated at first boot enforce that egress on the
-service interface is restricted to the configured Ollama, Splunk, and
-dashboard endpoints only. See [`cowrie/nftables/anglerfish.nft`](cowrie/nftables/anglerfish.nft).
+service interface is restricted to the configured Ollama and dashboard
+endpoints only. See [`nftables/anglerfish.nft`](nftables/anglerfish.nft).
 
 ---
 
@@ -99,18 +96,16 @@ dashboard endpoints only. See [`cowrie/nftables/anglerfish.nft`](cowrie/nftables
 | --------------- | ------------- | ------------------------------------------------------------------ |
 | `config/`       | **shipped**   | Pydantic configuration models + settings loader                    |
 | `bridge/`       | **shipped**   | Sanitise / rate-limit / Ollama client / fallback / orchestrator / HTTP server |
-| `forwarder/`    | **shipped**   | Splunk HEC + atomic JSONL fallback with rotation                   |
 | `threat/`       | **shipped**   | MITRE ATT&CK technique tagging + scorer + webhook alerter          |
 | `fingerprint/`  | **shipped**   | SSH banner parser + JA3/HASSH hash helpers + Tor exit list         |
 | `geo/`          | **shipped**   | MaxMind GeoLite2 wrapper (async via `to_thread`)                   |
 | `credentials/`  | **shipped**   | SQLite + AES-GCM encrypted credential intelligence DB              |
+| `sessions/`     | **shipped**   | SQLite-backed persistent session store                             |
 | `dashboard/`    | **shipped**   | FastAPI + WebSocket UI with deep-sea bioluminescent theme          |
 | `wizard/`       | **shipped**   | First-boot Typer wizard, generates secrets, writes `.env`          |
 | `cli/`          | **shipped**   | `anglerfish` and `anglerfish-wizard` entry points + ASCII banner   |
 | `models/`       | **shipped**   | Shared session / response / threat / fingerprint / geo / credential types |
-| `lure/`         | **shipped**   | Native asyncssh SSH honeypot (Stage 2 replacement for Cowrie)      |
-| `integration/`  | **deprecated** | Cowrie output-plugin shim (removed after the lure deprecation window) |
-| `cowrie/`       | **deprecated** | Cowrie config template + output plugin (lure listener is the new default) |
+| `lure/`         | **shipped**   | Native asyncssh SSH honeypot                                       |
 | `iso/`          | **shipped**   | live-build recipe, hooks, build script                             |
 | `systemd/`      | **shipped**   | Hardened unit files for every long-running service                 |
 
@@ -259,8 +254,8 @@ This is a structural property. There is no override flag.
   master, so unique-counts and equality lookups never touch the
   plaintext.
 * **Service network is one-way egress.** nftables rules allow
-  connections only to the configured Ollama, Splunk HEC, and dashboard
-  endpoints. Bait-interface egress is dropped entirely (except DNS).
+  connections only to the configured Ollama and dashboard endpoints.
+  Bait-interface egress is dropped entirely (except DNS).
 * **systemd hardening.** Every long-running unit uses
   `ProtectSystem=strict`, `NoNewPrivileges`, an explicit
   `SystemCallFilter`, a minimised `CapabilityBoundingSet`, and
@@ -325,20 +320,19 @@ wizard on tty1 before any networked service comes up.
 Anglerfish-AI/
 ├── src/anglerfish/
 │   ├── bridge/           # Ollama AI middleware + rate limiting + HTTP server
-│   ├── forwarder/        # Splunk HEC forwarding + JSONL fallback
 │   ├── dashboard/        # FastAPI + WebSocket UI + templates + static
 │   ├── threat/           # Threat scoring + MITRE ATT&CK tagging + alerter
 │   ├── fingerprint/      # SSH/JA3/HASSH + Tor exit list
 │   ├── geo/              # MaxMind GeoLite2 wrapper
 │   ├── credentials/      # AES-GCM encrypted credential intelligence DB
+│   ├── sessions/         # SQLite-backed persistent session store
 │   ├── config/           # Pydantic config models
 │   ├── models/           # Shared runtime data models
 │   ├── wizard/           # First-boot configuration wizard
-│   ├── lure/             # Native asyncssh SSH lure (Stage 2)
-│   ├── integration/      # Cowrie output-plugin shim (deprecated)
+│   ├── lure/             # Native asyncssh SSH lure
 │   └── cli/              # Entry points + ASCII banner
 ├── tests/                # pytest test suite (≥90% coverage gate)
-├── cowrie/               # Cowrie cfg template + output plugin + nftables
+├── nftables/             # nftables ruleset template
 ├── iso/                  # live-build recipe + hooks + build script
 ├── systemd/              # Hardened systemd unit files
 ├── assets/               # SVG icon, ASCII art

@@ -7,7 +7,7 @@ uses the values as defaults in the interactive prompts.
 The file deliberately excludes secrets. Run-to-run, the wizard always
 regenerates the bridge shared secret, the dashboard session secret,
 and the credentials encryption key. Operators using ``--reconfigure``
-should restart the bridge and Cowrie afterwards.
+should restart the bridge, the lure, and the dashboard afterwards.
 """
 
 from __future__ import annotations

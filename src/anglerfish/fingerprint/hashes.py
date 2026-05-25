@@ -8,13 +8,13 @@ Two algorithms are supported:
   surface (HTTPS endpoint, etc.).
 * **HASSH** (SSH) — MD5 of the canonical
   ``KexAlgorithms;Encryption;MACs;Compression`` string sent by the
-  client during the SSH key exchange. The Cowrie integration extracts
-  these four lists from the SSH KEXINIT packet and hands them here.
+  client during the SSH key exchange. The lure extracts these four
+  lists from asyncssh's post-kex extras and hands them here.
 
 Both functions are pure and synchronous — they perform string
 formatting plus a hashlib hash. They are kept in their own module so
-that the network-extraction code (in the Cowrie integration) has a
-narrow seam to call.
+that the network-extraction code (in the lure) has a narrow seam
+to call.
 """
 
 from __future__ import annotations

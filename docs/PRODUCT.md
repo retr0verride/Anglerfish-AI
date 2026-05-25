@@ -8,8 +8,8 @@ this file in six months and asking "wait, what was this for again?"
 
 ## Thesis
 
-> Anglerfish is an **adaptive-deception** SSH honeypot. Where Cowrie,
-> T-Pot, and DShield observe and log, Anglerfish engages, wastes time,
+> Anglerfish is an **adaptive-deception** SSH honeypot. Where other
+> honeypots observe and log, Anglerfish engages, wastes time,
 > poisons attacker loot, and produces machine-readable intelligence
 > about who attackers are, what they want, and what tooling they ship -
 > all driven by a local LLM with no cloud dependencies.
@@ -29,8 +29,8 @@ community" T-Pot wins.
 
 Anglerfish is a different bet. Three things T-Pot can't do:
 
-1. **Dynamic LLM-driven responses to any command**. Cowrie's fake
-   filesystem returns canned errors for anything outside its pickle.
+1. **Dynamic LLM-driven responses to any command**. Static-fakefs
+   honeypots return canned errors for anything outside their pickle.
    Anglerfish hallucinates a plausible answer for anything.
 2. **Adaptive engagement**: same physical honeypot, different
    apparent persona per session. Cred-stuffer sees a small forgotten
@@ -143,15 +143,15 @@ was wrong, back to step 1.
 
 ## The seven capabilities
 
-These are what makes Anglerfish ≠ Cowrie+Splunk. Order is the
-implementation order from [`ROADMAP.md`](ROADMAP.md), which is
-deliberately *not* "highest user-value first"; it's "lowest
-foundational risk first."
+These are what makes Anglerfish different from the static-fakefs
+SSH honeypot pattern. Order is the implementation order from
+[`ROADMAP.md`](ROADMAP.md), which is deliberately *not* "highest
+user-value first"; it's "lowest foundational risk first."
 
 | # | Capability | What it does | Why it's unique |
 |---|------------|--------------|-----------------|
 | 1 | **Active time-wasting** | Stretch human-attacker sessions with verbose error messages, multi-turn clarifications, fake-lag responses | No other honeypot deliberately engages to consume attacker time |
-| 2 | **Adaptive persona** | Same honeypot, different apparent identity per attacker, chosen from observed TTPs | Cowrie's filesystem is static; Anglerfish's is dynamic |
+| 2 | **Adaptive persona** | Same honeypot, different apparent identity per attacker, chosen from observed TTPs | Static-fakefs honeypots ship one fixed filesystem; Anglerfish's is dynamic |
 | 3 | **Engaged persistence** | Pretend installed backdoors actually work; capture the attacker's stage-2 TTPs that would otherwise never run | Other honeypots log entry; Anglerfish captures the whole kill chain |
 | 4 | **Decoy data poisoning** | Generate honeytokens (creds, AWS keys, SSH keys) the attacker steals; track them globally | Turns one honeypot into a tracking-beacon factory |
 | 5 | **LLM intent extraction** | End-of-session natural-language summary: who, what, why, confidence | Higher abstraction than rule-based MITRE - what an operator actually wants |
@@ -174,9 +174,6 @@ Things I will not build, so future-me doesn't get distracted:
   Resilience > quality. See [Design principle 2](#2-local-llm-only-for-resilience).
 * **Multi-tenant operation.** One operator, one deployment, one
   attacker population. No "Anglerfish-as-a-service."
-* **Replacing Cowrie.** Cowrie does the SSH protocol layer correctly
-  and is widely tested. Anglerfish is a *response layer* in front of
-  it, not a re-implementation.
 * **Dashboards-as-a-service.** No SaaS dashboard. The whole stack runs
   on the honeypot host or one VM next to it.
 

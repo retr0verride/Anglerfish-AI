@@ -13,8 +13,7 @@ UNIT_SRC=/tmp/anglerfish-ai/systemd
 
 UNITS="anglerfish-bridge.service anglerfish-dashboard.service \
        anglerfish-firstboot.service anglerfish-firewall.service \
-       anglerfish-geo-update.service anglerfish-geo-update.timer \
-       cowrie.service"
+       anglerfish-geo-update.service anglerfish-geo-update.timer"
 
 for unit in ${UNITS}; do
     if [ -f "${UNIT_SRC}/${unit}" ]; then
@@ -31,8 +30,12 @@ systemctl enable anglerfish-firewall.service
 systemctl enable anglerfish-firstboot.service
 systemctl enable anglerfish-bridge.service
 systemctl enable anglerfish-dashboard.service
-systemctl enable cowrie.service
 systemctl enable anglerfish-geo-update.timer
+
+# The native SSH lure has no first-class systemd unit yet (TODO-3 in
+# docs/TODO.md). Cowrie was removed in 2026-05; until the lure unit
+# ships, operators run `anglerfish lure serve` themselves on bait-NIC
+# deployments.
 
 # First-boot wizard owns tty1 until it completes (it unmasks getty in
 # ExecStartPost). Mask the unit so getty doesn't race the wizard for

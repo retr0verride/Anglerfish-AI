@@ -13,11 +13,11 @@ PR, the PR template references the model.
 
 | In scope | Out of scope |
 |---|---|
-| The Anglerfish AI Python package | Cowrie (upstream) |
-| The first-boot wizard, systemd units, nftables ruleset | Ollama (upstream) |
-| The live-build ISO recipe | Splunk Enterprise / Cloud |
-| Operator-facing dashboard (REST + WebSocket) | The Linux kernel + Debian base |
-| Bridge HTTP API (loopback) | MaxMind databases |
+| The Anglerfish AI Python package | Ollama (upstream) |
+| The first-boot wizard, systemd units, nftables ruleset | asyncssh (upstream) |
+| The live-build ISO recipe | The Linux kernel + Debian base |
+| Operator-facing dashboard (REST + WebSocket) | MaxMind databases |
+| Bridge HTTP API (loopback) | |
 
 ---
 
@@ -27,13 +27,13 @@ PR, the PR template references the model.
                                   ┌─────────────────┐
                        Internet ──│  bait NIC       │
                                   └──────┬──────────┘
-                                         │ DROP (nftables, only :22)
+                                         │ DROP (nftables, only :2222)
                                          │ except DNS egress
         ┌────────────────────────────────┼──────────────────────────┐
         │  ANGLERFISH VM                 │                          │
         │                                │                          │
         │  ┌───────────────────┐    ┌────▼────┐                     │
-        │  │  Cowrie (Twisted) │────│ bridge  │  loopback only      │
+        │  │  Lure (asyncssh)  │────│ bridge  │  loopback only      │
         │  │  attacker shell   │    │ HTTP API│  + shared-secret    │
         │  └───────────────────┘    └────┬────┘    Bearer token     │
         │                                │                          │
@@ -45,10 +45,10 @@ PR, the PR template references the model.
         │  └─────┬─────────────────┬─────┘                          │
         │        │                 │                                │
         │        ▼                 ▼                                │
-        │   ┌────────┐         ┌──────────┐                         │
-        │   │ Ollama │         │ Forwarder│ ──► Splunk HEC          │
-        │   │ (loopb.│         │ JSONL fb │                         │
-        │   │  or IP)│         └──────────┘                         │
+        │   ┌────────┐         ┌──────────────┐                     │
+        │   │ Ollama │         │ SessionStore │                     │
+        │   │ (loopb.│         │  (SQLite)    │                     │
+        │   │  or IP)│         └──────────────┘                     │
         │   └────────┘                                              │
         │                                                           │
         │   ┌─────────────────────────────┐                         │
@@ -60,23 +60,22 @@ PR, the PR template references the model.
         │   │  /api/login, /ws/events     │  nftables-restricted    │
         │   └─────────────────────────────┘                         │
         └───────────────────────────────────────────────────────────┘
-                                         │ ONLY :11434, :8088, dashboard port
+                                         │ ONLY :11434, dashboard port
                                          │ (nftables egress allow-list)
                                   ┌──────▼──────────┐
-                       Operator ──│  service NIC    │── Splunk, Ollama, etc.
+                       Operator ──│  service NIC    │── Ollama, etc.
                                   └─────────────────┘
 ```
 
 **Hostile zones** (attacker controls):
 * Inbound traffic on the bait NIC.
-* Anything inside Cowrie's faked filesystem / shell output.
+* Anything inside the lure's faked filesystem / shell output.
 * Anything the LLM produces (we don't trust the model).
 
 **Trusted zones** (operator controls):
 * The service NIC.
 * The operator's browser session (after authenticated login).
 * The Ollama instance (loopback) or the operator-configured trusted IP.
-* The Splunk HEC endpoint the operator configured.
 
 ---
 
@@ -86,7 +85,7 @@ PR, the PR template references the model.
 
 | Threat | Surface | Mitigation |
 |---|---|---|
-| Attacker impersonates a legitimate Cowrie shell command to the bridge | `POST /api/v1/session/{id}/command` | (1) Bridge binds 127.0.0.1 only; (2) `Authorization: Bearer <shared_secret>` middleware with constant-time compare; (3) `X-Anglerfish-Protocol: 1` header check (426 on mismatch). |
+| Attacker impersonates a legitimate lure shell command to the bridge | `POST /api/v1/session/{id}/command` | (1) Bridge binds 127.0.0.1 only; (2) `Authorization: Bearer <shared_secret>` middleware with constant-time compare; (3) `X-Anglerfish-Protocol: 2` header check (426 on mismatch). |
 | Attacker impersonates the operator over the dashboard | Dashboard REST + WebSocket | bcrypt-hashed password gate on `/api/login`; session cookie is `HttpOnly`, `SameSite=Strict`, signed with `session_secret` via `itsdangerous`. WebSocket upgrade re-checks the same cookie. |
 | Cross-origin WebSocket subscription from a malicious page in the operator's browser | `/ws/events` | `Origin` header allow-list; missing or non-matching origin → close 4403. |
 | Attacker tampers with the LLM endpoint (DNS rebinding) | Ollama config | Pydantic `OllamaConfig._validate_endpoint_host` rejects hostnames other than `localhost` even when `trusted_remote_host` is set. IP literal required. |
@@ -95,7 +94,6 @@ PR, the PR template references the model.
 
 | Threat | Surface | Mitigation |
 |---|---|---|
-| Attacker tampers with captured commands en route to Splunk | Forwarder HEC submission | TLS to Splunk by default (`verify_tls=True`); HEC token in `Authorization` header; integrity is Splunk's responsibility on the wire. |
 | Attacker modifies the credentials database file | `/var/lib/anglerfish/credentials.db` | File mode 0600 (POSIX). AES-GCM authentication tags detect modification on decrypt - tampered rows yield `ValueError`s the store silently drops on read. |
 | Attacker rewrites the env file to redirect Ollama to attacker-controlled host | `/etc/anglerfish/anglerfish.env` | Mode 0600; only `root` can write. Even with write access, the loopback / trusted-IP validator at load time blocks the swap. |
 | Attacker injects keys into the operator's authorized_keys via wizard input | `WizardAnswers.operator_ssh_pubkey` | `parse_ssh_pubkey` rejects any input containing `\n` or `\r`; whitelisted key types; bounded base64 length. |
@@ -119,15 +117,14 @@ PR, the PR template references the model.
 | LLM leaks honeypot identity to the attacker | Bridge response | (1) Sanitised system prompt instructs the LLM not to acknowledge being a model / honeypot; (2) the bridge silently caps the response and never reveals when truncation happened; (3) reserved-marker regex in tests pins a regression target; (4) prompt-injection corpus in `tests/bridge/test_prompt_injection.py` exercises structural defences. We do not claim the LLM cannot be tricked, only that the bridge structurally separates system + user content. |
 | Dashboard discloses session data to unauthenticated peers | `/api/*` | All endpoints except `/`, `/api/health`, `/api/login`, `/api/logout` require `Depends(require_auth)`. WebSocket upgrade re-checks. Open-mode is supported with an explicit warning - meant only for first-boot before the wizard runs. |
 | Bridge endpoint discloses bridge's session UUIDs to unauthorised callers | `GET /api/v1/sessions` | Bearer-token middleware; loopback bind. |
-| Forwarder error logs the operator's HEC token | Forwarder error path | `SplunkConfig.hec_token` is `SecretStr`; never `repr()`d into log lines. Code passes `.get_secret_value()` only when constructing the outbound header. |
 
 ### Denial of service
 
 | Threat | Surface | Mitigation |
 |---|---|---|
-| Attacker floods Cowrie with commands to exhaust the LLM | Bridge command path | Two-layer rate limit: per-session token bucket + global concurrency semaphore in `BridgeRateLimiter`. When either trips, the attacker receives a scripted fallback response - the limiter is invisible. |
+| Attacker floods the lure with commands to exhaust the LLM | Bridge command path | Two-layer rate limit: per-session token bucket + global concurrency semaphore in `BridgeRateLimiter`. When either trips, the attacker receives a scripted fallback response - the limiter is invisible. |
 | Attacker pumps long commands to exhaust prompt budget | Bridge sanitiser | `sanitize_command` caps input at `bridge.max_input_chars` (4096 by default). |
-| Attacker pumps long lines to fill disk via captured commands | JSONL fallback / session history | `JsonlSink` size-based rotation. Session history bounded by `bridge.history_window` (20 by default). |
+| Attacker pumps long lines to fill disk via captured commands | SessionStore SQLite | Per-turn `command` and `response` are bounded at the Pydantic model layer. Session history bounded by `bridge.history_window` (20 by default). |
 | Attacker DoSes the dashboard via repeated logins | `/api/login` | bcrypt cost factor itself rate-limits credential checks. (Phase 4 wiring will add a per-IP token bucket as defence-in-depth.) |
 | Attacker exhausts file descriptors via WebSocket connections | `/ws/events` | Per-subscriber bounded queue; slow consumers drop oldest events; max-active-session cap on `DashboardState`. |
 
@@ -135,10 +132,10 @@ PR, the PR template references the model.
 
 | Threat | Surface | Mitigation |
 |---|---|---|
-| Attacker breaks out of the AI shell into real Cowrie commands | Cowrie integration | Cowrie's command registry is the fallback path; the LLM does not get to invoke arbitrary code. Cowrie's existing privilege model applies. |
-| Compromised Cowrie pivots to the service network | Network egress | nftables rules drop all bait-NIC egress except DNS. Service NIC egress is allow-listed to Ollama, Splunk HEC, and the dashboard port only. |
+| Attacker breaks out of the AI shell into native lure commands | Lure dispatch | `NativeCommands` is an allow-list of a small set of read-only commands (`whoami`, `id`, `pwd`, `ls`, `cd`, `uname`, `hostname`, `echo`, `cat`-of-known-paths, `history`, `exit`); anything else routes through the bridge and never touches the host filesystem. |
+| Compromised lure pivots to the service network | Network egress | nftables rules drop all bait-NIC egress except DNS. Service NIC egress is allow-listed to Ollama and the dashboard port only. |
 | Compromised bridge calls Ollama with arbitrary endpoint | Ollama config | Loopback or one configured IP literal - enforced at Pydantic validation time. |
-| Attacker uses Cowrie shell to write authorized_keys | Cowrie | Cowrie's fake filesystem is in-memory; operators don't ship persistence on the bait NIC. (Threat-engine `T1098` flags it for review regardless.) |
+| Attacker uses the lure shell to write authorized_keys | Lure fakefs | The lure's filesystem is the static `fakefs` model in `src/anglerfish/lure/fakefs.py`; writes are not persisted to host disk. (Threat-engine `T1098` flags it for review regardless.) |
 | Wizard runs as root and writes attacker-controlled paths | Wizard | All output paths validated; interface names rejected on quote injection in `render_nftables`. The wizard does not accept arbitrary path overrides on first boot (only on `--reconfigure` via explicit CLI flags). |
 | Operator account elevates to root via sudo without audit | Operator SSH | The wizard creates `anglerfish-ops` as a non-root account. `sudo` membership is the operator's choice; we recommend `sudo` with logging. |
 
@@ -216,27 +213,25 @@ under "Threat-model delta"; the table here summarises.
 | **Subsystem exposure** - attacker requests SFTP / port-forwarding / TUN / TAP to use the lure as a relay | All non-shell subsystems refused at the asyncssh layer with `lure.subsystem_refused` audit events. SFTP factory not registered, `connection_requested` / `server_requested` / `unix_*_requested` / `tun_requested` / `tap_requested` all return False. | Channel-type expansion in a future asyncssh release; pin via `pyproject.toml` upper bound and review on bump. |
 | **Public-key auth fingerprint capture without abuse** - attacker spammed keys to enumerate accepted ones | `public_key_auth_supported` returns True so clients offer keys; `validate_public_key` logs the fingerprint via `lure.login_attempt` with `auth_method=publickey` and returns False unconditionally. Password auth (accept-any with logging) is the v1 capture surface. | None - intel signal, not a service. |
 
-### Bridge wire-protocol bump
+### Bridge wire-protocol
 
-The bridge accepts both `X-Anglerfish-Protocol: 1` (Cowrie shim)
-and `2` (lure with `CommandRequest.fs_context`) through the
-deprecation window. A later commit drops `"1"` from
-`SUPPORTED_PROTOCOLS` once Cowrie is deleted.
+The bridge accepts `X-Anglerfish-Protocol: 2` (lure with
+`CommandRequest.fs_context`). The historical `"1"` value from the
+removed Cowrie shim is no longer in `SUPPORTED_PROTOCOLS`.
 
 ### Trust-boundary changes
 
-| Boundary             | Before (Cowrie)     | After (lure)         |
-| -------------------- | ------------------- | -------------------- |
-| Bait NIC ↔ honeypot  | Cowrie / Twisted    | Anglerfish lure (asyncssh) |
-| Honeypot ↔ bridge    | sync HTTP loopback  | async HTTP loopback (unchanged shape, protocol v2) |
-| Bridge ↔ Ollama      | unchanged           | unchanged            |
-| Lure ↔ CredentialStore | n/a               | NEW: in-process typed call |
-| Lure ↔ Fingerprinter | n/a                 | NEW: in-process typed call |
+| Boundary               | Posture                                              |
+| ---------------------- | ---------------------------------------------------- |
+| Bait NIC ↔ honeypot    | Anglerfish lure (asyncssh)                           |
+| Honeypot ↔ bridge      | async HTTP loopback, protocol v2                     |
+| Bridge ↔ Ollama        | loopback or single trusted IP                        |
+| Lure ↔ CredentialStore | in-process typed call                                |
+| Lure ↔ Fingerprinter   | in-process typed call                                |
 
-The net change narrows the bait-side attack surface (asyncssh has
-a smaller code surface than Cowrie + Twisted) and adds two new
-in-process integration points. Both new integrations go through
-types we already test and audit.
+The lure has a smaller code surface than the prior Cowrie + Twisted
+combination. Both in-process integration points (CredentialStore,
+Fingerprinter) go through types covered by the test suite.
 
 ---
 

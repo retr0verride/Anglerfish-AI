@@ -25,9 +25,12 @@ All commands assume:
 | `anglerfish-firstboot.service`    | Runs the wizard on first boot (and never again).          |
 | `anglerfish-bridge.service`       | The LLM bridge HTTP API + orchestrator.                   |
 | `anglerfish-dashboard.service`    | FastAPI dashboard + WebSocket stream.                     |
-| `cowrie.service`                  | Cowrie SSH/Telnet honeypot.                               |
 | `anglerfish-geo-update.service`   | One-shot MaxMind GeoLite2 fetch.                          |
 | `anglerfish-geo-update.timer`     | Weekly trigger for the geo-update service.                |
+
+The native SSH lure runs as `anglerfish lure serve`, invoked manually
+or under a hand-rolled systemd unit. A first-class
+`anglerfish-lure.service` is tracked as TODO-3 in `docs/TODO.md`.
 
 `systemctl status <unit>` and `journalctl -u <unit> -f` are your
 two main observation tools.
@@ -79,21 +82,21 @@ dashboard; nothing exposes the AES key.
 
 ### Replay a stored session
 
-Sessions are captured as JSONL records in
-`/var/lib/anglerfish/sessions.jsonl` (and forwarded to Splunk if
-enabled). To pull one record by session UUID:
+Sessions live in the SQLite store at `/var/lib/anglerfish/sessions.db`.
+To pull one record by session UUID:
 
 ```bash
-jq -c 'select(.session_id == "9e9f4b2a-...")' \
-    /var/lib/anglerfish/sessions.jsonl
+sqlite3 /var/lib/anglerfish/sessions.db \
+    "SELECT * FROM sessions WHERE session_id = '9e9f4b2a-...';"
 ```
 
 To replay the LLM-driven exchanges in order:
 
 ```bash
-jq -c 'select(.session_id == "9e9f4b2a-..." and .event == "command") |
-       {ts:.timestamp, cmd:.command, reply:.response}' \
-    /var/lib/anglerfish/sessions.jsonl | jq -s 'sort_by(.ts)'
+sqlite3 /var/lib/anglerfish/sessions.db \
+    "SELECT timestamp, command, response FROM turns
+     WHERE session_id = '9e9f4b2a-...'
+     ORDER BY sequence_n;"
 ```
 
 ### Inspect the audit log
@@ -242,22 +245,23 @@ never rotates it. Use `logrotate`:
 write, but a regular rename mid-rotation would leave a window where
 records vanish.
 
-### Session capture rotation
+### Session store growth
 
-`anglerfish.forwarder.jsonl.JsonlSink` does size-based rotation on
-its own. Default cap is 100 MB; configure via
-`ANGLERFISH_SPLUNK__MAX_FALLBACK_BYTES` if you need to push it.
+The SessionStore SQLite file at `/var/lib/anglerfish/sessions.db`
+grows unboundedly by design (operators usually want the full
+attacker corpus). A `sessions purge --older-than 90d` command will
+land if disk pressure forces the issue; until then, snapshot the
+file and `VACUUM` periodically.
 
 ### Free disk space in a crunch
 
 Stop captures (so attackers see a stuck shell, not a crash):
 
 ```bash
-sudo systemctl stop cowrie.service anglerfish-bridge.service
-sudo zstd -19 --rm /var/lib/anglerfish/sessions.jsonl.*
-# (truncate the live JSONL if needed - last-resort)
-sudo truncate -s 0 /var/lib/anglerfish/sessions.jsonl
-sudo systemctl start anglerfish-bridge.service cowrie.service
+sudo systemctl stop anglerfish-bridge.service
+# Stop the lure listener too (if it's running under a hand-rolled unit).
+sudo zstd -19 --rm /var/lib/anglerfish/sessions.db
+sudo systemctl start anglerfish-bridge.service
 ```
 
 The credentials DB is small (a few MB per ten-thousand attempts);
@@ -291,18 +295,6 @@ sudo nft list ruleset | grep ollama
 #    required (the bridge retries) but resets the per-session
 #    history window and fallback counters.
 sudo systemctl restart anglerfish-bridge.service
-```
-
-### Splunk HEC unreachable
-
-The forwarder writes to its JSONL fallback automatically and emits
-`forwarder.fallback_engaged` to the audit log. When HEC comes back:
-
-```bash
-sudo systemctl restart anglerfish-bridge.service
-# The forwarder replays new events to HEC. The historical fallback
-# JSONL stays on disk; ship it manually if your retention policy
-# demands.
 ```
 
 ### Full disk
@@ -342,16 +334,6 @@ kept it, right?), then rotate forward.
 
 ## Maintenance
 
-### Update Cowrie's fake filesystem
-
-Cowrie ships fake filesystems under `/opt/cowrie/share/cowrie/`.
-The Anglerfish output plugin ignores filesystem changes, those
-are Cowrie's domain. Edit, then:
-
-```bash
-sudo systemctl restart cowrie.service
-```
-
 ### Upgrade Anglerfish AI itself
 
 Built into the venv; replace it cleanly:
@@ -366,12 +348,12 @@ Schema and config defaults are intentionally backward-compatible
 within a minor version. Always read the release notes first; a major
 bump can require a wizard `--reconfigure` to pick up new fields.
 
-### Import old forwarder JSONL into the session store
+### Import historical JSONL into the session store
 
 The Stage 4 session store backs `/var/lib/anglerfish/sessions.db`.
-Operators upgrading from a release that wrote sessions as JSONL into
-`/var/lib/anglerfish/sessions.jsonl` (the Splunk forwarder fallback)
-can replay that file into the store one-time:
+Operators upgrading from a pre-Stage-4 release that wrote sessions
+as JSONL into `/var/lib/anglerfish/sessions.jsonl` (the historical
+fallback path) can replay that file into the store one-time:
 
 ```bash
 sudo systemctl stop anglerfish-bridge.service anglerfish-dashboard.service
@@ -412,12 +394,11 @@ skipped; a partial corpus is better than refusing to import.
 sudo systemctl stop \
     anglerfish-bridge.service \
     anglerfish-dashboard.service \
-    cowrie.service \
     anglerfish-firewall.service
 sudo shred -u /etc/anglerfish/anglerfish.env
 sudo shred -u /var/lib/anglerfish/credentials.db*
+sudo shred -u /var/lib/anglerfish/sessions.db*
 ```
 
-Then `qm destroy <vmid>` on the Proxmox host. Captured session
-JSONL and audit logs are not shredded by this procedure, handle
-them per your retention policy.
+Then `qm destroy <vmid>` on the Proxmox host. Audit logs are not
+shredded by this procedure, handle them per your retention policy.

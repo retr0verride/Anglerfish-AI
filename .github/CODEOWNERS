@@ -6,7 +6,7 @@
 /src/anglerfish/credentials/   @retr0verride
 /src/anglerfish/bridge/        @retr0verride
 /src/anglerfish/config/        @retr0verride
-/cowrie/nftables/              @retr0verride
+/nftables/                     @retr0verride
 /systemd/                      @retr0verride
 /iso/                          @retr0verride
 /.github/workflows/            @retr0verride

@@ -7,8 +7,8 @@ command/response turns, and the session's start / last-activity
 timestamps.
 
 Instances are **not** thread-safe; the bridge service uses them from a
-single asyncio task per session, which is sufficient given how Cowrie
-serialises commands for a single connection.
+single asyncio task per session, which is sufficient given the lure
+serialises commands per attacker SSH channel.
 """
 
 from __future__ import annotations

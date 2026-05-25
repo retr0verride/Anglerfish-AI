@@ -1,5 +1,5 @@
 [Unit]
-Description=Anglerfish AI bridge — LLM middleware for Cowrie
+Description=Anglerfish AI bridge — LLM middleware for the native SSH lure
 Documentation=https://github.com/retr0verride/Anglerfish-AI
 After=network-online.target ollama.service
 Wants=network-online.target
@@ -14,7 +14,7 @@ Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=10s
 
-# Hardening — the bridge is reachable from Cowrie (also on bait host)
+# Hardening — the bridge is reachable from the lure on the bait host
 # and processes attacker-controlled content; lock it down accordingly.
 NoNewPrivileges=yes
 PrivateTmp=yes

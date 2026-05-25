@@ -1,5 +1,13 @@
 # Stage 2 - Native asyncssh lure subsystem (replaces Cowrie)
 
+> **Cowrie removal banner (2026-05).** Cowrie, its integration shim,
+> the forwarder package, the `CowrieConfig` / `SplunkConfig` models,
+> and the `cowrie.service` systemd unit were deleted in the 2026-05
+> Cowrie removal commit. This design doc is preserved as historical
+> context for how the lure replaced Cowrie; references below to
+> Cowrie source files, the deprecation window, or protocol-version
+> `1` describe the pre-removal world.
+>
 > **Roadmap note.** [`ROADMAP.md`](../ROADMAP.md) currently lists Stage 2
 > as "Persistent rich session store." That stage is *not* cancelled,
 > only renumbered. Replacing Cowrie is foundational infrastructure

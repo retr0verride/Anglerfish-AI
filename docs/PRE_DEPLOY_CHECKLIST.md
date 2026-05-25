@@ -43,7 +43,7 @@ grep -E '^ANGLERFISH_(DASHBOARD__SESSION_SECRET|CREDENTIALS__ENCRYPTION_KEY|BRID
 
 - `[ ]` `ANGLERFISH_DASHBOARD__SESSION_SECRET` - ≥32 chars, base64.
 - `[ ]` `ANGLERFISH_CREDENTIALS__ENCRYPTION_KEY` - base64, decodes to 32 bytes.
-- `[ ]` `ANGLERFISH_BRIDGE__SHARED_SECRET` - Cowrie sends this in
+- `[ ]` `ANGLERFISH_BRIDGE__SHARED_SECRET` - the lure sends this in
   `Authorization: Bearer <secret>` on every bridge call.
 - `[ ]` `ANGLERFISH_DASHBOARD__ADMIN_PASSWORD_HASH` - bcrypt hash. If
   this is empty the dashboard runs in **open mode**. That's only safe
@@ -99,14 +99,11 @@ timeout 3 nc -zv 8.8.8.8 443                ; echo "exit=$?"  # want non-zero
 
 # These MUST work (the service-NIC allowlist):
 timeout 3 curl -sS http://127.0.0.1:11434/  ; echo "exit=$?"  # Ollama, want 0
-# If Splunk HEC is enabled:
-timeout 3 curl -k https://<splunk-host>:8088/services/collector/health
 ```
 
 - `[ ]` All outbound to the open internet is **dropped** from inside
   the honeypot.
 - `[ ]` Ollama is reachable (loopback or trusted IP).
-- `[ ]` Splunk HEC is reachable (if enabled).
 
 ### 3.4 No DNS leaks from the bait side
 
@@ -137,9 +134,6 @@ sudo -u anglerfish ANGLERFISH_LOG_LEVEL=INFO \
 - `[ ]` `threat.alert_webhook_url` (if set) is `https://` and points to
   a public hostname or public IP, **not** RFC1918 / loopback /
   link-local. The validator will refuse to start otherwise.
-- `[ ]` `splunk.hec_url` (if enabled) is `https://` and the hostname
-  matches the cert. If you're using a private CA, mount the CA into
-  `/usr/local/share/ca-certificates/` and run `update-ca-certificates`.
 
 ---
 
@@ -180,7 +174,6 @@ systemctl --no-pager status \
     anglerfish-bridge.service \
     anglerfish-dashboard.service \
     anglerfish-firstboot.service \
-    cowrie.service \
     ollama.service 2>&1 | grep -E 'Loaded|Active' | head -40
 ```
 
@@ -191,7 +184,9 @@ systemctl --no-pager status \
   ```
 - `[ ]` `anglerfish-bridge.service` - `active (running)`.
 - `[ ]` `anglerfish-dashboard.service` - `active (running)`.
-- `[ ]` `cowrie.service` - `active (running)`.
+- `[ ]` Lure listener (`anglerfish lure serve`) is running. There is
+  no first-class systemd unit yet (TODO-3); operators run it
+  manually or via a hand-rolled unit.
 - `[ ]` `ollama.service` - `active (running)` (or running on a trusted
   remote host you can reach).
 - `[ ]` No service in `failed` state:
@@ -238,8 +233,6 @@ anglerfish lure validate-config
 
 End-to-end test: hit the lure from a throwaway IP, verify the LLM
 responded, verify the audit + credentials + threat pipelines fired.
-During the deprecation window the same test against Cowrie's port
-should also succeed.
 
 ```bash
 # From outside the VM, on a throwaway client:
@@ -271,25 +264,20 @@ curl -fsS -u "admin:$ADMIN_PASS" http://127.0.0.1:8420/api/threats \
 
 ---
 
-## 9. Off-host shipping (when enabled)
+## 9. Off-host shipping
 
 The honeypot itself can be compromised, your most important records
 have to live somewhere else.
 
 ```bash
-# Splunk HEC live ingestion check.
-journalctl -u anglerfish-bridge.service --since '5 min ago' \
-    | grep -i 'forwarder\|hec'
-
-# JSONL fallback path (used when HEC is unreachable).
-ls -lh /var/lib/anglerfish/sessions.jsonl
+# SessionStore on disk.
+ls -lh /var/lib/anglerfish/sessions.db
 ```
 
-- `[ ]` Splunk HEC is receiving events (or you've explicitly chosen the
-  JSONL fallback workflow). If neither, you'll lose history on every
-  rollback / VM destroy.
-- `[ ]` If using JSONL fallback, you have a backup job pulling
-  `sessions.jsonl` off the VM regularly.
+- `[ ]` A backup job pulls `/var/lib/anglerfish/sessions.db`,
+  `/var/lib/anglerfish/credentials.db`, and
+  `/var/log/anglerfish/audit.jsonl` off the VM regularly. Without it
+  you lose history on every rollback / VM destroy.
 
 ---
 
@@ -313,7 +301,7 @@ WEBHOOK=$(grep ANGLERFISH_THREAT__ALERT_WEBHOOK_URL /etc/anglerfish/anglerfish.e
 - `[ ]` `pve-backup` / `vzdump` job scheduled for full-VM snapshots
   (Proxmox).
 - `[ ]` `proxmox/backup.sh` wired into cron or a systemd timer for
-  state-only backups (credentials.db, audit.jsonl, sessions.jsonl).
+  state-only backups (credentials.db, sessions.db, audit.jsonl).
 - `[ ]` Verified `proxmox/restore.sh` works against a recent backup
   on a throwaway VM. (Untested backups are not backups.)
 
@@ -341,7 +329,8 @@ Day 1: watch the dashboard for the first few hours. Real attacker traffic
 arrives fast on a fresh public IP.
 
 Week 1: check the credentials DB grows, the threat assessments accumulate,
-the audit log has no unexplained gaps. Confirm Splunk events are landing.
+the audit log has no unexplained gaps. Confirm the SessionStore has new
+rows.
 
 Month 1: rotate the credentials encryption key
 ([`RUNBOOK.md`](RUNBOOK.md) §credentials), run a fresh `vzdump` backup,

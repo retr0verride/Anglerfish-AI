@@ -16,9 +16,7 @@ For day-2 ops see [RUNBOOK.md](RUNBOOK.md).
 ```text
 ┌──────────────────── Anglerfish honeypot VM ────────────────────┐
 │                                                                │
-│   bait NIC ─────► Lure (native asyncssh, Stage 2)              │
-│                       │   (Cowrie shim retained for the        │
-│                       │    deprecation window)                 │
+│   bait NIC ─────► Lure (native asyncssh)                       │
 │                       │  POST /api/v1/command (bearer auth)    │
 │                       ▼                                        │
 │   anglerfish-bridge ─ AIBridgeService ──► OllamaClient ──► LLM │
@@ -34,7 +32,7 @@ For day-2 ops see [RUNBOOK.md](RUNBOOK.md).
 │         │         Threat engine (MITRE ATT&CK + alerter)       │
 │         │             │                                        │
 │         │             └────► CredentialStore (AES-GCM SQLite)  │
-│         │             └────► Forwarder ──► Splunk HEC + JSONL  │
+│         │             └────► SessionStore (SQLite)             │
 │         │             └────► Fingerprinter (banner / JA3 / Tor)│
 │         │             └────► GeoLookup (MaxMind .mmdb)         │
 │         │             └────► DashboardState (in-mem pub/sub)   │
@@ -51,13 +49,11 @@ For day-2 ops see [RUNBOOK.md](RUNBOOK.md).
 Two NICs, two trust levels:
 
 * **Bait NIC** - exposed to attacker traffic. The native asyncssh
-  lure (`anglerfish.lure`) is the primary listener. The legacy
-  Cowrie listener stays accepted in nftables through the deprecation
-  window so operators upgrading in place can run both side-by-side.
-  nftables drops all bait-NIC egress except DNS.
-* **Service NIC** - operator-only. Reaches Ollama, Splunk HEC, the
+  lure (`anglerfish.lure`) is the listener. nftables drops all
+  bait-NIC egress except DNS.
+* **Service NIC** - operator-only. Reaches Ollama and the
   dashboard. nftables egress is restricted to the configured Ollama
-  IP, the Splunk HEC URL, and DNS + NTP.
+  IP, the dashboard port, and DNS + NTP.
 
 The bridge and dashboard both bind only the addresses the wizard
 recorded; nothing in either listens on the bait NIC.
@@ -86,7 +82,6 @@ Key models:
 | `DashboardConfig`       | Host/port, session secret, admin user + bcrypt hash, allowed origins. |
 | `CredentialsConfig`     | DB path + base64 AES key. Validators enforce a 32-byte key.          |
 | `GeoConfig`             | MMDB paths + optional MaxMind licence key.                           |
-| `SplunkConfig`          | HEC URL + token + JSONL fallback path.                               |
 | `ThreatConfig`          | Alert threshold, webhook URL + timeout.                              |
 | `FingerprintConfig`     | Tor-exit-list path + refresh interval.                               |
 
@@ -113,12 +108,9 @@ The LLM middleware. Files:
 Request lifecycle:
 
 1. The lure's process handler intercepts an unknown command (one
-   `NativeCommands` doesn't dispatch in-process). The Cowrie shell
-   adapter takes the same path during the deprecation window.
+   `NativeCommands` doesn't dispatch in-process).
 2. The caller POSTs to the bridge with `X-Anglerfish-Protocol: 2`
-   (lure) or `1` (Cowrie shim) and the bearer token. Connection is
-   loopback only. The bridge accepts both protocol versions through
-   the deprecation window.
+   and the bearer token. Connection is loopback only.
 3. The server middleware verifies the protocol version (426 on
    mismatch) and the bearer (constant-time compare; 401 on
    mismatch).
@@ -176,22 +168,19 @@ defence-in-depth.
 WebSocket close codes: `4401` for missing/invalid auth, `4403` for
 origin allowlist failure.
 
-### 2.4 `forwarder/`
+### 2.4 `sessions/`
 
-Splunk HEC + JSONL fallback.
+SQLite-backed persistent session store. See
+[`docs/design/STAGE_4_session_store.md`](design/STAGE_4_session_store.md).
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`service.py`](../src/anglerfish/forwarder/service.py) | `Forwarder` - selects HEC; falls back to JSONL on failure. |
-| [`hec.py`](../src/anglerfish/forwarder/hec.py)         | `SplunkHECClient` - async POSTs to `/services/collector/event`. |
-| [`jsonl.py`](../src/anglerfish/forwarder/jsonl.py)     | Append-only writer with size-based rotation. |
-| [`event.py`](../src/anglerfish/forwarder/event.py)     | `ForwarderEvent` envelope shared between backends. |
-| [`factories.py`](../src/anglerfish/forwarder/factories.py) | Helpers to wrap session snapshots in events. |
-| [`errors.py`](../src/anglerfish/forwarder/errors.py)   | Typed error hierarchy. |
+| [`store.py`](../src/anglerfish/sessions/store.py)     | `SessionStore` - async SQLite API mirroring `CredentialStore`. |
+| [`schema.py`](../src/anglerfish/sessions/schema.py)   | DDL + migration helpers. |
+| [`migrate.py`](../src/anglerfish/sessions/migrate.py) | One-shot CLI to import historical JSONL into the store. |
 
-The HEC token is `SecretStr`; only `get_secret_value()` is ever
-written into the `Authorization` header. JSONL rotation defaults
-to 100 MB and writes a stamped sibling file.
+WAL mode for concurrent reads while the bridge/lure writes. File
+mode 0600, parent dir 0700.
 
 ### 2.5 `threat/`
 
@@ -255,9 +244,9 @@ First-boot Typer CLI. Files:
 | [`__main__.py`](../src/anglerfish/wizard/__main__.py)   | Typer entrypoint + `--reconfigure`. |
 | [`wizard.py`](../src/anglerfish/wizard/wizard.py)       | `prompt_for_answers` + `run_wizard` (orchestrator). |
 | [`answers.py`](../src/anglerfish/wizard/answers.py)     | `WizardAnswers` + `WizardOutput` Pydantic models. Secrets never live here. |
-| [`render.py`](../src/anglerfish/wizard/render.py)       | Renders env, nftables, cowrie.cfg, systemd-networkd, hostname, authorized_keys. |
+| [`render.py`](../src/anglerfish/wizard/render.py)       | Renders env, nftables, systemd-networkd, hostname, authorized_keys. |
 | [`secrets.py`](../src/anglerfish/wizard/secrets.py)     | `generate_*` helpers for bridge secret, session secret, encryption key. |
-| [`preflight.py`](../src/anglerfish/wizard/preflight.py) | Reachability probes for Ollama / Splunk / webhook. |
+| [`preflight.py`](../src/anglerfish/wizard/preflight.py) | Reachability probes for Ollama and the threat webhook. |
 | [`persistence.py`](../src/anglerfish/wizard/persistence.py) | Atomic JSON save/load of `WizardAnswers` for `--reconfigure`. |
 | [`network.py`](../src/anglerfish/wizard/network.py)     | Interface listing. |
 | [`sshkey.py`](../src/anglerfish/wizard/sshkey.py)       | OpenSSH pubkey validator. |
@@ -286,9 +275,9 @@ per write; the wrapper holds an `RLock` for thread safety. Failures
 are caught and logged, never raised, because audit failures
 should not stop honeypot operation.
 
-### 2.12 `lure/` (Stage 2)
+### 2.12 `lure/`
 
-The native asyncssh SSH honeypot that replaced Cowrie. See
+The native asyncssh SSH honeypot. See
 [`docs/design/STAGE_2_lure_subsystem.md`](design/STAGE_2_lure_subsystem.md)
 for the full design.
 
@@ -314,41 +303,22 @@ for the full design.
 * [`http.py`](../src/anglerfish/lure/http.py) - `NotImplementedError`
   stub for the future HTTP/HTTPS lure (TODO-1).
 
-The lure runs as a separate systemd unit from the bridge so a crash
-in one process does not take the other down. Both run on the same
-VM; the boundary is an HTTP call on loopback `:8421` with the
-existing bearer token.
-
-### 2.13 `integration/` (deprecated)
-
-The Cowrie-side shim. Retained for the deprecation window so
-operators upgrading in place can run both the lure and Cowrie. A
-later commit deletes this module, the `cowrie/` directory, and the
-related tests.
-
-* [`cowrie.py`](../src/anglerfish/integration/cowrie.py) - Cowrie
-  output plugin. Translates Cowrie events to bridge calls.
-* [`cowrie_shell.py`](../src/anglerfish/integration/cowrie_shell.py)
-  - sync HTTP client wrapper for the bridge (protocol v1).
-* [`cowrie_shell_adapter.py`](../src/anglerfish/integration/cowrie_shell_adapter.py)
-  - runtime monkey-patch of `HoneyPotShell.lineReceived` that
-  intercepts unknown commands.
-
-The patch ships two ways: a source patch under
-[`cowrie/patches/`](../cowrie/patches/) applied at ISO-build time,
-and the runtime monkey-patch as belt-and-braces. If both fail, the
-honeypot still works, attackers see Cowrie's static replies, no
-LLM.
+The lure runs as a separate process from the bridge so a crash in
+one does not take the other down. Both run on the same VM; the
+boundary is an HTTP call on loopback `:8421` with the existing
+bearer token. The lure is invoked via `anglerfish lure serve`; a
+first-class systemd unit is tracked as TODO-3 in
+[`docs/TODO.md`](TODO.md).
 
 ---
 
 ## 3. IPC and protocols
 
-### 3.1 Cowrie → bridge
+### 3.1 Lure → bridge
 
 * Loopback HTTP (`127.0.0.1:8421`).
 * Bearer-token auth on every endpoint except `/api/health`.
-* Protocol version header `X-Anglerfish-Protocol: 1`.
+* Protocol version header `X-Anglerfish-Protocol: 2`.
 * JSON request bodies; responses are JSON envelopes carrying
   `text`, `source`, `latency_ms`.
 
@@ -360,22 +330,14 @@ LLM.
 * Timeout: `OllamaConfig.timeout_s` (default 30 s).
 * No streaming: simpler error handling, modest latency cost.
 
-### 3.3 Bridge → Splunk HEC
-
-* HTTPS to the configured HEC URL.
-* `Authorization: Splunk <token>` header.
-* JSON event envelopes from `forwarder.event`.
-* Failure ⇒ JSONL fallback; the forwarder records
-  `forwarder.fallback_engaged` to the audit log.
-
-### 3.4 Dashboard → bridge state
+### 3.3 Dashboard → bridge state
 
 The dashboard does **not** call back into the bridge. The bridge
 publishes events to `DashboardState` (in-process), and the dashboard
 reads from it. This keeps the dashboard a pure consumer, restarts
 of the dashboard don't perturb the bridge.
 
-### 3.5 Dashboard ↔ browser
+### 3.4 Dashboard ↔ browser
 
 * HTTP for REST. JSON only.
 * WebSocket at `/ws/events` for the live stream. The browser must
@@ -391,10 +353,9 @@ of the dashboard don't perturb the bridge.
 
 | Boundary                          | Direction      | Posture                                                                 |
 |-----------------------------------|----------------|-------------------------------------------------------------------------|
-| Bait NIC → Cowrie                 | inbound        | Untrusted. Everything beyond Cowrie's parser treats the input as hostile. |
-| Cowrie → bridge                   | loopback only  | Trusted authentication via bearer token + protocol version.             |
+| Bait NIC → lure                   | inbound        | Untrusted. Everything beyond the asyncssh handshake treats the input as hostile. |
+| Lure → bridge                     | loopback only  | Trusted authentication via bearer token + protocol version.             |
 | Bridge → Ollama                   | one IP literal | Trusted because it's loopback or a single operator-controlled IP.       |
-| Bridge → Splunk HEC               | service NIC    | Trusted (operator infrastructure). HEC token is a `SecretStr`.          |
 | Bridge → threat webhook           | service NIC    | Trusted; failures are logged, not retried.                              |
 | Bridge → DashboardState           | in-process     | Trusted; no network boundary.                                           |
 | Operator → dashboard              | service NIC    | Authenticated. Rate-limited login. CSRF + SameSite cookie.              |
@@ -402,9 +363,9 @@ of the dashboard don't perturb the bridge.
 | MaxMind                           | egress         | Trusted via SHA-256 manifest verification on every download.            |
 | Wizard → operator                 | tty1           | One-shot, atomic writes. The wizard refuses to run twice (`ConditionPathExists`). |
 
-The honeypot's threat model is: **assume Cowrie is owned**.
-Anglerfish's job is to make sure that buying Cowrie doesn't buy the
-LLM, the credentials DB, the operator's network, or the Proxmox
+The honeypot's threat model is: **assume the lure is owned**.
+Anglerfish's job is to make sure that owning the lure doesn't buy
+the LLM, the credentials DB, the operator's network, or the Proxmox
 management plane.
 
 ---
@@ -416,11 +377,10 @@ management plane.
 | `/etc/anglerfish/anglerfish.env`           | root              | 0600 | Bearer secret + AES key + session secret + admin hash. |
 | `/etc/anglerfish/wizard.json`              | root              | 0600 | Operator answers - secrets are **not** persisted here. |
 | `/etc/anglerfish/nftables/anglerfish.nft`  | root              | 0640 | Firewall ruleset.                                      |
-| `/etc/anglerfish/cowrie.cfg`               | root              | 0640 | Cowrie config (rendered from template).                |
 | `/etc/systemd/network/10-bait.network`     | root              | 0644 | systemd-networkd for the bait NIC.                     |
 | `/etc/systemd/network/20-service.network`  | root              | 0644 | systemd-networkd for the service NIC.                  |
 | `/var/lib/anglerfish/credentials.db`       | anglerfish        | 0600 | SQLite + AES-GCM rows.                                 |
-| `/var/lib/anglerfish/sessions.jsonl`       | anglerfish        | 0600 | Splunk JSONL fallback / session capture.               |
+| `/var/lib/anglerfish/sessions.db`          | anglerfish        | 0600 | SessionStore (SQLite + WAL).                           |
 | `/var/lib/anglerfish/geo/GeoLite2-*.mmdb`  | anglerfish        | 0644 | MaxMind databases.                                     |
 | `/var/log/anglerfish/audit.jsonl`          | anglerfish        | 0640 | Append-only operator audit trail.                      |
 | `/opt/anglerfish/venv/`                    | root              | 0755 | The Python venv; immutable post-install.               |
@@ -438,15 +398,16 @@ former is the operator's answer set that we can replay on
 * **`journalctl -u <unit>`** for service stdout/stderr. The bridge
   emits structured log lines (`key=value`) suitable for log scraping.
 * **`/var/log/anglerfish/audit.jsonl`** for operator-facing events.
-* **Splunk HEC** for session-level intelligence; JSONL fallback if
-  HEC is unreachable.
+* **`/var/lib/anglerfish/sessions.db`** for the persistent
+  session corpus (queryable via SQLite).
 * **Dashboard `/api/stats`** for in-memory aggregates over the
   recent session window.
 * **`anglerfish config show`** for the loaded configuration with
   secrets masked.
 
 There is no metrics endpoint (no Prometheus exporter) at present.
-Operators who want time-series should consume the Splunk feed.
+Operators who want time-series should query the SessionStore SQLite
+file directly or build their own exporter on top of `/api/stats`.
 
 ---
 
@@ -464,7 +425,7 @@ Operators who want time-series should consume the Splunk feed.
 | Credentials don't decrypt                        | [`credentials/crypto.py`](../src/anglerfish/credentials/crypto.py)       |
 | Geo enrichment empty                             | [`geo/lookup.py`](../src/anglerfish/geo/lookup.py)                       |
 | Threat alerts not firing                         | [`threat/alerter.py`](../src/anglerfish/threat/alerter.py)               |
-| Splunk events stuck in JSONL                     | [`forwarder/hec.py`](../src/anglerfish/forwarder/hec.py)                 |
+| Session store rows missing                       | [`sessions/store.py`](../src/anglerfish/sessions/store.py)               |
 | Wizard wrote a wrong file                        | [`wizard/render.py`](../src/anglerfish/wizard/render.py)                 |
 | ISO doesn't include a hook                       | [`iso/config/hooks/normal/`](../iso/config/hooks/normal/)                |
 | systemd unit picks up the wrong path             | [`systemd/`](../systemd/)                                                |

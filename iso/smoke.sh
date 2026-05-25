@@ -4,7 +4,7 @@
 #
 # What this gives you:
 #   * Two virtual NICs — a "bait" NIC reachable from the host on
-#     localhost:2222 (Cowrie's SSH listener) and a "service" NIC
+#     localhost:2222 (the native SSH lure) and a "service" NIC
 #     reachable on localhost:8420 (the dashboard).
 #   * Serial console multiplexed onto your tty so you can drive the
 #     first-boot wizard.
@@ -87,7 +87,7 @@ cat <<EOF
 EOF
 
 # Two user-mode networking stacks — one per NIC. The bait NIC publishes
-# Cowrie's SSH listener (host port 2222 → guest 2222); the service NIC
+# the lure's SSH listener (host port 2222 → guest 2222); the service NIC
 # publishes the dashboard (host port 8420 → guest 8420). Both stacks are
 # isolated from each other and from the host's LAN, which matches the
 # production split.

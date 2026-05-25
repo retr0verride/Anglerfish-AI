@@ -86,10 +86,5 @@ iso/binary/
 *.iso.sig
 *.iso.sha256
 
-# Cowrie runtime
-cowrie/var/
-cowrie/log/
-cowrie/dl/
-
 # Pre-commit
 .pre-commit-cache/

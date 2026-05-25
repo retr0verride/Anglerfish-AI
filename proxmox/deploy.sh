@@ -187,6 +187,7 @@ Next steps:
   3. Walk through the first-boot wizard.
   4. Once the wizard finishes:
        * SSH to the service NIC for ops.
-       * Cowrie is listening on the bait NIC (default port 2222).
+       * The native SSH lure listens on the bait NIC (default port 2222);
+         run "anglerfish lure serve" if it is not already up (TODO-3).
   5. To make the VM autostart at host boot: qm set ${VMID} --onboot 1
 EOF

@@ -117,7 +117,7 @@ endpoint, you can:
 * Run Ollama on the Proxmox host (`http://<host-service-ip>:11434/`)
   and reach it over `vmbr-service`. Most practical.
 * Run Ollama inside the honeypot VM (`http://127.0.0.1:11434/`). Wastes
-  RAM in a lab, both Ollama and Cowrie compete for the VM's memory.
+  RAM in a lab, both Ollama and the lure compete for the VM's memory.
 
 ---
 
@@ -187,7 +187,7 @@ ready for the next session.
 
 ## 6. Replay a real attacker against your lab
 
-If you have a PCAP of a real SSH brute-force or Cowrie session
+If you have a PCAP of a real SSH brute-force or honeypot session
 (maybe from a previous internet-exposed honeypot, or from a public
 dataset like the SANS DShield captures), you can replay it:
 
