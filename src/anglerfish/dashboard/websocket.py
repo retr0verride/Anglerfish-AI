@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import AbstractContextManager, nullcontext, suppress
+from contextlib import AbstractContextManager, suppress
 from typing import cast
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -129,7 +129,3 @@ def _suppress_already_closed() -> AbstractContextManager[None]:
     # WebSocket close on an already-closed socket raises RuntimeError;
     # we don't care once we're in the error path.
     return cast("AbstractContextManager[None]", suppress(RuntimeError))
-
-
-# Touch nullcontext so unused-import doesn't fire if a future version drops it.
-_ = nullcontext

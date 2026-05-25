@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish import __version__
 from anglerfish.audit import AuditLog
-from anglerfish.dashboard.alerts import ALERT_KINDS, list_alerts
+from anglerfish.dashboard.alerts import ALERT_KINDS, ALERT_STUBS, list_alerts
 from anglerfish.dashboard.auth import is_open_mode, require_auth
 from anglerfish.dashboard.csrf import require_csrf
 from anglerfish.dashboard.export import (
@@ -292,7 +292,9 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         if kind is not None and kind not in ALERT_KINDS:
             # Unknown kind yields an empty page rather than 422 so
             # the SPA can chip-filter on a kind not yet observed.
-            return {"items": [], "next_cursor": None, "stubs": _stubs_for_alerts()}
+            # Guarded here (not inside list_alerts) so unknown-kind
+            # requests don't generate a dashboard.audit_read row.
+            return {"items": [], "next_cursor": None, "stubs": ALERT_STUBS}
         audit.record(
             "dashboard.audit_read",
             cursor=cursor,
@@ -385,10 +387,3 @@ def _actor(request: Request) -> str:
     if auth.lower().startswith("basic "):
         return "basic_auth"
     return "open_mode"
-
-
-def _stubs_for_alerts() -> dict[str, dict[str, Any]]:
-    """Re-export the alerts stubs so the empty-page response matches the live shape."""
-    from anglerfish.dashboard.alerts import ALERT_STUBS
-
-    return ALERT_STUBS

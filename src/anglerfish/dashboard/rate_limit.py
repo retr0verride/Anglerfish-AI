@@ -91,8 +91,9 @@ class LoginRateLimiter:
                 self._buckets[key] = (tokens, now)
                 return RateLimitDecision(allowed=True, retry_after_seconds=0.0)
             wait = (1.0 - tokens) / self._refill
-            # Don't update the bucket on a refused attempt — otherwise a
-            # flood would never let any legitimate attempt through.
+            # Persist the refilled token count and the new `last`
+            # timestamp so the next consult resumes from the correct
+            # bucket state even though this attempt was refused.
             self._buckets[key] = (tokens, now)
             return RateLimitDecision(allowed=False, retry_after_seconds=wait)
 

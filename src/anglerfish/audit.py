@@ -21,7 +21,7 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
 * Credentials: ``credentials.key_rotated``.
 * Dashboard: ``dashboard.login_success``, ``dashboard.login_failure``,
   ``login_rate_limited``, ``dashboard.export_served``.
-* Bridge: ``bridge.defense_fired``, ``bridge.scan_truncated``,
+* Bridge: ``bridge.defense_fired``, ``bridge.defense_scan_truncated``,
   ``bridge.model_integrity_verified``, ``bridge.model_integrity_failed``,
   ``bridge.model_integrity_skipped``.
 * Lure: ``lure.server_started``, ``lure.server_stopped``,

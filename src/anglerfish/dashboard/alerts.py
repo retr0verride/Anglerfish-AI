@@ -17,7 +17,6 @@ contract is exposed but not parsed by callers; round-trip via
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -185,10 +184,9 @@ def _parse_cursor(cursor: str | None) -> tuple[int, int] | None:
 
 
 def _empty_page() -> dict[str, Any]:
-    """A complete empty-page response shape; mirrors the live shape."""
+    """Empty-page response shape; matches the live shape from :func:`list_alerts`."""
     return {
         "items": [],
         "next_cursor": None,
         "stubs": ALERT_STUBS,
-        "_now": datetime.now(tz=UTC).isoformat(),
     }
