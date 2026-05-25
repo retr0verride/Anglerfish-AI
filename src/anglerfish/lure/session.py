@@ -93,9 +93,15 @@ class LureSessionContext:
         return self._opened_at
 
     def update_cwd(self, new_cwd: str) -> None:
+        """Normalise ``new_cwd`` and store it as the session's current directory."""
         self._cwd = normalise_path(new_cwd)
 
     def record(self, command: str, *, response_source: str) -> None:
+        """Append ``command`` to the session history with the current timestamp.
+
+        ``response_source`` is the literal ``"native"`` / ``"bridge"`` /
+        ``"fallback"`` tag describing which handler produced the response.
+        """
         self._history.append(
             LureCommandRecord(
                 command=command,
@@ -109,4 +115,5 @@ class LureSessionContext:
         return tuple(self._history)
 
     def command_count(self) -> int:
+        """Return the number of commands recorded in the session history."""
         return len(self._history)

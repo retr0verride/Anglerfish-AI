@@ -5,10 +5,10 @@ modern clients can negotiate. Keys are generated at first boot via the
 wizard and persisted under :attr:`LureConfig.host_key_dir`. The keys
 themselves never live in the repo.
 
-Stage 2A uses ``cryptography`` (already a runtime dependency for the
-credentials AES-GCM cipher) to generate and serialise keys. The actual
-``asyncssh.read_private_key`` consumption lands in Stage 2B when the
-server module exists.
+Key generation uses ``cryptography`` (already a runtime dependency
+for the credentials AES-GCM cipher); the asyncssh server in
+:mod:`anglerfish.lure.server` consumes the PEM bytes returned by
+:func:`load_host_keys` via ``asyncssh.import_private_key``.
 """
 
 from __future__ import annotations
@@ -123,6 +123,8 @@ def _write_key_bytes(path: Path, data: bytes) -> None:
         with os.fdopen(fd, "wb") as fp:
             fp.write(data)
     except BaseException:
+        # Catch BaseException so Ctrl-C (KeyboardInterrupt) mid-write
+        # also unlinks the partial tmp file before re-raising.
         with contextlib.suppress(OSError):
             tmp.unlink()
         raise
@@ -177,10 +179,9 @@ def validate_key_permissions(directory: Path) -> HostKeyPaths:
 def load_host_keys(directory: Path) -> tuple[bytes, bytes]:
     """Return the (rsa_pem, ed25519_pem) bytes after a permission check.
 
-    Stage 2A returns raw PEM bytes; the Stage 2B asyncssh server feeds
-    those to ``asyncssh.import_private_key``. Splitting permission
-    validation from asyncssh-specific loading lets the validation code
-    stay testable without the asyncssh dependency.
+    The bytes are fed to ``asyncssh.import_private_key`` by the
+    server module; this function returns raw PEM so the permission
+    validation code stays testable without an asyncssh dependency.
     """
     paths = validate_key_permissions(directory)
     return paths.rsa.read_bytes(), paths.ed25519.read_bytes()

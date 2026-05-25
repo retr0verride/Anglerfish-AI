@@ -32,7 +32,7 @@ from anglerfish.lure.server import BaitNicError, LureServer
 if TYPE_CHECKING:
     from anglerfish.config.settings import AnglerfishSettings
 
-__all__ = ["run_lure"]
+__all__ = ["BaitNicError", "run_lure"]
 
 
 _logger = logging.getLogger(__name__)
@@ -122,8 +122,3 @@ def _install_signal_handlers(shutdown: asyncio.Event) -> None:
     for sig in _GRACEFUL_SIGNALS:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, shutdown.set)
-
-
-# Re-export the dep-failure exception so CLI / __main__ wrappers do not
-# have to import from anglerfish.lure.server directly.
-__all__ += ["BaitNicError"]

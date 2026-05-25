@@ -77,3 +77,61 @@ Production deployments need a proper unit:
 
 Owner: TBD. Surfaced during the Cowrie removal; without this, every
 deployment that runs the bait NIC needs a hand-rolled systemd unit.
+
+## TODO-4: lure SSH banner — Debian suffix never reaches the wire
+
+`src/anglerfish/lure/banner.py` exports `debian_banner()` which
+builds a full SSH identification string of the form
+``SSH-2.0-OpenSSH_X.Yp1 Debian-Z+debWuV``. The Stage 2 design intent
+(and the `banner_openssh_version` + `banner_debian_version` config
+fields) is that the lure emits this full banner to attackers so the
+fingerprint matches a recent Debian stable.
+
+The actual call site at `src/anglerfish/lure/server.py:761-766`
+builds the banner inline and then strips both the ``SSH-2.0-`` prefix
+(asyncssh prepends it automatically) AND the ``Debian-...`` suffix
+via ``.split(" ", 1)[0]``. The split exists because asyncssh's
+``server_version`` parameter accepts only RFC 4253's
+``softwareversion`` token, which forbids spaces. The Debian suffix
+would have to go in the optional ``comments`` field of the SSH
+identification line, which asyncssh does not expose as a separate
+parameter.
+
+Net: ``banner_debian_version`` is configured but never reaches the
+wire, the `debian_banner()` helper is effectively dead code (Stage
+4.2 audit caught it), and attackers see ``OpenSSH_9.2p1`` rather than
+the intended ``OpenSSH_9.2p1 Debian-2+deb12u3``.
+
+Three possible fixes:
+
+- Patch asyncssh (upstream PR or local monkey-patch) so it accepts
+  a full identification line including comments. Most correct but
+  upstream-coordination heavy.
+- Bypass asyncssh's banner generation entirely by writing the
+  identification line ourselves on the socket before handing off to
+  asyncssh. Possible but fragile.
+- Accept the limitation, delete the helper, drop the
+  ``banner_debian_version`` config field, and update the wizard +
+  THREAT_MODEL to reflect that only the OpenSSH version varies.
+
+Owner: TBD. Surfaced during the Stage 5 retroactive audit sweep of
+the lure subsystem. Behaviour-changing fix, not a hygiene cleanup.
+
+## TODO-5: per-IP limiter explicit boundary tests
+
+`tests/lure/test_per_ip_limiter.py` covers the limiter's general
+behaviour but lacks AUDIT.md's "boundary conditions tested" coverage:
+
+- Empty / whitespace-only ``source_ip`` (the limiter currently
+  treats it as a valid distinct key; behaviour is undefined but the
+  test suite never exercises it).
+- Exact-edge transition: ``concurrent == max_concurrent - 1 →
+  max_concurrent`` (the existing tests jump from "well under" to
+  "well over").
+- Same-timestamp rapid-fire admit/reject within one tick of
+  ``time.monotonic()`` — verifies the per-minute window math does
+  not double-count when several admits land in the same epoch
+  microsecond.
+
+Surfaced during the Stage 5 retroactive audit sweep of the lure
+subsystem. Test-only addition; no production code touched. Owner: TBD.

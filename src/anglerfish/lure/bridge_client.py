@@ -206,16 +206,16 @@ class BridgeClient:
             )
 
         try:
-            data = response.json()
+            body = response.json()
         except ValueError as exc:
             raise BridgeUnavailableError(
                 f"bridge {path} returned malformed JSON: {exc}",
             ) from exc
-        if not isinstance(data, dict):
+        if not isinstance(body, dict):
             raise BridgeUnavailableError(
-                f"bridge {path} returned non-object JSON: {type(data).__name__}",
+                f"bridge {path} returned non-object JSON: {type(body).__name__}",
             )
-        return data
+        return body
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client iff this instance owns it."""

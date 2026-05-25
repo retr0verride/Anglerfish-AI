@@ -249,11 +249,11 @@ async def _ls(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
             return DispatchResult(handled=False)
 
     target = normalise_path(path) if path else session.cwd
-    result = listdir(target, session)
-    if result.status != "entries":
+    listing = listdir(target, session)
+    if listing.status != "entries":
         return DispatchResult(handled=False)
 
-    visible = [e for e in result.entries if show_hidden or not e.name.startswith(".")]
+    visible = [e for e in listing.entries if show_hidden or not e.name.startswith(".")]
     if not long_form:
         text = "  ".join(e.name for e in visible) + ("\n" if visible else "")
         return DispatchResult(handled=True, text=text)
@@ -281,10 +281,10 @@ async def _cat(session: LureSessionContext, tokens: list[str]) -> DispatchResult
         base = session.cwd.rstrip("/") or "/"
         target = f"{base}/{target}"
     target = normalise_path(target)
-    result = read(target, session)
-    if result.status == "content":
-        return DispatchResult(handled=True, text=result.content)
-    if result.status == "permission_denied":
+    read_result = read(target, session)
+    if read_result.status == "content":
+        return DispatchResult(handled=True, text=read_result.content)
+    if read_result.status == "permission_denied":
         return DispatchResult(
             handled=True,
             text=f"cat: {tokens[1]}: Permission denied\n",
@@ -373,10 +373,10 @@ class NativeCommands:
         except ValueError:
             tokens = stripped.split()
 
-        result = await handler(session, tokens)
-        if result.handled:
+        dispatch_result = await handler(session, tokens)
+        if dispatch_result.handled:
             await self._jitter.sleep_native()
-        return result
+        return dispatch_result
 
     def record_bridge_latency(self, latency_ms: float) -> None:
         """Forward to the jitter EWMA. Convenience for server.py."""

@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import hashlib
 import ipaddress
 import logging
 import socket
@@ -444,8 +445,6 @@ class _LureSSHServer(asyncssh.SSHServer):
 
 def _password_hash_prefix(password: str) -> str:
     """First 8 hex chars of sha256(password) - dedup, never plaintext."""
-    import hashlib
-
     return hashlib.sha256(password.encode("utf-8", errors="replace")).hexdigest()[:8]
 
 
@@ -698,9 +697,7 @@ class LureServer:
         self._background: set[asyncio.Task[Any]] = set()
         # UUID re-used for bridge-less placeholder sessions. Kept
         # frozen so collisions are obvious in audit logs.
-        from uuid import UUID as _UUID  # local import for clarity
-
-        self._placeholder_session_id = _UUID("00000000-0000-0000-0000-000000000000")
+        self._placeholder_session_id = UUID("00000000-0000-0000-0000-000000000000")
 
     # -- public read-only accessors used by the SSHServer instances ------
 
@@ -756,14 +753,18 @@ class LureServer:
         async def process_factory(process: asyncssh.SSHServerProcess[str]) -> None:
             await _process_handler(container, process)
 
+        # asyncssh's server_version accepts only RFC 4253's
+        # `softwareversion` token, which forbids spaces. Strip both the
+        # SSH-2.0- prefix (asyncssh re-adds it) and the Debian comments
+        # suffix (cannot live in softwareversion). See TODO-4: the
+        # configured banner_debian_version is therefore inert today.
+        full_banner = (
+            f"SSH-2.0-OpenSSH_{self._config.banner_openssh_version} "
+            f"Debian-{self._config.banner_debian_version}"
+        )
         options_kwargs: dict[str, Any] = {
             "server_host_keys": ssh_keys,
-            "server_version": (
-                f"SSH-2.0-OpenSSH_{self._config.banner_openssh_version} "
-                f"Debian-{self._config.banner_debian_version}"
-            )
-            .split(" ", 1)[0]
-            .removeprefix("SSH-2.0-"),
+            "server_version": full_banner.split(" ", 1)[0].removeprefix("SSH-2.0-"),
             "process_factory": process_factory,
             "allow_scp": False,
             "x11_forwarding": False,

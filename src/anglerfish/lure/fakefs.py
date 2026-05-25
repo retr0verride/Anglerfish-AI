@@ -66,10 +66,12 @@ class ListResult:
 
 
 # Mode helpers for readability inside _DIRS.
+_F664 = 0o100664
 _F644 = 0o100644
 _F640 = 0o100640
 _F600 = 0o100600
 _F755 = 0o100755
+_F444 = 0o100444
 _D755 = 0o040755
 _D700 = 0o040700
 _L777 = 0o120777  # symlink
@@ -444,7 +446,7 @@ _FILES: Final[dict[str, tuple[str, int, str, str]]] = {
     "/var/log/syslog": (_VAR_LOG_SYSLOG, _F640, "root", "adm"),
     "/var/log/dpkg.log": (_VAR_LOG_DPKG, _F644, "root", "root"),
     "/var/log/lastlog": (_BINARY_GARBAGE, _F644, "root", "utmp"),
-    "/var/log/wtmp": (_BINARY_GARBAGE, _F664 := 0o100664, "root", "utmp"),
+    "/var/log/wtmp": (_BINARY_GARBAGE, _F664, "root", "utmp"),
 }
 
 # Permission-denied paths: cat returns the canonical Linux error, no
@@ -532,7 +534,7 @@ _VAR_DIR_ENTRIES: Final[tuple[FakeEntry, ...]] = (
 _PROC_DIR_ENTRIES: Final[tuple[FakeEntry, ...]] = (
     FakeEntry("1", _D755, 0, is_dir=True),
     FakeEntry("1432", _D755, 0, is_dir=True),
-    FakeEntry("cpuinfo", _F444 := 0o100444, 0),
+    FakeEntry("cpuinfo", _F444, 0),
     FakeEntry("loadavg", _F444, 0),
     FakeEntry("meminfo", _F444, 0),
     FakeEntry("mounts", _F444, 0),
