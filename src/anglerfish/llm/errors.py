@@ -14,7 +14,12 @@ output-filter errors live there too).
 
 from __future__ import annotations
 
-__all__ = ["LLMError", "OllamaResponseError", "OllamaUnavailableError"]
+__all__ = [
+    "LLMError",
+    "OllamaResponseError",
+    "OllamaUnavailableError",
+    "StructuredOutputError",
+]
 
 
 class LLMError(Exception):
@@ -33,3 +38,12 @@ class OllamaUnavailableError(LLMError):
 
 class OllamaResponseError(LLMError):
     """4xx response or structurally invalid response body."""
+
+
+class StructuredOutputError(LLMError):
+    """The LLM failed to produce schema-compliant output within the retry budget.
+
+    Raised by :meth:`LLMClient.structured_chat` after the configured
+    ``max_retries`` attempts have all returned either non-JSON text
+    or a JSON object that fails the requested Pydantic schema.
+    """

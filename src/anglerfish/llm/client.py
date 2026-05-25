@@ -25,17 +25,23 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, TypeVar
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from anglerfish.config.models import OllamaConfig
 from anglerfish.llm.budget import TokenBudget
-from anglerfish.llm.errors import OllamaResponseError, OllamaUnavailableError
+from anglerfish.llm.errors import (
+    OllamaResponseError,
+    OllamaUnavailableError,
+    StructuredOutputError,
+)
 from anglerfish.llm.roles import LLMRole
 
 __all__ = ["ChatChunk", "ChatMessage", "ChatResult", "LLMClient", "TokenUsage"]
+
+_T_Model = TypeVar("_T_Model", bound=BaseModel)
 
 
 _USER_AGENT = "anglerfish-ai/0.1.0"
@@ -133,6 +139,7 @@ class LLMClient:
         *,
         role: LLMRole = LLMRole.FAST,
         budget: TokenBudget | None = None,
+        response_format: str | None = None,
     ) -> ChatResult:
         """Send ``messages`` for ``role``, return content + token usage.
 
@@ -159,6 +166,8 @@ class LLMClient:
                 "num_predict": self._config.max_response_tokens,
             },
         }
+        if response_format is not None:
+            payload["format"] = response_format
         try:
             response = await self._client.post("/api/chat", json=payload)
         except httpx.HTTPError as exc:
@@ -293,6 +302,89 @@ class LLMClient:
             done = bool(data.get("done", False))
             usage: TokenUsage | None = _parse_usage(data) if done else None
             yield ChatChunk(delta=delta, done=done, usage=usage)
+
+    async def structured_chat(
+        self,
+        messages: Sequence[ChatMessage],
+        schema: type[_T_Model],
+        *,
+        role: LLMRole = LLMRole.DEEP,
+        budget: TokenBudget | None = None,
+        max_retries: int = 2,
+    ) -> _T_Model:
+        """Call the LLM and parse the response as a ``schema`` instance.
+
+        Issues a chat call with Ollama's ``format="json"`` hint and a
+        trailing system message that pastes the requested JSON schema.
+        On JSON-decode or :class:`ValidationError`, retries up to
+        ``max_retries`` more times with a correction message that
+        includes the validation failure. The supplied ``budget``
+        covers every attempt - retries consume real Ollama tokens.
+
+        Raises:
+            BudgetExhaustedError: ``budget`` exhausted before any
+                attempt (or before a retry).
+            OllamaUnavailableError / OllamaResponseError: same shape
+                as :meth:`chat`; transport / 4xx-5xx failures abort
+                immediately without retry.
+            StructuredOutputError: every attempt produced non-JSON
+                or schema-incompatible JSON.
+            ValueError: ``max_retries`` is negative.
+        """
+        if max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {max_retries}")
+
+        schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"))
+        instruction = (
+            "Respond with a single JSON object that conforms to this JSON "
+            "schema. Output only the JSON object, with no surrounding text "
+            f"or markdown. Schema: {schema_json}"
+        )
+        attempts: list[ChatMessage] = [
+            *messages,
+            ChatMessage(role="system", content=instruction),
+        ]
+
+        last_error: str | None = None
+        for _ in range(max_retries + 1):
+            if last_error is not None:
+                attempts = [
+                    *attempts,
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "The previous response could not be parsed: "
+                            f"{last_error}. Return only valid JSON that "
+                            "conforms to the schema."
+                        ),
+                    ),
+                ]
+            result = await self.chat(
+                attempts,
+                role=role,
+                budget=budget,
+                response_format="json",
+            )
+            try:
+                data = json.loads(result.content)
+            except json.JSONDecodeError as exc:
+                last_error = f"invalid JSON: {exc.msg}"
+                continue
+            try:
+                return schema.model_validate(data)
+            except ValidationError as exc:
+                last_error = f"schema validation failed: {exc.error_count()} error(s)"
+                # Stash the assistant's actual JSON so the correction
+                # message gives the model concrete context to fix.
+                attempts = [
+                    *attempts,
+                    ChatMessage(role="assistant", content=result.content),
+                ]
+
+        raise StructuredOutputError(
+            f"failed to produce schema-compliant JSON after "
+            f"{max_retries + 1} attempt(s): {last_error}",
+        )
 
     async def warm(self, role: LLMRole) -> None:
         """Pin the model for ``role`` in Ollama's memory.

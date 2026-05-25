@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from anglerfish.llm.budget import BudgetExhaustedError, TokenBudget
 from anglerfish.llm.client import ChatChunk, ChatMessage, ChatResult, LLMClient, TokenUsage
+from anglerfish.llm.errors import StructuredOutputError
 from anglerfish.llm.roles import LLMRole
 from anglerfish.llm.warmup import WarmPool, WarmStatus
 
@@ -36,6 +37,7 @@ __all__ = [
     "ChatResult",
     "LLMClient",
     "LLMRole",
+    "StructuredOutputError",
     "TokenBudget",
     "TokenUsage",
     "WarmPool",
