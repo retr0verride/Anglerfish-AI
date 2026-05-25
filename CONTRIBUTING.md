@@ -44,8 +44,30 @@ Every push must additionally pass:
 
 `pre-commit` enforces the commit-time gates locally. `pre-commit run --hook-stage pre-push` runs the push-time set. CI re-runs everything on pull requests and on `main`.
 
-Before committing any substage slice, run the [substage audit](docs/AUDIT.md) checklist over the diff. It is the policy for what
-"clean" means here beyond what the linters catch.
+## Substage workflow (required)
+
+Every slice commit, audit sweep, fix, or refactor follows the same five steps. The order matters: the audit is step 2, the gates are step 4. Gates do not substitute for the audit.
+
+1. **Implement** the slice plus tests.
+2. **Audit** the diff against [docs/AUDIT.md](docs/AUDIT.md). Walk every section; "no findings" is a valid result and must be stated per section.
+3. **Apply** any cleanup inline (behaviour-preserving only). Behaviour-changing findings are logged as a new `TODO-N` in [docs/TODO.md](docs/TODO.md) and deferred.
+4. **Gates**: `ruff check`, `ruff format --check`, `mypy --strict`, `pytest` (coverage stays at 90 %+).
+5. **Commit** with an `Audit notes:` block at the end of the message:
+
+```text
+Audit notes:
+- Cleanup: <one line per finding, or "no findings">
+- Hallucination check: <verified X against Y, or "no findings">
+- No slop: <findings or "no findings">
+- Parser/validator: <findings or "no findings">
+- Security: <findings or "no findings">
+- Async: <findings or "no findings">
+- Dependency: <findings or "no findings">
+- Error handling: <findings or "no findings">
+- Deferred: TODO-N (one-line description), or "none"
+```
+
+Slices without an `Audit notes:` block are reworked into a new commit, not amended. Quoting the gates is not a substitute. If a section truly does not apply (no new parsers, no new async code), say "n/a" with one sentence why.
 
 ## Branch + commit style
 
