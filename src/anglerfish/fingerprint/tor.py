@@ -68,7 +68,7 @@ class TorExitList:
     async def reload(self) -> None:
         """Force a reload from disk."""
         async with self._lock:
-            self._reload_locked()
+            await asyncio.to_thread(self._reload_locked)
 
     async def size(self) -> int:
         await self._maybe_refresh()
@@ -79,7 +79,7 @@ class TorExitList:
         if self._loaded_at is None:
             async with self._lock:
                 if self._loaded_at is None:
-                    self._reload_locked()
+                    await asyncio.to_thread(self._reload_locked)
             return
 
         elapsed = now - self._loaded_at
@@ -88,7 +88,7 @@ class TorExitList:
         if not (interval_due or mtime_changed):
             return
         async with self._lock:
-            self._reload_locked()
+            await asyncio.to_thread(self._reload_locked)
 
     def _mtime_changed(self) -> bool:
         try:

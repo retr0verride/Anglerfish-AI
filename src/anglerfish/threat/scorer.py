@@ -73,7 +73,7 @@ def score_session(
 
     notes: list[str] = []
     if persistence:
-        notes.append("Persistence technique observed — investigate immediately.")
+        notes.append("Persistence technique observed; investigate immediately.")
     if score >= _HIGH_SEVERITY_THRESHOLD:
         notes.append(f"Score {score} meets high-severity threshold.")
     if not techniques:

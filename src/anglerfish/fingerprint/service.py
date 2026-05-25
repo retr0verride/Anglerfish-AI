@@ -84,7 +84,7 @@ class Fingerprinter:
         return normalised
 
     async def aclose(self) -> None:
-        del self  # no resources to release today; keeps the API uniform
+        """No resources to release today; defined to keep the async-context API uniform."""
 
     async def __aenter__(self) -> Self:
         return self
