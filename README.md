@@ -133,6 +133,8 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)   | STRIDE table, trust boundaries, crypto inventory, known limitations    |
 | [`SECURITY.md`](SECURITY.md)                     | Vulnerability disclosure policy, supported versions, scope             |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md)             | Quality gates, branch/commit style, PR checklist                       |
+| [`docs/ONBOARDING.md`](docs/ONBOARDING.md)       | 30-minute tour for a new contributor                                   |
+| [`docs/AUDIT.md`](docs/AUDIT.md)                 | Substage audit checklist applied before every slice commit             |
 
 ---
 

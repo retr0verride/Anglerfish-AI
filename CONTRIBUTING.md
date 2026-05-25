@@ -4,6 +4,10 @@ Thanks for considering a contribution. Anglerfish AI is a defensive
 security tool that runs in adversarial conditions, so we're strict about
 quality. The rules are short.
 
+New to the repo? Start with [docs/ONBOARDING.md](docs/ONBOARDING.md) —
+it walks you through the first 30 minutes (clone, gates, the four
+docs to read, the conventions the linters don't catch).
+
 ## Quick start
 
 ```bash
@@ -40,11 +44,14 @@ Every push must additionally pass:
 
 `pre-commit` enforces the commit-time gates locally. `pre-commit run --hook-stage pre-push` runs the push-time set. CI re-runs everything on pull requests and on `main`.
 
+Before committing any substage slice, run the [substage audit](docs/AUDIT.md) checklist over the diff. It is the policy for what
+"clean" means here beyond what the linters catch.
+
 ## Branch + commit style
 
 - `main` is always shippable. CI is required to merge.
 - Branches: `feat/...`, `fix/...`, `docs/...`, `chore/...`.
-- Conventional commits: `feat(bridge): add rate limiter`, `fix(forwarder): handle 502 retries`. Renovate uses these for changelog generation.
+- Conventional commits: `feat(bridge): add rate limiter`, `fix(lure): handle subsystem refusal`. Renovate uses these for changelog generation.
 
 ## Pull requests
 
@@ -61,8 +68,8 @@ checklist. Three rules deserve special attention:
 
 3. **Security-critical changes need a threat-model note** in the PR
    body. The template has the prompt. Reviewers will not merge without
-   it for the listed surfaces (bridge, credentials, forwarder, wizard,
-   firewall, systemd).
+   it for the listed surfaces (bridge, lure, credentials, sessions,
+   wizard, firewall, systemd).
 
 ## Adding a runtime dependency
 
