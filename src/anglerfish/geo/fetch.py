@@ -81,7 +81,7 @@ def fetch_geolite_databases(
 
     log = logger or logging.getLogger(__name__)
     if config.maxmind_license_key is None:
-        log.info("MaxMind licence key not configured — skipping geo update")
+        log.info("MaxMind licence key not configured; skipping geo update")
         return []
 
     key = config.maxmind_license_key.get_secret_value()

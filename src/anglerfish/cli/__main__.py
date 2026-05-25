@@ -25,7 +25,7 @@ __all__ = ["app"]
 
 app = typer.Typer(
     name="anglerfish",
-    help="Anglerfish AI — AI-powered SSH honeypot.",
+    help="Anglerfish AI: AI-powered SSH honeypot.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -125,7 +125,6 @@ def bridge_serve(
 
     import uvicorn
 
-    from anglerfish.audit import AuditLog
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
     from anglerfish.bridge.defense import ModelIntegrityError, verify_all_roles
 
@@ -296,7 +295,7 @@ def geo_update() -> None:
         raise typer.Exit(code=1) from exc
 
     if not results:
-        console.print("MaxMind licence key not configured — skipping update.")
+        console.print("MaxMind licence key not configured; skipping update.")
         return
 
     for result in results:
