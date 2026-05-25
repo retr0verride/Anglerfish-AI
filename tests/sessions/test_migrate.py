@@ -85,6 +85,38 @@ async def test_imports_closed_session_with_turns(
     assert stats.total_commands_observed == 2
 
 
+async def test_imports_set_session_command_count_to_turn_count(
+    session_store: SessionStore,
+    tmp_path: Path,
+) -> None:
+    """Regression: _write_accumulator used to upsert the snapshot with
+    its full turns tuple AND then call record_turn for each turn,
+    leaving sessions.command_count at 2 * N. The upsert now uses an
+    empty turns tuple so the per-turn loop increments from 0 to N.
+    """
+    path = tmp_path / "sessions.jsonl"
+    path.write_text(
+        _envelope(_connect_event("sess-count"))
+        + _envelope(_command_event("sess-count", "whoami"))
+        + _envelope(_command_event("sess-count", "id", ts="2026-05-22T10:00:06+00:00"))
+        + _envelope(_command_event("sess-count", "ls", ts="2026-05-22T10:00:07+00:00"))
+        + _envelope(_closed_event("sess-count")),
+        encoding="utf-8",
+    )
+    await import_jsonl_into_store(path, session_store)
+
+    # SessionSnapshot does not expose command_count; read the column
+    # directly. This is the operator-visible value that the CSV
+    # export's `command_count` column reads.
+    conn = session_store._conn
+    assert conn is not None
+    (count,) = conn.execute(
+        "SELECT command_count FROM sessions WHERE source_ip = ?",
+        ("203.0.113.7",),
+    ).fetchone()
+    assert count == 3
+
+
 async def test_imports_open_session_as_active(
     session_store: SessionStore,
     tmp_path: Path,

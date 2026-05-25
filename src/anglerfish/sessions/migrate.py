@@ -238,6 +238,11 @@ async def _flush_all(
 
 
 async def _write_accumulator(acc: _Accumulator, store: SessionStore) -> None:
+    # Upsert with empty turns so the sessions.command_count column
+    # starts at 0; the record_turn loop below increments it to N.
+    # Passing the populated turns tuple here would seed command_count
+    # at N and the loop would double it to 2N, breaking the
+    # operator-facing count in /api/export/sessions CSV rows.
     snapshot = SessionSnapshot(
         session_id=acc.session_id,
         source_ip=acc.source_ip,
@@ -247,7 +252,7 @@ async def _write_accumulator(acc: _Accumulator, store: SessionStore) -> None:
         fake_cwd="/root",
         started_at=acc.started_at,
         last_activity_at=acc.last_activity_at,
-        turns=tuple(acc.turns),
+        turns=(),
     )
     await store.upsert_session(snapshot)
     for turn in acc.turns:
