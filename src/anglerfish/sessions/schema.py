@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 
-CURRENT_SCHEMA_VERSION: Final[int] = 4
+CURRENT_SCHEMA_VERSION: Final[int] = 5
 
 
 # Connection-level pragmas applied on every open. WAL gives us
@@ -161,13 +161,58 @@ CREATE TABLE IF NOT EXISTS persona_pins (
 """
 
 
-# Migration chain: index = target version. Adding v5 means adding
-# _MIGRATION_5 and appending here; run_migrations walks the chain.
+# v4 -> v5: Stage 10 engaged persistence. Tracks attacker-installed
+# crontab entries, systemd unit enables, and SSH authorized_keys
+# appends so subsequent sessions from the same source IP see the
+# install reflected (cron -l shows the entry, etc.).
+#
+# Rows are APPEND-ONLY: re-installing the same backdoor at a later
+# time produces a second row with a fresh created_at so the
+# operator sees attacker iteration history. The UNIQUE constraint
+# on (source_ip, kind, sub_key, created_at) makes audit-log replay
+# (e.g. after a tailer offset-cache loss) idempotent: a re-tailed
+# audit line carries the same created_at and falls into INSERT
+# OR IGNORE without churning the table.
+#
+# No FK to sessions: persistence state outlives the session that
+# created it. Cascade-delete would defeat the cross-session
+# engagement (an attacker reconnecting from the same IP would not
+# see their previously-installed backdoor if the original session
+# row had been pruned).
+_MIGRATION_5: Final[str] = """
+CREATE TABLE IF NOT EXISTS fake_persistence_state (
+    id          INTEGER PRIMARY KEY,
+    source_ip   TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    sub_key     TEXT,
+    payload     TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    session_id  TEXT NOT NULL
+);
+
+-- Dedup constraint as a UNIQUE INDEX with COALESCE so SQL NULL-on-
+-- NULL semantics do not let two crontab rows with sub_key IS NULL
+-- and identical created_at slip past the replay-idempotency
+-- contract. SQLite treats two NULLs as not-equal under inline
+-- UNIQUE() but evaluates the expression "COALESCE(sub_key, '')"
+-- before uniqueness, so '' == '' rejects the duplicate.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fps_dedup
+    ON fake_persistence_state(source_ip, kind, COALESCE(sub_key, ''), created_at);
+
+CREATE INDEX IF NOT EXISTS idx_fps_source_ip ON fake_persistence_state(source_ip);
+CREATE INDEX IF NOT EXISTS idx_fps_kind      ON fake_persistence_state(kind);
+"""
+
+
+# Migration chain: index = target version. Adding v6 means adding
+# _MIGRATION_6 and appending here; run_migrations walks the chain.
 _MIGRATIONS: Final[tuple[str, ...]] = (
     _MIGRATION_1,
     _MIGRATION_2,
     _MIGRATION_3,
     _MIGRATION_4,
+    _MIGRATION_5,
 )
 
 

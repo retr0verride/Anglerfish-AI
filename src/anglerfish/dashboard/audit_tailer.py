@@ -53,6 +53,7 @@ from uuid import UUID
 from anglerfish.audit import AuditLog
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 
 if TYPE_CHECKING:
@@ -339,6 +340,8 @@ class AuditTailer:
             await self._handle_intent_extracted(session_id, event)
         elif event_type == "bridge.embedding_generated":
             await self._handle_embedding_generated(session_id, event)
+        elif event_type == "bridge.persistence_attempt":
+            await self._handle_persistence_attempt(session_id, event)
         # Everything else: silently ignored. Future stages add types
         # without churning the tailer.
 
@@ -523,6 +526,36 @@ class AuditTailer:
             new_persona=new_persona,
             neighbour_session_id=str(top_neighbour.session_id),
             similarity=round(top_similarity, 6),
+        )
+
+    async def _handle_persistence_attempt(
+        self,
+        session_id: UUID,
+        event: dict[str, Any],
+    ) -> None:
+        """Persist a Stage 10 ``bridge.persistence_attempt`` audit event.
+
+        Parses the event into a :class:`PersistenceEvent` and
+        forwards to :meth:`DashboardState.record_persistence_event`.
+        Malformed events log a warning and skip (matches the
+        existing intent + embedding parser patterns - one bad
+        audit line never trips the tailer batch loop).
+
+        Replay of an already-persisted line lands as an INSERT OR
+        IGNORE at the SQL layer (the schema's UNIQUE constraint on
+        source_ip + kind + sub_key + created_at). The handler does
+        not distinguish a fresh insert from a deduped replay - the
+        idempotent path is the same operator-visible outcome.
+        """
+        parsed = _parse_persistence_attempt_event(session_id, event)
+        if parsed is None:
+            return
+        persistence_event, source_ip, created_at = parsed
+        await self._state.record_persistence_event(
+            persistence_event,
+            source_ip=source_ip,
+            session_id=session_id,
+            created_at=created_at,
         )
 
     # ------------------------------------------------------------------
@@ -754,3 +787,83 @@ def _parse_embedding_event(
             exc,
         )
         return None
+
+
+_VALID_PERSISTENCE_KINDS = frozenset({"crontab", "systemctl", "authorized_keys"})
+_VALID_PERSISTENCE_SOURCES = frozenset({"regex", "llm"})
+
+
+def _parse_persistence_attempt_event(
+    session_id: UUID,
+    event: dict[str, Any],
+) -> tuple[PersistenceEvent, str, datetime] | None:
+    """Reconstruct a :class:`PersistenceEvent` + source_ip + created_at.
+
+    Returns a 3-tuple ``(event, source_ip, created_at)`` on
+    success or :data:`None` (with a warning log) when any
+    required field is missing / malformed. Mirrors the intent +
+    embedding parser patterns so a corrupt audit line never
+    crashes the tailer batch loop.
+
+    ``created_at`` is read from the event's own ``created_at``
+    field (set by the bridge classifier on emit), not from the
+    audit-record ``ts``. Using a dedicated field keeps the
+    replay-dedup contract honest: the UNIQUE schema constraint
+    is on (source_ip, kind, sub_key, created_at) and operators
+    who hand-edit / replay audit lines control created_at
+    directly.
+    """
+    kind = event.get("kind")
+    source_ip = event.get("source_ip")
+    payload = event.get("payload")
+    source = event.get("source")
+    created_at_raw = event.get("created_at")
+    if (
+        kind not in _VALID_PERSISTENCE_KINDS
+        or source not in _VALID_PERSISTENCE_SOURCES
+        or not isinstance(source_ip, str)
+        or not source_ip
+        or not isinstance(payload, str)
+        or not payload
+        or not isinstance(created_at_raw, str)
+    ):
+        _logger.warning(
+            "audit_tailer: bridge.persistence_attempt event missing or "
+            "malformed required fields for session_id=%s",
+            session_id,
+        )
+        return None
+    sub_key = event.get("sub_key")
+    if sub_key is not None and not isinstance(sub_key, str):
+        _logger.warning(
+            "audit_tailer: bridge.persistence_attempt sub_key has wrong type "
+            "for session_id=%s; dropping",
+            session_id,
+        )
+        return None
+    try:
+        created_at = datetime.fromisoformat(created_at_raw)
+    except ValueError:
+        _logger.warning(
+            "audit_tailer: bridge.persistence_attempt has malformed "
+            "created_at=%r for session_id=%s",
+            created_at_raw,
+            session_id,
+        )
+        return None
+    try:
+        persistence_event = PersistenceEvent(
+            kind=kind,
+            sub_key=sub_key,
+            payload=payload,
+            source=source,
+        )
+    except ValueError as exc:
+        _logger.warning(
+            "audit_tailer: bridge.persistence_attempt failed schema "
+            "validation for session_id=%s: %s",
+            session_id,
+            exc,
+        )
+        return None
+    return persistence_event, source_ip, created_at

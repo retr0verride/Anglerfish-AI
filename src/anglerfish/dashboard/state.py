@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.persona_pin import PersonaPin
 from anglerfish.models.session import CommandTurn, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
@@ -291,6 +292,40 @@ class DashboardState:
     async def update_session_persona(self, session_id: UUID, persona: str) -> bool:
         """Rebound the persona on an already-persisted session row."""
         return await self._store.update_session_persona(session_id, persona)
+
+    # ------------------------------------------------------------------
+    # Fake persistence state (Stage 10 slice 10.2)
+    # ------------------------------------------------------------------
+
+    async def record_persistence_event(
+        self,
+        event: PersistenceEvent,
+        *,
+        source_ip: str,
+        session_id: UUID,
+        created_at: datetime,
+    ) -> bool:
+        """Persist a Stage 10 :class:`PersistenceEvent`.
+
+        Returns True iff a new row was inserted; False on the
+        replay-of-already-persisted-audit-line idempotent path.
+        No pub/sub publish: persistence events surface to
+        operators via the ``bridge.persistence_attempt`` audit
+        event (already wired to the alerts panel since Stage 3),
+        not via the WebSocket fan-out.
+        """
+        return await self._store.record_persistence_event(
+            event,
+            source_ip=source_ip,
+            session_id=session_id,
+            created_at=created_at,
+        )
+
+    async def list_persistence_events_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[PersistenceEvent]:
+        return await self._store.list_persistence_events_for_source_ip(source_ip)
 
     # ------------------------------------------------------------------
     # Queries - called by REST routes.

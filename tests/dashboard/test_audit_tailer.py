@@ -1250,3 +1250,147 @@ async def test_rebound_skipped_when_personas_match(
     _append(tailer.audit_path, _embedding_event(closed_sid, vector=vector))
     await tailer._poll_once()
     assert not [e for e in audit.events if e[0] == "bridge.persona_rebound"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 10 slice 2: bridge.persistence_attempt dispatch
+# ---------------------------------------------------------------------------
+
+
+def _persistence_attempt_line(
+    *,
+    session_id: UUID,
+    source_ip: str = "203.0.113.7",
+    kind: str = "crontab",
+    sub_key: str | None = None,
+    payload: str = "0 * * * * /tmp/.x",
+    source: str = "regex",
+    created_at: datetime | None = None,
+) -> str:
+    fields: dict[str, object] = {
+        "session_id": str(session_id),
+        "source_ip": source_ip,
+        "kind": kind,
+        "payload": payload,
+        "source": source,
+        "created_at": (created_at or datetime(2026, 5, 26, 12, 0, tzinfo=UTC)).isoformat(),
+    }
+    if sub_key is not None:
+        fields["sub_key"] = sub_key
+    return _audit_line("bridge.persistence_attempt", **fields)
+
+
+async def test_persistence_attempt_persists_to_store(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _persistence_attempt_line(
+            session_id=sid,
+            kind="authorized_keys",
+            sub_key="alice",
+            payload="ssh-ed25519 AAAA attacker",
+            source="regex",
+        ),
+    )
+    await tailer._poll_once()
+    events = await dashboard_state.list_persistence_events_for_source_ip(
+        "203.0.113.7",
+    )
+    assert len(events) == 1
+    assert events[0].kind == "authorized_keys"
+    assert events[0].sub_key == "alice"
+    assert events[0].payload == "ssh-ed25519 AAAA attacker"
+    assert events[0].source == "regex"
+    del sid  # session_id is recorded but not exposed via the list query
+
+
+async def test_persistence_attempt_replay_is_idempotent(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """Same audit line tailed twice -> one row (UNIQUE constraint dedups)."""
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    line = _persistence_attempt_line(session_id=sid)
+    _append(tailer.audit_path, line)
+    await tailer._poll_once()
+    # Simulate offset-cache loss: zero the offset + re-tail.
+    tailer._offset = 0  # type: ignore[attr-defined]
+    await tailer._poll_once()
+    events = await dashboard_state.list_persistence_events_for_source_ip(
+        "203.0.113.7",
+    )
+    assert len(events) == 1
+
+
+async def test_persistence_attempt_missing_required_field_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """Missing payload -> warning log, skip, no row inserted."""
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "bridge.persistence_attempt",
+            session_id=str(sid),
+            source_ip="203.0.113.7",
+            kind="crontab",
+            source="regex",
+            created_at=datetime(2026, 5, 26, 12, 0, tzinfo=UTC).isoformat(),
+            # payload deliberately missing
+        ),
+    )
+    await tailer._poll_once()
+    events = await dashboard_state.list_persistence_events_for_source_ip(
+        "203.0.113.7",
+    )
+    assert events == []
+
+
+async def test_persistence_attempt_unknown_kind_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _persistence_attempt_line(
+            session_id=uuid4(),
+            kind="systemctl_disable",  # not in the kind enum
+        ),
+    )
+    await tailer._poll_once()
+    events = await dashboard_state.list_persistence_events_for_source_ip(
+        "203.0.113.7",
+    )
+    assert events == []
+
+
+async def test_persistence_attempt_malformed_created_at_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "bridge.persistence_attempt",
+            session_id=str(uuid4()),
+            source_ip="203.0.113.7",
+            kind="crontab",
+            payload="x",
+            source="regex",
+            created_at="not-a-timestamp",
+        ),
+    )
+    await tailer._poll_once()
+    events = await dashboard_state.list_persistence_events_for_source_ip(
+        "203.0.113.7",
+    )
+    assert events == []

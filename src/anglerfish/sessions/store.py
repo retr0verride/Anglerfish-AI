@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.persona_pin import PersonaPin
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
@@ -558,6 +559,110 @@ class SessionStore:
             summary=row[5],
             extracted_at=datetime.fromisoformat(row[6]),
         )
+
+    # ------------------------------------------------------------------
+    # Fake persistence state (Stage 10 slice 10.2)
+    # ------------------------------------------------------------------
+
+    async def record_persistence_event(
+        self,
+        event: PersistenceEvent,
+        *,
+        source_ip: str,
+        session_id: UUID,
+        created_at: datetime,
+    ) -> bool:
+        """Append a :class:`PersistenceEvent` to ``fake_persistence_state``.
+
+        Returns True iff a new row was inserted; False when the
+        UNIQUE(source_ip, kind, sub_key, created_at) constraint
+        rejected the insert as a replay of an already-persisted
+        audit line. Operators can use the return value to
+        instrument tailer-replay diagnostics; the caller's normal
+        path treats both outcomes the same.
+
+        No FK to sessions: persistence state outlives the session
+        that created it. Re-installing the same backdoor at a
+        later time produces a second row (different created_at).
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._record_persistence_event_locked,
+                event,
+                source_ip,
+                session_id,
+                created_at,
+            )
+
+    def _record_persistence_event_locked(
+        self,
+        event: PersistenceEvent,
+        source_ip: str,
+        session_id: UUID,
+        created_at: datetime,
+    ) -> bool:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO fake_persistence_state (
+                source_ip, kind, sub_key, payload, source, created_at, session_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_ip,
+                event.kind,
+                event.sub_key,
+                event.payload,
+                event.source,
+                created_at.isoformat(),
+                str(session_id),
+            ),
+        )
+        return cur.rowcount > 0
+
+    async def list_persistence_events_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[PersistenceEvent]:
+        """Return every persistence event for ``source_ip``, oldest first.
+
+        The lure overlay applies path-keyed events in chronological
+        order so later authorized_keys appends accumulate on top of
+        earlier ones; the bridge fs_context block lists every
+        installed crontab line / systemd unit for the LLM to render
+        consistently.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_persistence_events_locked,
+                source_ip,
+            )
+
+    def _list_persistence_events_locked(
+        self,
+        source_ip: str,
+    ) -> list[PersistenceEvent]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT kind, sub_key, payload, source
+            FROM fake_persistence_state
+            WHERE source_ip = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (source_ip,),
+        )
+        return [
+            PersistenceEvent(
+                kind=row[0],
+                sub_key=row[1],
+                payload=row[2],
+                source=row[3],
+            )
+            for row in cur.fetchall()
+        ]
 
     # ------------------------------------------------------------------
     # Persona pins + rebound (Stage 9 slice 9.4)
