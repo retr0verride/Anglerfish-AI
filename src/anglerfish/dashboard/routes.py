@@ -321,6 +321,28 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             operator=_actor(request),
         )
 
+    # Stage 10 slice 10.4: read-only view of the fake-persistence
+    # state an attacker has installed via a particular source IP.
+    # The SPA's session-detail view uses this alongside the existing
+    # alerts panel's persistence_attempt kind. No write endpoint:
+    # operators clear an attacker's state via SQL in v1 (a future
+    # stage may add a DELETE route).
+
+    @router.get(
+        "/api/persistence/state",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_persistence_state(
+        source_ip: str = Query(min_length=1, max_length=64),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        events = await state.list_persistence_events_for_source_ip(source_ip)
+        return {
+            "source_ip": source_ip,
+            "count": len(events),
+            "items": [event.model_dump(mode="json") for event in events],
+        }
+
     @router.get("/api/commands", dependencies=[Depends(require_auth)])
     async def recent_commands(
         limit: int = Query(default=100, ge=1, le=1000),

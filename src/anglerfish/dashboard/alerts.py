@@ -189,7 +189,29 @@ def _summarise_high_severity_session(event: dict[str, Any]) -> str:
 
 
 def _summarise_persistence_attempt(event: dict[str, Any]) -> str:
-    return str(event.get("detail") or "persistence attempted")
+    """Render a bridge.persistence_attempt event for the alerts panel.
+
+    Stage 10 emits structured fields (kind / sub_key / payload /
+    source); this renderer produces a one-line operator summary
+    like ``crontab: 0 * * * * /tmp/.x (regex)`` or
+    ``systemctl enabled backdoor.service (llm)``. Falls back to
+    the pre-Stage-10 ``detail`` field for any older audit lines
+    still in the log so a tailer replay does not produce blank
+    rows.
+    """
+    kind = event.get("kind")
+    payload = event.get("payload")
+    if not isinstance(kind, str) or not isinstance(payload, str):
+        return str(event.get("detail") or "persistence attempted")
+    source = event.get("source", "unknown")
+    sub_key = event.get("sub_key")
+    if kind == "systemctl" and isinstance(sub_key, str):
+        body = f"systemctl enabled {sub_key}"
+    elif kind == "authorized_keys":
+        body = f"authorized_keys += {payload[:80]}"
+    else:
+        body = f"{kind}: {payload[:120]}"
+    return f"{body} ({source})"
 
 
 def _summarise_intent_summary(event: dict[str, Any]) -> str:

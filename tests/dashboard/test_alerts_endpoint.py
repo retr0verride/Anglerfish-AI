@@ -305,3 +305,84 @@ def test_alerts_cluster_match_without_matches_renders_zero(
     body = client.get("/api/alerts?kind=cluster_match").json()
     assert len(body["items"]) == 1
     assert "0 similar session(s)" in body["items"][0]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 10 slice 10.4: persistence_attempt kind is live
+# ---------------------------------------------------------------------------
+
+
+def test_alerts_surfaces_persistence_attempt_event(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    """The Stage 10 bridge.persistence_attempt event surfaces with detail."""
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(10),
+                "event_type": "bridge.persistence_attempt",
+                "session_id": "abc-123",
+                "source_ip": "203.0.113.7",
+                "kind": "crontab",
+                "sub_key": None,
+                "payload": "0 * * * * /tmp/.x",
+                "source": "regex",
+                "created_at": _ts(10),
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=persistence_attempt").json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["kind"] == "persistence_attempt"
+    assert item["source_ip"] == "203.0.113.7"
+    assert "crontab" in item["detail"]
+    assert "0 * * * * /tmp/.x" in item["detail"]
+    assert "regex" in item["detail"]
+
+
+def test_alerts_renders_systemctl_persistence_attempt(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(5),
+                "event_type": "bridge.persistence_attempt",
+                "session_id": "abc-123",
+                "source_ip": "203.0.113.8",
+                "kind": "systemctl",
+                "sub_key": "backdoor.service",
+                "payload": "backdoor.service",
+                "source": "llm",
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=persistence_attempt").json()
+    detail = body["items"][0]["detail"]
+    assert "systemctl enabled backdoor.service" in detail
+    assert "(llm)" in detail
+
+
+def test_alerts_persistence_attempt_falls_back_to_detail_for_legacy_events(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    """Pre-Stage-10 audit lines (with a `detail` field) still render."""
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(5),
+                "event_type": "bridge.persistence_attempt",
+                "session_id": "abc-123",
+                "detail": "legacy detail string",
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=persistence_attempt").json()
+    assert body["items"][0]["detail"] == "legacy detail string"

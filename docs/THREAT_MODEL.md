@@ -235,6 +235,49 @@ Fingerprinter) go through types covered by the test suite.
 
 ---
 
+## Engaged persistence (Stage 10)
+
+Stage 10 is the first capability where Anglerfish generates
+attacker-facing falsehoods that could affect attacker decisions.
+The Stage 1-9 capabilities observed, scored, and clustered;
+Stage 10 actively lies. The feature is gated by
+``ANGLERFISH_BRIDGE__ENGAGED_PERSISTENCE`` (default ``false``)
+and the wizard does not prompt - operators must flip the
+switch explicitly post-install because the responsibility
+transfer is significant.
+
+When ``engaged_persistence`` is enabled, the bridge:
+
+* runs a regex + fast-tier-LLM classifier on every attacker
+  command, detecting installs of crontab entries, systemd
+  units, or SSH ``authorized_keys`` entries;
+* reflects each detected install back to the attacker in the
+  same session (via the prompt's "Installed persistence
+  state" block) and in subsequent sessions from the same
+  source IP (via the cross-session persistence overlay);
+* audits each install as ``bridge.persistence_attempt`` so the
+  dashboard tailer can persist the attacker's iteration
+  history.
+
+| Threat | Mitigation | Residual risk |
+|---|---|---|
+| **Honest visitors (researchers, students, accidental SSH attempts) see attacker-facing falsehoods** | ``engaged_persistence`` defaults to ``false``. Operators flip it explicitly post-install via env var or the Stage 3 ``POST /api/settings/bridge`` endpoint; the flip is audited as ``dashboard.settings_changed`` with the operator identity. No wizard prompt. | An operator who flips the switch is responsible for the deception scope. No technical mitigation distinguishes "real attacker" from "researcher who typed `crontab` to check a hunch". Documented: operators should choose deployment environments (bait NICs, internet-facing only) where false positives are vanishingly rare. |
+| **PersistenceClassifier LLM prompt is an injection surface** | Classifier system prompt is operator-controlled and contains no attacker-text placeholders (pinned by ``tests/llm_defense/test_persistence_classifier.py``). Attacker command rides as a structured user message; ``LLMClient.structured_chat`` enforces the strict JSON schema. A successful injection produces only malformed JSON (raises, caught + audited as ``bridge.persistence_classifier_error``) or a false-positive ``is_persistence=true`` (over-engages but cannot violate invariants). | An attacker who consistently fools the classifier into false-negatives bypasses Stage 10's value but does not bypass the Stage 4 threat scorer (which still flags the command via regex). Stage 1's defense layer continues to score the same command independently. |
+| **Persistence overlay grows unbounded** | Append-only ``fake_persistence_state`` table; rows survive session-delete intentionally. PersistenceEvent.payload is capped at 4 KB. Operators monitor row count via SQL in v1 (a future stage adds the admin tool). | A long-running honeypot accumulates persistence-state rows. Estimated 1-10 events per attacker; a 10k-attacker fleet ≈ 100k rows ≈ <50 MB at the payload cap. Acceptable; sqlite-vec-style pruning is a future-stage problem. |
+| **Cross-session attacker recognition leaks operator info** | The lookup key is ``source_ip``, never anything attacker-controlled. An attacker rotating IPs sees no carryover. An attacker on a static IP sees their own carryover only; no cross-attacker leakage (the lookup is ``WHERE source_ip = ?`` with no per-persona pool). | An attacker who can predict another attacker's source IP (rare; requires off-band knowledge) could probe for cross-attacker carryover. Schema-level mitigation: the lookup never returns rows from a different ``source_ip``. |
+| **An attacker fingerprints the engagement by installing contradictory entries** | The classifier extracts what the attacker typed; consistency between entries is the LLM's job. The bridge prompt instructs "honor the most recent install for the same sub_key". | LLM consistency is not perfect. A determined attacker could install two contradictory cron jobs at the same ``sub_key`` and notice the LLM picks one. Accepted residual; documented here. |
+
+The classifier path adds two audit event types
+(``bridge.persistence_attempt``,
+``bridge.persistence_classifier_error``) and surfaces them as
+the existing ``persistence_attempt`` alerts-panel kind
+(reserved at Stage 3, flipped live in Stage 10 slice 10.4).
+Cross-process flow stays
+``bridge audits → dashboard tailer persists`` matching the
+Stage 7 / 8 / 9 patterns - no new IPC.
+
+---
+
 ## Known limitations (acknowledged, not yet mitigated)
 
 1. **Audit log is not write-once at the FS layer.** A root attacker can `cat /dev/null > audit.jsonl`. Operators wanting WORM should layer `chattr +a` or write to an external WORM target.
