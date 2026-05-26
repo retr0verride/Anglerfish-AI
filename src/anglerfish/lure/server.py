@@ -867,17 +867,15 @@ class LureServer:
             await _process_handler(container, process)
 
         # asyncssh's server_version accepts only RFC 4253's
-        # `softwareversion` token, which forbids spaces. Strip both the
-        # SSH-2.0- prefix (asyncssh re-adds it) and the Debian comments
-        # suffix (cannot live in softwareversion). See TODO-4: the
-        # configured banner_debian_version is therefore inert today.
-        full_banner = (
-            f"SSH-2.0-OpenSSH_{self._config.banner_openssh_version} "
-            f"Debian-{self._config.banner_debian_version}"
-        )
+        # `softwareversion` token, which forbids spaces. The
+        # OpenSSH version is the only part that fits; the Debian
+        # suffix that the Stage 2 design contemplated was dropped
+        # (closed TODO-4) because asyncssh has no separate
+        # `comments` parameter and bypassing its banner generation
+        # would be a fragile monkey-patch.
         options_kwargs: dict[str, Any] = {
             "server_host_keys": ssh_keys,
-            "server_version": full_banner.split(" ", 1)[0].removeprefix("SSH-2.0-"),
+            "server_version": f"OpenSSH_{self._config.banner_openssh_version}",
             "process_factory": process_factory,
             "allow_scp": False,
             "x11_forwarding": False,

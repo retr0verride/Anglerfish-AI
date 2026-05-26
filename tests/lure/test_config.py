@@ -17,7 +17,6 @@ def test_defaults_load_clean() -> None:
     assert cfg.listen_port == 2222
     assert cfg.hostname == "srv-prod-01"
     assert cfg.banner_openssh_version == "9.2p1"
-    assert cfg.banner_debian_version == "2+deb12u3"
     assert cfg.max_command_chars == 1024
     assert cfg.history_window == 200
     assert cfg.per_ip_max_concurrent_connections == 3

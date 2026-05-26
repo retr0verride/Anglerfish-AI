@@ -13,7 +13,6 @@ Callers import directly from submodules:
 
     from anglerfish.lure.config import LureConfig
     from anglerfish.lure.session import LureSessionContext
-    from anglerfish.lure.banner import debian_banner
 """
 
 from __future__ import annotations

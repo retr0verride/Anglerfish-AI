@@ -78,63 +78,57 @@ Production deployments need a proper unit:
 Owner: TBD. Surfaced during the Cowrie removal; without this, every
 deployment that runs the bait NIC needs a hand-rolled systemd unit.
 
-## TODO-4: lure SSH banner — Debian suffix never reaches the wire
+## TODO-4: lure SSH banner — Debian suffix never reaches the wire (closed in audit(stage9) sweep)
 
-`src/anglerfish/lure/banner.py` exports `debian_banner()` which
-builds a full SSH identification string of the form
+`src/anglerfish/lure/banner.py` exported `debian_banner()` which
+built a full SSH identification string of the form
 ``SSH-2.0-OpenSSH_X.Yp1 Debian-Z+debWuV``. The Stage 2 design intent
 (and the `banner_openssh_version` + `banner_debian_version` config
-fields) is that the lure emits this full banner to attackers so the
-fingerprint matches a recent Debian stable.
+fields) was that the lure emit this full banner so the fingerprint
+matched a recent Debian stable.
 
-The actual call site at `src/anglerfish/lure/server.py:761-766`
-builds the banner inline and then strips both the ``SSH-2.0-`` prefix
+The actual call site stripped both the ``SSH-2.0-`` prefix
 (asyncssh prepends it automatically) AND the ``Debian-...`` suffix
-via ``.split(" ", 1)[0]``. The split exists because asyncssh's
+via ``.split(" ", 1)[0]``. The split existed because asyncssh's
 ``server_version`` parameter accepts only RFC 4253's
 ``softwareversion`` token, which forbids spaces. The Debian suffix
-would have to go in the optional ``comments`` field of the SSH
+would have had to go in the optional ``comments`` field of the SSH
 identification line, which asyncssh does not expose as a separate
 parameter.
 
-Net: ``banner_debian_version`` is configured but never reaches the
-wire, the `debian_banner()` helper is effectively dead code (Stage
-4.2 audit caught it), and attackers see ``OpenSSH_9.2p1`` rather than
-the intended ``OpenSSH_9.2p1 Debian-2+deb12u3``.
+**Resolution**: chose the third option from the original three —
+accept the limitation, delete the helper, drop the
+``banner_debian_version`` config field, and update THREAT_MODEL to
+reflect that only the OpenSSH version varies. Patching asyncssh
+upstream or monkey-patching its banner generation were rejected as
+fragile / upstream-coordination heavy for a fingerprint that real
+attackers do not weigh heavily.
 
-Three possible fixes:
+Files touched: `src/anglerfish/lure/banner.py` (deleted),
+`tests/lure/test_banner.py` (deleted),
+`src/anglerfish/lure/config.py` (dropped field),
+`src/anglerfish/lure/server.py` (simplified banner construction),
+`src/anglerfish/lure/__init__.py` (dropped re-export hint),
+`docs/THREAT_MODEL.md` (updated fingerprint row).
 
-- Patch asyncssh (upstream PR or local monkey-patch) so it accepts
-  a full identification line including comments. Most correct but
-  upstream-coordination heavy.
-- Bypass asyncssh's banner generation entirely by writing the
-  identification line ourselves on the socket before handing off to
-  asyncssh. Possible but fragile.
-- Accept the limitation, delete the helper, drop the
-  ``banner_debian_version`` config field, and update the wizard +
-  THREAT_MODEL to reflect that only the OpenSSH version varies.
+## TODO-5: per-IP limiter explicit boundary tests (closed in audit(stage9) sweep)
 
-Owner: TBD. Surfaced during the Stage 5 retroactive audit sweep of
-the lure subsystem. Behaviour-changing fix, not a hygiene cleanup.
+`tests/lure/test_per_ip_limiter.py` lacked AUDIT.md's "boundary
+conditions tested" coverage. Three test cases added in the closing
+commit pin the documented behaviour:
 
-## TODO-5: per-IP limiter explicit boundary tests
+- `test_empty_source_ip_treated_as_valid_distinct_key`: empty +
+  whitespace IPs are separate buckets; the limiter does not (and
+  should not) special-case them.
+- `test_exact_edge_transition_at_max_concurrent`: the reject lands
+  precisely at `concurrent == max_concurrent` (the predicate is
+  `>= max` BEFORE the bump, so max → max + 1 admits would fire if
+  the check moved by one).
+- `test_same_tick_rapid_fire_does_not_double_count`: N admits at
+  identical `now` count exactly N against the rpm window; the
+  N+1th rejects on per_ip_rpm.
 
-`tests/lure/test_per_ip_limiter.py` covers the limiter's general
-behaviour but lacks AUDIT.md's "boundary conditions tested" coverage:
-
-- Empty / whitespace-only ``source_ip`` (the limiter currently
-  treats it as a valid distinct key; behaviour is undefined but the
-  test suite never exercises it).
-- Exact-edge transition: ``concurrent == max_concurrent - 1 →
-  max_concurrent`` (the existing tests jump from "well under" to
-  "well over").
-- Same-timestamp rapid-fire admit/reject within one tick of
-  ``time.monotonic()`` — verifies the per-minute window math does
-  not double-count when several admits land in the same epoch
-  microsecond.
-
-Surfaced during the Stage 5 retroactive audit sweep of the lure
-subsystem. Test-only addition; no production code touched. Owner: TBD.
+Test-only addition; no production code touched.
 
 ## TODO-6: `_scalar` helpers silently coerce non-numeric to 0
 
@@ -260,3 +254,36 @@ Fixes to consider:
   ``ollama.max_response_chars``.
 
 Surfaced during the Stage 5 retroactive audit sweep. Owner: TBD.
+
+## Deferred until the pre-deploy sweep
+
+TODO-2, TODO-3, TODO-6, TODO-7, TODO-8, TODO-9 are explicitly
+deferred to a dedicated sweep that runs before the first
+production deployment (Stage 10/11 timeframe at earliest). The
+audit(stage9) sweep closed TODO-4 + TODO-5 only.
+
+Rationale per category:
+
+- **Deploy blockers (TODO-2, TODO-3)**: the systemd unit work
+  wants validation against a real deployment so we do not do it
+  twice. The dashboard unit factory wrapper (TODO-2) is trivial
+  in isolation; the lure systemd unit (TODO-3) needs ISO-hook
+  plumbing + bait-NIC env wiring that is easier to get right
+  when there is a live target to test against.
+
+- **Behavior changes (TODO-6, TODO-7)**: the `_scalar` typed-
+  exception swap and the `WizardAnswers` SecretStr upgrade
+  both have non-trivial regression surface for small benefit.
+  They deserve their own focused commit when an operator hits
+  the specific failure mode they would prevent (silent
+  schema-changed COUNT(*) returning 0; an audit log surfacing
+  a wizard.json password hash in a traceback).
+
+- **Robustness (TODO-8, TODO-9)**: bridge session/budget leaks
+  on missed DELETE + per-chunk size cap on streaming. Both are
+  scale problems for a pre-traffic tool. The rate-limiter +
+  lure keepalive bound the leak in the hot path today; the
+  defense layer's overall-response cap bounds the chunk
+  oversize in the buffered path. Address when production
+  traffic shape forces the issue or when the deploy-readiness
+  sweep audits the failure-mode surface end-to-end.
