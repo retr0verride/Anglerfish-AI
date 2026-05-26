@@ -134,6 +134,37 @@ class WizardAnswers(BaseModel):
         max_length=64,
     )
 
+    # Stage 11: decoy data poisoning. Opt-in via wizard. The doc
+    # acknowledgement gate fires before the URL prompt; declining
+    # leaves honeytokens disabled (the runtime env-file emits no
+    # ANGLERFISH_HONEYTOKENS__* lines).
+    honeytokens_enabled: bool = Field(
+        default=False,
+        description=(
+            "Stage 11 opt-in. False ⇒ no honeytokens generated or "
+            "distributed; the bridge ignores the honeytoken placement "
+            "service. True requires honeytokens_callback_base_url to "
+            "be set; the wizard enforces this before writing the env "
+            "file."
+        ),
+    )
+    honeytokens_callback_base_url: HttpUrl | None = Field(
+        default=None,
+        description=(
+            "Public-reachable HTTPS URL the operator binds the Stage 11 "
+            "callback receiver at. Embedded in every generated token; "
+            "operators front it with their own reverse proxy."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _honeytokens_need_callback_url(self) -> Self:
+        if self.honeytokens_enabled and self.honeytokens_callback_base_url is None:
+            raise ValueError(
+                "honeytokens_enabled=True requires honeytokens_callback_base_url",
+            )
+        return self
+
 
 class WizardOutput(BaseModel):
     """Outcome of a wizard run — file paths and metadata for audit."""

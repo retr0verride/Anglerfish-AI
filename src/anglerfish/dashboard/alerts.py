@@ -51,16 +51,24 @@ _ALERT_EVENT_TYPES: dict[str, str] = {
     # is reserved here so the alerts endpoint surfaces it the moment
     # the bridge starts emitting it, with no dashboard change.
     "bridge.persistence_attempt": "persistence_attempt",
+    # Stage 11 slice 11.4: the bundled callback receiver writes
+    # bridge.honeytoken_callback into its own audit log; operators
+    # ship those lines back into the main audit log via their
+    # existing forwarder (rsync, Splunk, syslog). The alerts panel
+    # surfaces them the moment they land. The previous
+    # honeytoken_callback_hits:available=false stub flipped here in
+    # the same commit.
+    "bridge.honeytoken_callback": "honeytoken_callback_hit",
 }
 
 ALERT_KINDS: frozenset[str] = frozenset(_ALERT_EVENT_TYPES.values())
 
-# Future-stage alert categories. The endpoint always returns this
-# block so the SPA can grey-disable buttons without round-tripping
-# to /api/stage/*.
-ALERT_STUBS: dict[str, dict[str, Any]] = {
-    "honeytoken_callback_hits": {"available": False, "stage": 11},
-}
+# Future-stage alert categories. Empty after Stage 11 slice 11.4
+# flipped the honeytoken_callback_hits stub live; kept as an
+# explicit dict so the response shape is stable across stages (the
+# SPA reads `stubs` unconditionally) and future stages can register
+# new placeholders without churning the endpoint contract.
+ALERT_STUBS: dict[str, dict[str, Any]] = {}
 
 
 def list_alerts(
@@ -223,6 +231,27 @@ def _summarise_intent_summary(event: dict[str, Any]) -> str:
     return f"{profile} / {confidence}"
 
 
+def _summarise_honeytoken_callback(event: dict[str, Any]) -> str:
+    """Render a bridge.honeytoken_callback event for the alerts panel.
+
+    The callback receiver emits the event with ``token_id``,
+    ``kind`` (``aws`` / ``ssh_key``), ``registered_source_ip``
+    (the IP that exfiltrated the bait), ``callback_source_ip``
+    (the IP that *triggered* the callback - usually the
+    attacker's exfil node), ``user_agent``, and ``request_path``.
+    The renderer surfaces both IPs because the operator value is
+    the cross-reference: ``aws callback from 198.51.100.42 (orig
+    203.0.113.7)`` tells them the same actor came back from a
+    different network.
+    """
+    kind = event.get("kind", "unknown")
+    callback_ip = event.get("callback_source_ip", "unknown")
+    registered_ip = event.get("registered_source_ip")
+    if isinstance(registered_ip, str) and registered_ip:
+        return f"{kind} callback from {callback_ip} (orig {registered_ip})"
+    return f"{kind} callback from {callback_ip}"
+
+
 def _summarise_cluster_match(event: dict[str, Any]) -> str:
     matches = event.get("matches")
     count = len(matches) if isinstance(matches, list) else 0
@@ -252,6 +281,7 @@ _SUMMARISERS: dict[str, Any] = {
     "persistence_attempt": _summarise_persistence_attempt,
     "intent_summary": _summarise_intent_summary,
     "cluster_match": _summarise_cluster_match,
+    "honeytoken_callback_hit": _summarise_honeytoken_callback,
 }
 
 

@@ -11,6 +11,7 @@ balancers and service probes), and ``/api/login``/``/api/logout``
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from anglerfish import __version__
 from anglerfish.audit import AuditLog
 from anglerfish.dashboard.alerts import ALERT_KINDS, ALERT_STUBS, list_alerts
+from anglerfish.dashboard.audit_reader import iter_events_in_range, parse_event_timestamp
 from anglerfish.dashboard.auth import is_open_mode, require_auth
 from anglerfish.dashboard.csrf import require_csrf
 from anglerfish.dashboard.export import (
@@ -341,6 +343,82 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             "source_ip": source_ip,
             "count": len(events),
             "items": [event.model_dump(mode="json") for event in events],
+        }
+
+    # Stage 11 slice 11.4: honeytoken registry + callback views.
+    # /state mirrors the slice 10.4 persistence/state shape (source-
+    # IP-scoped registry rows, oldest first). /callbacks reads the
+    # audit log directly so the operator-shipped callback-receiver
+    # lines surface here without an SQL store round-trip.
+
+    @router.get(
+        "/api/honeytokens/state",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_honeytokens_state(
+        source_ip: str = Query(min_length=1, max_length=64),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        tokens = await state.list_honeytokens_for_source_ip(source_ip)
+        return {
+            "source_ip": source_ip,
+            "count": len(tokens),
+            "items": [t.model_dump(mode="json") for t in tokens],
+        }
+
+    @router.get(
+        "/api/honeytokens/callbacks",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_honeytokens_callbacks(
+        since: str | None = Query(default=None, max_length=64),
+        limit: int = Query(default=100, ge=1, le=1000),
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return recent bridge.honeytoken_callback events, newest first.
+
+        ``since`` is an ISO-8601 timestamp; defaults to the unix
+        epoch (returns the full callback history capped at
+        ``limit``). The callback receiver writes its own audit log;
+        operators ship that file back into the main audit log via
+        their existing forwarder, so this endpoint reads whichever
+        events have actually landed on disk.
+        """
+        try:
+            start = (
+                datetime.fromisoformat(since)
+                if since is not None
+                else datetime.fromtimestamp(0, tz=UTC)
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"invalid since timestamp: {since!r}",
+            ) from exc
+        end = datetime.now(tz=UTC)
+        items: list[dict[str, Any]] = []
+        for event in iter_events_in_range(audit.path, start=start, end=end):
+            if event.get("event_type") != "bridge.honeytoken_callback":
+                continue
+            ts = parse_event_timestamp(event)
+            items.append(
+                {
+                    "ts": event.get("ts"),
+                    "ts_ms": int(ts.timestamp() * 1000) if ts is not None else None,
+                    "token_id": event.get("token_id"),
+                    "kind": event.get("kind"),
+                    "registered_source_ip": event.get("registered_source_ip"),
+                    "callback_source_ip": event.get("callback_source_ip"),
+                    "user_agent": event.get("user_agent"),
+                    "request_path": event.get("request_path"),
+                },
+            )
+            if len(items) >= limit:
+                break
+        return {
+            "since": start.isoformat(),
+            "count": len(items),
+            "items": items,
         }
 
     @router.get("/api/commands", dependencies=[Depends(require_auth)])

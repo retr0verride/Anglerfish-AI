@@ -278,6 +278,61 @@ Stage 7 / 8 / 9 patterns - no new IPC.
 
 ---
 
+## Decoy data poisoning (Stage 11)
+
+Stage 11 distributes traceable beacons (AWS access keys, Ed25519
+SSH keypairs) in the lure's fake filesystem. An attacker who
+exfiltrates ``/root/.aws/credentials`` and tries the key against
+a real AWS region triggers an HTTPS request to the operator's
+callback receiver; the receiver logs the hit and the operator
+correlates the access-key-ID back to the registered source IP.
+
+This is the largest threat-model delta on the roadmap. The
+feature is gated by ``ANGLERFISH_HONEYTOKENS__ENABLED`` (default
+``false``) AND requires the wizard's heavy ``HONEYTOKENS_TERMS``
+acknowledgement (the operator confirms they read
+``docs/HONEYTOKENS.md`` in full before enabling). Operators flip
+at runtime via the env var or the Stage 3 ``POST
+/api/settings/features`` endpoint; the flip is audited as
+``dashboard.settings_changed`` with the operator identity.
+
+When ``honeytokens.enabled`` is true, the bridge:
+
+* registers a small set of operator-defined static-base tokens
+  at startup that ship in every persona's ``fakefs_overlay``;
+* generates a fresh AWS + SSH token pair for each source IP that
+  crosses ``honeytokens.placement_threshold`` (default 50) and
+  ships them in the NEXT session's overlay from that IP;
+* audits each registration as ``bridge.honeytoken_placed``.
+
+The bundled callback receiver (separate process, separate audit
+log, public-reachable URL):
+
+* serves ``GET /cb/{token_id}`` with a 403 AWS-XML body matching
+  the wire shape of a real ``InvalidAccessKeyId`` error;
+* audits each hit as ``bridge.honeytoken_callback`` with the
+  registered source IP, the callback source IP, the User-Agent,
+  and the request path.
+
+| Threat | Mitigation | Residual risk |
+|---|---|---|
+| **Honest visitor exfiltrates a file from a misconfigured honeypot, the callback fires from their machine, operator misreads as malicious actor** | ``honeytokens.enabled`` defaults to ``false``. Wizard explicitly requires the operator to confirm they read ``docs/HONEYTOKENS.md`` (which explains exactly this risk) before enabling - the heaviest install gate any stage uses. The callback audit event carries User-Agent + the callback source IP so operators can distinguish ``aws-cli/2.x`` (likely attacker tool) from ``curl/7.x`` manually pasted (likely researcher). | No technical means distinguishes "real attacker" from "researcher who exfiltrated a file from a bait NIC they thought was real". Operators are responsible for deployment context (bait NICs, internet-facing only). ``docs/HONEYTOKENS.md`` is the load-bearing doc. |
+| **Attacker recognises the AKIA prefix as a CanaryToken-style honeypot** | Tokens are generated with random 16-char base32 IDs that look syntactically valid; the callback URL is operator-chosen (not ``canarytokens.org``). An attacker who knows about the canary-token pattern can identify the bait IS a honeytoken; but they still leak the source-IP correlation when they probe the callback URL to confirm. | Determined attackers DO recognise the pattern + avoid touching the file. Documented residual; the value is the long-tail less-careful actors. |
+| **An attacker controls the network path between the callback receiver and the operator** | The wizard rejects non-``https://`` callback URLs (Stage 11 slice 11.4 enforces the scheme check before writing the env file); operators front the receiver with their own TLS-terminating reverse proxy. The receiver's audit log writes locally; ship-back to the main Anglerfish host uses whatever audit-log forwarding the operator already runs. | Operators who manually bypass the wizard scheme check and run the receiver over plaintext HTTP leak callback hits + attacker User-Agents to network observers. Documented in ``HONEYTOKENS.md``. |
+| **Registry growth unbounded** | Per-session tokens are gated by ``honeytokens.placement_threshold`` (default 50). At a 10k-attacker fleet over a year, expect O(10k) registry rows total (one per high-confidence session); each row is < 10 KB. Operators monitor row count via SQL in v1; a future admin tool adds bulk-cleanup. | A long-running honeypot accumulates honeytokens. Estimated <100 MB at a year of moderate traffic. Acceptable. |
+| **Callback receiver is itself a service the attacker can attack** | Minimal FastAPI app with two GET endpoints (``/cb/{token_id}`` + ``/health``). No persistent state; no authentication surface; bounded request rate is the operator's reverse-proxy responsibility. The receiver process runs unprivileged under systemd; reads the sessions DB read-only; writes only its own audit log. | A 0-day in FastAPI / asyncio / Python's HTTP stack could land remote code execution on the receiver host. Operators run the receiver on a host with no other sensitive workload; isolated bait infrastructure. |
+
+The callback receiver adds one new audit event type
+(``bridge.honeytoken_callback``) and surfaces it as the
+``honeytoken_callback_hit`` alerts-panel kind (reserved at
+Stage 3, flipped live in Stage 11 slice 11.4). Cross-process
+flow stays ``receiver audits → operator ships log → dashboard
+tailer surfaces`` matching the Stage 4.2 / 7 / 8 / 9 / 10
+patterns - no new IPC, no new authentication surface between
+the bridge and the receiver.
+
+---
+
 ## Known limitations (acknowledged, not yet mitigated)
 
 1. **Audit log is not write-once at the FS layer.** A root attacker can `cat /dev/null > audit.jsonl`. Operators wanting WORM should layer `chattr +a` or write to an external WORM target.

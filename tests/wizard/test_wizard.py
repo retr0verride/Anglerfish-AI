@@ -250,7 +250,8 @@ def _make_prompter(
 
 
 def test_prompt_for_answers_happy_path_dhcp() -> None:
-    confirms = [True, True, True]
+    # confirms: terms, bait DHCP, service DHCP, honeytokens-decline.
+    confirms = [True, True, True, False]
     prompts = [
         "anglerfish-vm",  # vm_hostname
         "eth0",  # bait_interface
@@ -280,7 +281,8 @@ def test_prompt_for_answers_happy_path_dhcp() -> None:
 
 
 def test_prompt_for_answers_static_network() -> None:
-    confirms = [True, False, True]
+    # confirms: terms, bait DHCP=False, service DHCP=True, honeytokens-decline.
+    confirms = [True, False, True, False]
     prompts = [
         "anglerfish-vm",
         "eth0",
@@ -421,7 +423,8 @@ def test_prompt_for_answers_static_invalid_gateway_raises() -> None:
 
 
 def test_prompt_for_answers_remote_ollama_with_trusted_host() -> None:
-    confirms = [True, True, True]
+    # confirms: terms, bait DHCP, service DHCP, honeytokens-decline.
+    confirms = [True, True, True, False]
     prompts = [
         "anglerfish-vm",
         "eth0",

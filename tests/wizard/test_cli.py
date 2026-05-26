@@ -34,6 +34,7 @@ _HAPPY_PATH_INPUTS = (
             "root",  # fake user
             "",  # webhook empty
             "",  # MaxMind licence key empty
+            "n",  # honeytokens decline (Stage 11)
         ],
     )
     + "\n"

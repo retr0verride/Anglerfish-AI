@@ -54,11 +54,17 @@ lure_app = typer.Typer(
     help="Native SSH lure commands.",
     no_args_is_help=True,
 )
+callback_app = typer.Typer(
+    name="callback",
+    help="Stage 11 honeytoken callback receiver.",
+    no_args_is_help=True,
+)
 app.add_typer(config_app)
 app.add_typer(bridge_app)
 app.add_typer(credentials_app)
 app.add_typer(geo_app)
 app.add_typer(lure_app)
+app.add_typer(callback_app)
 
 
 def _version_callback(value: bool) -> None:
@@ -433,6 +439,58 @@ def geo_update() -> None:
     AuditLog(settings.audit.log_path).record(
         "geo.update_succeeded",
         editions=[r.edition for r in results],
+    )
+
+
+@callback_app.command("serve")
+def callback_serve(
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Interface to bind the callback receiver HTTP server to."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="TCP port for the callback receiver HTTP server."),
+    ] = 8443,
+) -> None:  # pragma: no cover - exercised in integration
+    """Run the Stage 11 honeytoken callback receiver.
+
+    The operator deploys this behind their own reverse proxy on a
+    publicly-reachable URL (the one embedded in generated tokens
+    via ``honeytokens.callback_base_url``). Reads the shared
+    sessions DB read-only; writes its own audit log which the
+    operator ships back to the main Anglerfish host via their
+    existing forwarder.
+    """
+    import uvicorn
+
+    from anglerfish.callback import create_callback_app
+
+    console = Console()
+    try:
+        settings = load_settings()
+    except ValidationError as exc:
+        console.print(Panel(str(exc), title="[red]Configuration error[/red]"))
+        raise typer.Exit(code=2) from exc
+
+    if not settings.honeytokens.enabled:
+        console.print(
+            Panel(
+                "honeytokens.enabled=False; the receiver would log "
+                "every callback as a miss. Enable Stage 11 in the "
+                "wizard (or via ANGLERFISH_HONEYTOKENS__ENABLED=true) "
+                "before starting the receiver.",
+                title="[yellow]Honeytokens disabled[/yellow]",
+            ),
+        )
+        raise typer.Exit(code=2)
+
+    application = create_callback_app(settings)
+    uvicorn.run(
+        application,
+        host=host,
+        port=port,
+        log_level=settings.log_level.value.lower(),
     )
 
 

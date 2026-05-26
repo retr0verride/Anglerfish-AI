@@ -144,6 +144,22 @@ def render_env(
         _line("ANGLERFISH_GEO__ASN_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-ASN.mmdb"),
         _line("ANGLERFISH_GEO__MAXMIND_LICENSE_KEY", answers.maxmind_license_key),
         "",
+        "# --- Honeytokens (Stage 11 decoy data poisoning) -------------------------",
+        # Both lines omitted from the env file when the wizard left
+        # honeytokens_enabled=False; the bridge picks up the default
+        # False from the Pydantic settings model and skips the
+        # placement service entirely.
+        _line(
+            "ANGLERFISH_HONEYTOKENS__ENABLED",
+            "true" if answers.honeytokens_enabled else None,
+        ),
+        _line(
+            "ANGLERFISH_HONEYTOKENS__CALLBACK_BASE_URL",
+            str(answers.honeytokens_callback_base_url)
+            if answers.honeytokens_callback_base_url is not None
+            else None,
+        ),
+        "",
     ]
     return "\n".join(_iter_lines(lines))
 

@@ -32,6 +32,7 @@ from pydantic import HttpUrl, ValidationError
 from anglerfish.audit import AuditLog
 from anglerfish.dashboard.auth import hash_password
 from anglerfish.wizard.answers import NetworkConfig, WizardAnswers, WizardOutput
+from anglerfish.wizard.honeytokens import HONEYTOKENS_TERMS
 from anglerfish.wizard.network import list_interfaces
 from anglerfish.wizard.persistence import save_answers
 from anglerfish.wizard.preflight import PreflightChecker
@@ -413,6 +414,17 @@ def prompt_for_answers(
     ).strip()
     maxmind_license_key: str | None = maxmind_key_raw or None
 
+    # Stage 11: decoy data poisoning. The doc acknowledgement
+    # screen + HTTPS-URL prompt. Defaults to disabled; the
+    # operator must opt in by answering yes to the heavy gate AND
+    # supply a callback receiver URL.
+    honeytokens_enabled, honeytokens_callback_url = _prompt_for_honeytokens(
+        prompt=prompt,
+        confirm=confirm,
+        output=output,
+        defaults=defaults,
+    )
+
     return WizardAnswers(
         terms_acknowledged=True,
         vm_hostname=vm_hostname,
@@ -431,7 +443,64 @@ def prompt_for_answers(
         maxmind_license_key=maxmind_license_key,
         fake_hostname=fake_hostname,
         fake_username=fake_username,
+        honeytokens_enabled=honeytokens_enabled,
+        honeytokens_callback_base_url=honeytokens_callback_url,
     )
+
+
+def _prompt_for_honeytokens(
+    *,
+    prompt: PromptFn,
+    confirm: ConfirmFn,
+    output: Callable[[str], None],
+    defaults: WizardAnswers | None,
+) -> tuple[bool, HttpUrl | None]:
+    """Display HONEYTOKENS_TERMS + collect enable/URL answers.
+
+    The acknowledgement defaults to False; a previously-acknowledged
+    install (defaults.honeytokens_enabled=True) still re-prompts so
+    the operator re-affirms on every wizard run. The URL is only
+    asked when the operator says yes; declining short-circuits to
+    (False, None) and the env file omits both ANGLERFISH_HONEYTOKENS__*
+    lines.
+
+    Per the locked decision the prompt asks for HTTPS; an
+    ``http://`` URL is rejected at validation time (Pydantic
+    ``HttpUrl`` accepts both, so we enforce the scheme here so
+    callback hits cannot leak attacker User-Agent + IP to
+    plaintext-listening network observers).
+    """
+    output("\n" + HONEYTOKENS_TERMS + "\n")
+    default_enabled = defaults is not None and defaults.honeytokens_enabled
+    accepted = confirm(
+        "I have read docs/HONEYTOKENS.md and want to enable honeytokens",
+        default_enabled,
+    )
+    if not accepted:
+        return False, None
+
+    default_url = (
+        str(defaults.honeytokens_callback_base_url)
+        if defaults is not None and defaults.honeytokens_callback_base_url is not None
+        else ""
+    )
+    url_str = prompt(
+        "Honeytoken callback receiver URL (must be https://...)",
+        default_url,
+    ).strip()
+    if not url_str:
+        raise ValueError(
+            "honeytokens enabled but no callback_base_url supplied; "
+            "set a URL or decline the acknowledgement above to disable",
+        )
+    if not url_str.lower().startswith("https://"):  # devskim: ignore DS137138
+        raise ValueError(
+            f"honeytoken callback URL must use https:// scheme; got {url_str!r}",
+        )
+    try:
+        return True, HttpUrl(url_str)
+    except ValidationError as exc:
+        raise ValueError(f"invalid honeytoken callback URL: {url_str!r}") from exc
 
 
 def _prompt_network(

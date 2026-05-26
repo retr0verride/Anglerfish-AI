@@ -53,13 +53,16 @@ def test_alerts_endpoint_returns_empty_page_with_stubs_when_no_events(
     assert body["items"] == []
     assert body["next_cursor"] is None
     stubs = body["stubs"]
-    assert stubs["honeytoken_callback_hits"]["available"] is False
-    # intent_summary_alerts flipped to live in Stage 7 slice 4 and
-    # behavioral_cluster_matches flipped to live in Stage 8 slice 5;
-    # both are absent from the stub list (operators see real events
-    # at /api/alerts?kind=intent_summary / cluster_match).
+    # intent_summary_alerts flipped to live in Stage 7 slice 4,
+    # behavioral_cluster_matches flipped in Stage 8 slice 5, and
+    # honeytoken_callback_hits flipped in Stage 11 slice 11.4; all
+    # three are absent from the stub list. The stubs dict is now
+    # empty, but the SPA still reads it unconditionally so the
+    # shape is preserved.
+    assert stubs == {}
     assert "intent_summary_alerts" not in stubs
     assert "behavioral_cluster_matches" not in stubs
+    assert "honeytoken_callback_hits" not in stubs
 
 
 # ---------------------------------------------------------------------------
@@ -386,3 +389,63 @@ def test_alerts_persistence_attempt_falls_back_to_detail_for_legacy_events(
     )
     body = client.get("/api/alerts?kind=persistence_attempt").json()
     assert body["items"][0]["detail"] == "legacy detail string"
+
+
+# ---------------------------------------------------------------------------
+# Stage 11 slice 11.4: honeytoken_callback_hit kind is live
+# ---------------------------------------------------------------------------
+
+
+def test_alerts_surfaces_honeytoken_callback_event(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    """A bridge.honeytoken_callback line surfaces with both IPs in detail."""
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(10),
+                "event_type": "bridge.honeytoken_callback",
+                "token_id": "ABCDEFGHIJKLMNOP",
+                "kind": "aws",
+                "registered_source_ip": "203.0.113.7",
+                "callback_source_ip": "198.51.100.42",
+                "user_agent": "aws-cli/2.13",
+                "request_path": "/cb/ABCDEFGHIJKLMNOP",
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=honeytoken_callback_hit").json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["kind"] == "honeytoken_callback_hit"
+    detail = item["detail"]
+    assert "aws callback from 198.51.100.42" in detail
+    assert "orig 203.0.113.7" in detail
+
+
+def test_alerts_honeytoken_callback_omits_orig_when_static_base(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    """Static-base tokens carry registered_source_ip=None; the renderer omits 'orig'."""
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(5),
+                "event_type": "bridge.honeytoken_callback",
+                "token_id": "ZZZZZZZZZZZZZZZZ",
+                "kind": "ssh_key",
+                "registered_source_ip": None,
+                "callback_source_ip": "192.0.2.1",
+                "user_agent": "curl/7.88",
+                "request_path": "/cb/ZZZZZZZZZZZZZZZZ",
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=honeytoken_callback_hit").json()
+    detail = body["items"][0]["detail"]
+    assert "ssh_key callback from 192.0.2.1" in detail
+    assert "orig" not in detail
