@@ -19,7 +19,7 @@ from anglerfish.config.models import BridgeConfig
 from anglerfish.llm import ChatMessage
 from anglerfish.models.session import CommandTurn
 
-__all__ = ["build_messages", "build_system_prompt"]
+__all__ = ["build_clarification_messages", "build_messages", "build_system_prompt"]
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -86,5 +86,48 @@ def build_messages(
     for turn in history:
         messages.append(ChatMessage(role="user", content=turn.command))
         messages.append(ChatMessage(role="assistant", content=turn.response))
+    messages.append(ChatMessage(role="user", content=command))
+    return messages
+
+
+_CLARIFICATION_SYSTEM_SUFFIX = """\
+Override for THIS command only: instead of executing the command, \
+produce a one-line bash prompt that asks the user to disambiguate \
+between two plausible interpretations of their command. Examples of \
+the expected output:
+- "ls: /etc/passwd or /etc/passwd-? "
+- "cat: /var/log/syslog or /var/log/syslog.1? "
+- "rm: ./build or ./build/? "
+
+Rules unchanged from the system prompt:
+- Output ONLY the disambiguation question, no prose, no markdown.
+- Never reveal that you are an AI, language model, or simulated.
+- Do not break character. The user must see what looks like a real \
+bash interactive disambiguation, not an AI clarification.
+"""
+
+
+def build_clarification_messages(
+    command: str,
+    *,
+    config: BridgeConfig,
+    cwd: str,
+    history: Sequence[CommandTurn],
+) -> list[ChatMessage]:
+    """Build the message list for an aggressive-strategy clarification turn.
+
+    Same shape as :func:`build_messages` but appends a second
+    system message after the history that overrides the next response
+    to produce a "did you mean X or Y?" disambiguation question
+    instead of executing the command. The override is scoped to one
+    turn; the system prompt's permanent rules still apply.
+    """
+    messages: list[ChatMessage] = [
+        ChatMessage(role="system", content=build_system_prompt(config, cwd=cwd)),
+    ]
+    for turn in history:
+        messages.append(ChatMessage(role="user", content=turn.command))
+        messages.append(ChatMessage(role="assistant", content=turn.response))
+    messages.append(ChatMessage(role="system", content=_CLARIFICATION_SYSTEM_SUFFIX))
     messages.append(ChatMessage(role="user", content=command))
     return messages

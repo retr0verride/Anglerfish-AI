@@ -60,6 +60,13 @@ class AggressiveStrategy(WastingStrategyBase):
 
     async def pre_command(self, ctx: StrategyContext) -> StrategyPreEffect:
         rng = _rng_for(ctx)
+        # Clarification injection first (slice 6.4): if the dice hit
+        # AND we have not just clarified, the bridge swaps in the
+        # clarification prompt template for this command. Pre-message
+        # and clarification are mutually exclusive: a clarification
+        # already pads the chain by an extra round-trip.
+        if self._should_inject_clarification(ctx, rng):
+            return StrategyPreEffect(inject_clarification=True)
         if rng.random() >= _PRE_MESSAGE_RATE:
             return StrategyPreEffect()
         message = rng.choice(_PRE_MESSAGES)
@@ -68,6 +75,25 @@ class AggressiveStrategy(WastingStrategyBase):
             pre_message_delay_ms=_PRE_MESSAGE_DELAY_MS,
             pre_delay_ms=_PRE_DELAY_MS,
         )
+
+    @staticmethod
+    def _should_inject_clarification(
+        ctx: StrategyContext,
+        rng: random.Random,
+    ) -> bool:
+        """Return True if this command should produce a clarification turn.
+
+        Honours the one-per-chain invariant: if the prior command in
+        this session was a clarification, this command always runs
+        normally regardless of the dice.
+        """
+        prior = ctx.last_clarification_command_count
+        if prior is not None and prior == ctx.command_count - 1:
+            return False
+        rate = ctx.bridge_config.aggressive_clarification_rate
+        if rate <= 0.0:
+            return False
+        return rng.random() < rate
 
     async def between_chunks(
         self,

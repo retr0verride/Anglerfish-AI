@@ -1206,3 +1206,134 @@ async def test_handle_command_stream_off_strategy_emits_no_wasting_audit(
         await service.aclose()
     wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
     assert wasting_events == []
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 slice 4: aggressive clarification injection
+# ---------------------------------------------------------------------------
+
+
+async def test_clarification_injection_uses_clarification_prompt(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """Aggressive + dice-hit causes the LLM to receive the clarification suffix."""
+    import json as _json
+
+    seen_payloads: list[dict[str, object]] = []
+
+    body = (
+        _json.dumps({"message": {"content": "ls: /etc/passwd or /etc/passwd-? "}, "done": False})
+        + "\n"
+        + _json.dumps({"done": True, "prompt_eval_count": 1, "eval_count": 2})
+        + "\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(_json.loads(request.read()))
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    # Force the clarification by setting the rate to 1.0 - every command
+    # injects. Tests of the probabilistic gating live in the strategy
+    # tests; this test exercises the bridge wiring.
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        bridge=BridgeConfig(
+            wasting_strategy="aggressive",
+            aggressive_clarification_rate=1.0,
+        ),
+    )
+    audit = _MockAudit()
+
+    async def fake_sleep(_seconds: float) -> None:
+        return
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+        sleep=fake_sleep,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        _ = [c async for c in service.handle_command_stream(session, "ls /etc")]
+    finally:
+        await service.aclose()
+
+    # The clarification system message was injected into the prompt.
+    assert len(seen_payloads) == 1
+    messages = seen_payloads[0]["messages"]
+    assert isinstance(messages, list)
+    system_contents = [m["content"] for m in messages if m["role"] == "system"]
+    assert any("disambiguate" in c for c in system_contents)
+
+    # Audit event records the clarification flag.
+    wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
+    assert len(wasting_events) == 1
+    _, fields = wasting_events[0]
+    assert fields["clarification_injected"] is True
+    assert fields["strategy"] == "aggressive"
+
+
+async def test_clarification_one_per_chain_blocks_follow_up(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """Even with rate=1.0, the command after a clarification runs normally."""
+    import json as _json
+
+    seen_payloads: list[dict[str, object]] = []
+
+    body = (
+        _json.dumps({"message": {"content": "ok"}, "done": False})
+        + "\n"
+        + _json.dumps({"done": True})
+        + "\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(_json.loads(request.read()))
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        bridge=BridgeConfig(
+            wasting_strategy="aggressive",
+            aggressive_clarification_rate=1.0,
+        ),
+    )
+    audit = _MockAudit()
+
+    async def fake_sleep(_seconds: float) -> None:
+        return
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+        sleep=fake_sleep,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        # First command: rate=1.0 + no prior clarification => clarifies.
+        _ = [c async for c in service.handle_command_stream(session, "ls /etc")]
+        # Second command: one-per-chain guard blocks the clarification.
+        _ = [c async for c in service.handle_command_stream(session, "cat /etc/hosts")]
+    finally:
+        await service.aclose()
+
+    # Both LLM calls went out; the first carries the clarification suffix
+    # and the second does not.
+    assert len(seen_payloads) == 2
+    first_systems = [m["content"] for m in seen_payloads[0]["messages"] if m["role"] == "system"]  # type: ignore[union-attr]
+    second_systems = [m["content"] for m in seen_payloads[1]["messages"] if m["role"] == "system"]  # type: ignore[union-attr]
+    assert any("disambiguate" in c for c in first_systems)
+    assert not any("disambiguate" in c for c in second_systems)
+
+    wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
+    # First call: clarification audit. Second call: no audit (no delays,
+    # no clarification, off-equivalent for this command).
+    clarification_events = [e for e in wasting_events if e[1].get("clarification_injected")]
+    assert len(clarification_events) == 1

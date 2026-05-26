@@ -44,7 +44,7 @@ from anglerfish.bridge.errors import (
 from anglerfish.bridge.fallback import fallback_response
 from anglerfish.bridge.overrides_reader import BridgeOverridesReader
 from anglerfish.bridge.path import normalise_path
-from anglerfish.bridge.prompts import build_messages
+from anglerfish.bridge.prompts import build_clarification_messages, build_messages
 from anglerfish.bridge.rate_limit import BridgeRateLimiter
 from anglerfish.bridge.sanitize import cap_output, sanitize_command
 from anglerfish.bridge.session import SessionContext
@@ -104,6 +104,11 @@ class AIBridgeService:
         # session and dropped via end_session_budget() from the HTTP DELETE
         # path so the dict does not grow unbounded.
         self._budgets: dict[UUID, TokenBudget] = {}
+        # Per-session record of the command_count at which a clarification
+        # was last injected (slice 6.4 aggressive strategy). Used by the
+        # strategy to enforce the one-clarification-per-chain rule.
+        # Dropped by end_session_budget alongside the budget entry.
+        self._last_clarification: dict[UUID, int] = {}
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -177,8 +182,9 @@ class AIBridgeService:
         return budget
 
     def end_session_budget(self, session_id: UUID) -> None:
-        """Drop the per-session budget. Safe to call for unknown ids."""
+        """Drop per-session state. Safe to call for unknown ids."""
         self._budgets.pop(session_id, None)
+        self._last_clarification.pop(session_id, None)
 
     async def handle_command(
         self,
@@ -390,15 +396,28 @@ class AIBridgeService:
             command_count=session.command_count,
             wasted_ms_so_far=0,  # slice 6.5 wires the per-session cap
             bridge_config=self._settings.bridge,
+            last_clarification_command_count=self._last_clarification.get(
+                session.session_id,
+            ),
         )
         pre_effect = await strategy.pre_command(strategy_ctx)
         wasted_ms = pre_effect.total_added_ms
         async for pre_chunk in self._apply_pre_effect(pre_effect, accumulated):
             yield pre_chunk
 
+        # Slice 6.4: when the strategy signals a clarification, swap in
+        # the alternate prompt template and remember the command_count
+        # so the strategy honours its one-per-chain invariant on the
+        # next command. The LLM call shape is otherwise identical.
+        if pre_effect.inject_clarification:
+            self._last_clarification[session.session_id] = session.command_count
+            messages_builder = build_clarification_messages
+        else:
+            messages_builder = build_messages
+
         try:
             async with self._limiter.slot(session.session_id):
-                messages = build_messages(
+                messages = messages_builder(
                     sanitised,
                     config=self._settings.bridge,
                     cwd=session.cwd,
@@ -428,12 +447,13 @@ class AIBridgeService:
 
         latency_ms = (self._monotonic() - start) * 1000.0
 
-        if wasted_ms > 0:
+        if wasted_ms > 0 or pre_effect.inject_clarification:
             self._record_wasting_applied(
                 session=session,
                 strategy_name=strategy.name,
                 wasted_ms=wasted_ms,
                 pre_message=pre_effect.pre_message is not None,
+                clarification_injected=pre_effect.inject_clarification,
             )
 
         if error is None:
@@ -518,12 +538,15 @@ class AIBridgeService:
         strategy_name: str,
         wasted_ms: int,
         pre_message: bool,
+        clarification_injected: bool = False,
     ) -> None:
         """Audit a per-command wasting-strategy effect.
 
         Fires once per command that the strategy touched in any way
-        (pre-message, inter-chunk delay, or both). The `off` strategy
-        never reaches this path because ``wasted_ms`` stays at zero.
+        (pre-message, inter-chunk delay, clarification injection, or
+        a combination). The `off` strategy never reaches this path
+        because ``wasted_ms`` stays at zero and clarification is
+        aggressive-only.
         """
         self._audit_log.record(
             "bridge.wasting_applied",
@@ -532,6 +555,7 @@ class AIBridgeService:
             strategy=strategy_name,
             wasted_ms=wasted_ms,
             pre_message=pre_message,
+            clarification_injected=clarification_injected,
         )
 
     def _record_budget_exhausted(

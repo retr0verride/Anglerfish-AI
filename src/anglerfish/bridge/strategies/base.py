@@ -39,6 +39,12 @@ class StrategyContext:
     Strategies use it together with ``session_id`` to seed a
     deterministic PRNG so per-command randomness is reproducible
     across bridge restarts and pinnable in tests.
+
+    ``last_clarification_command_count`` is the ``command_count``
+    of the most recent clarification-injected command in this
+    session, or ``None`` if none yet. The aggressive strategy uses
+    it to enforce the one-clarification-per-chain rule: after
+    injecting, never inject on the immediately-following command.
     """
 
     session_id: UUID
@@ -46,6 +52,7 @@ class StrategyContext:
     command_count: int
     wasted_ms_so_far: int
     bridge_config: BridgeConfig
+    last_clarification_command_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,11 +65,20 @@ class StrategyPreEffect:
     emitted (zero if no message). ``pre_delay_ms`` is the delay
     after the message (or after pre_command returns when there is
     no message) and before the LLM request is sent.
+
+    ``inject_clarification`` is the aggressive-strategy signal
+    (slice 6.4) that this command should produce a "did you mean
+    X or Y?" clarification question instead of executing. The
+    bridge swaps in the clarification prompt template, ships the
+    AI response as the reply, and records the session's
+    last-clarification command_count so the next command does not
+    also inject.
     """
 
     pre_message: str | None = None
     pre_message_delay_ms: int = 0
     pre_delay_ms: int = 0
+    inject_clarification: bool = False
 
     @property
     def total_added_ms(self) -> int:

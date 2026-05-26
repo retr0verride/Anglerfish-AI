@@ -95,3 +95,75 @@ async def test_between_chunks_is_deterministic_for_same_seed() -> None:
     a = await s.between_chunks(_ctx(command_count=3), chunk)
     b = await s.between_chunks(_ctx(command_count=3), chunk)
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# Slice 6.4: clarification injection
+# ---------------------------------------------------------------------------
+
+
+async def test_clarification_injection_rate_is_near_five_percent() -> None:
+    """Default 5% clarification rate over 2000 samples."""
+    s = AggressiveStrategy()
+    fires = 0
+    for n in range(2000):
+        effect = await s.pre_command(_ctx(command_count=n))
+        if effect.inject_clarification:
+            fires += 1
+    # Expected ~100 fires; allow 50..170 for cross-Random variance.
+    # Reduced by the one-per-chain guard would not fire here because
+    # we pass no last_clarification_command_count (None means free).
+    assert 50 <= fires <= 170, fires
+
+
+async def test_clarification_and_pre_message_are_mutually_exclusive() -> None:
+    """When the dice produce a clarification, no pre-message also fires."""
+    s = AggressiveStrategy()
+    for n in range(200):
+        effect = await s.pre_command(_ctx(command_count=n))
+        if effect.inject_clarification:
+            assert effect.pre_message is None
+            assert effect.pre_message_delay_ms == 0
+            assert effect.pre_delay_ms == 0
+
+
+async def test_clarification_skipped_immediately_after_prior_clarification() -> None:
+    """One-per-chain: the command right after a clarification cannot inject."""
+    s = AggressiveStrategy()
+    # Find a command_count where clarification would normally fire.
+    fired_at: int | None = None
+    for n in range(200):
+        effect = await s.pre_command(_ctx(command_count=n))
+        if effect.inject_clarification:
+            fired_at = n
+            break
+    assert fired_at is not None
+    # Now retry with last_clarification_command_count = fired_at and
+    # command_count = fired_at + 1 - the one-per-chain rule forces a
+    # pass-through regardless of what the dice would have rolled.
+    follow_up = StrategyContext(
+        session_id=_FIXED_SESSION,
+        command="anything",
+        command_count=fired_at + 1,
+        wasted_ms_so_far=0,
+        bridge_config=BridgeConfig(),
+        last_clarification_command_count=fired_at,
+    )
+    effect = await s.pre_command(follow_up)
+    assert effect.inject_clarification is False
+
+
+async def test_clarification_rate_zero_disables_the_mode() -> None:
+    """Setting aggressive_clarification_rate=0 turns the feature off."""
+    s = AggressiveStrategy()
+    config = BridgeConfig(aggressive_clarification_rate=0.0)
+    for n in range(200):
+        ctx = StrategyContext(
+            session_id=_FIXED_SESSION,
+            command="x",
+            command_count=n,
+            wasted_ms_so_far=0,
+            bridge_config=config,
+        )
+        effect = await s.pre_command(ctx)
+        assert effect.inject_clarification is False

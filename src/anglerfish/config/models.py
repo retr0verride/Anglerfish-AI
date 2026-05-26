@@ -377,6 +377,21 @@ class BridgeConfig(BaseModel):
             "changes within one second."
         ),
     )
+    aggressive_clarification_rate: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Probability per command (under the aggressive wasting "
+            "strategy only) that the bridge injects a 'did you mean X "
+            "or Y?' clarification question instead of executing. The "
+            "one-per-chain invariant forces the follow-up command to "
+            "run normally even if the dice hit again. Default 0.05 "
+            "puts one clarification per ~20 commands; raise to push "
+            "dwell time, lower toward 0 to disable the mode while "
+            "keeping aggressive's delay-based wasting."
+        ),
+    )
 
     @field_validator("fake_hostname")
     @classmethod
