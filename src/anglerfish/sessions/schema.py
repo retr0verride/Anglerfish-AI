@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 
-CURRENT_SCHEMA_VERSION: Final[int] = 2
+CURRENT_SCHEMA_VERSION: Final[int] = 3
 
 
 # Connection-level pragmas applied on every open. WAL gives us
@@ -117,9 +117,31 @@ CREATE INDEX IF NOT EXISTS idx_intents_confidence   ON intents(confidence);
 """
 
 
-# Migration chain: index = target version. Adding v3 means adding
-# _MIGRATION_3 and appending here; run_migrations walks the chain.
-_MIGRATIONS: Final[tuple[str, ...]] = (_MIGRATION_1, _MIGRATION_2)
+# v2 -> v3: Stage 8 embeddings table. One row per session keyed on
+# session_id (1:1 with sessions); cascade-delete with the session.
+# The vector is stored as a packed float32 blob; the dimension is
+# stored separately so a read can validate the blob length matches
+# without unpacking. The model column lets find_similar exclude
+# cross-model comparisons (vectors from different embed models
+# live in different spaces).
+_MIGRATION_3: Final[str] = """
+CREATE TABLE IF NOT EXISTS embeddings (
+    session_id      TEXT PRIMARY KEY
+        REFERENCES sessions(session_id) ON DELETE CASCADE,
+    vector_blob     BLOB NOT NULL,
+    dimension       INTEGER NOT NULL,
+    model           TEXT NOT NULL,
+    generated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_generated_at ON embeddings(generated_at);
+CREATE INDEX IF NOT EXISTS idx_embeddings_model        ON embeddings(model);
+"""
+
+
+# Migration chain: index = target version. Adding v4 means adding
+# _MIGRATION_4 and appending here; run_migrations walks the chain.
+_MIGRATIONS: Final[tuple[str, ...]] = (_MIGRATION_1, _MIGRATION_2, _MIGRATION_3)
 
 
 def current_schema_version(conn: sqlite3.Connection) -> int:

@@ -23,8 +23,10 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import sqlite3
+import struct
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Self
@@ -32,6 +34,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
@@ -551,6 +554,126 @@ class SessionStore:
             extracted_at=datetime.fromisoformat(row[6]),
         )
 
+    # ------------------------------------------------------------------
+    # Embeddings (Stage 8)
+    # ------------------------------------------------------------------
+
+    async def upsert_embedding(self, embedding: SessionEmbedding) -> None:
+        """Persist a :class:`SessionEmbedding` keyed by ``session_id``.
+
+        FK to the ``sessions`` row is enforced (cascade-delete);
+        callers must have already persisted the session itself.
+        Repeated calls for the same session_id overwrite the row.
+        """
+        self._require_open()
+        async with self._lock:
+            await asyncio.to_thread(self._upsert_embedding_locked, embedding)
+
+    def _upsert_embedding_locked(self, embedding: SessionEmbedding) -> None:
+        assert self._conn is not None  # noqa: S101
+        blob = _pack_vector(embedding.vector)
+        self._conn.execute(
+            """
+            INSERT INTO embeddings (
+                session_id, vector_blob, dimension, model, generated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                vector_blob  = excluded.vector_blob,
+                dimension    = excluded.dimension,
+                model        = excluded.model,
+                generated_at = excluded.generated_at
+            """,
+            (
+                str(embedding.session_id),
+                blob,
+                embedding.dimension,
+                embedding.model,
+                embedding.generated_at.isoformat(),
+            ),
+        )
+
+    async def get_embedding(self, session_id: UUID) -> SessionEmbedding | None:
+        """Return the persisted :class:`SessionEmbedding` or :data:`None`."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._get_embedding_locked, session_id)
+
+    def _get_embedding_locked(self, session_id: UUID) -> SessionEmbedding | None:
+        assert self._conn is not None  # noqa: S101
+        row = self._conn.execute(
+            """
+            SELECT vector_blob, dimension, model, generated_at
+            FROM embeddings
+            WHERE session_id = ?
+            """,
+            (str(session_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_embedding(session_id, row)
+
+    async def find_similar(
+        self,
+        session_id: UUID,
+        *,
+        k: int = 5,
+        min_similarity: float = 0.85,
+    ) -> list[tuple[SessionEmbedding, float]]:
+        """Return up to ``k`` neighbours of ``session_id`` above the threshold.
+
+        Linear scan over every stored vector with the SAME model tag
+        (cross-model comparisons are silently excluded; vectors from
+        different embed models live in different spaces). The query
+        vector itself is excluded from the result. Tuples are
+        returned newest-first by cosine similarity. Returns an empty
+        list if the query session has no stored embedding.
+        """
+        self._require_open()
+        if k <= 0:
+            raise ValueError("k must be positive")
+        if not 0.0 <= min_similarity <= 1.0:
+            raise ValueError("min_similarity must be in [0, 1]")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._find_similar_locked,
+                session_id,
+                k,
+                min_similarity,
+            )
+
+    def _find_similar_locked(
+        self,
+        session_id: UUID,
+        k: int,
+        min_similarity: float,
+    ) -> list[tuple[SessionEmbedding, float]]:
+        assert self._conn is not None  # noqa: S101
+        query_row = self._conn.execute(
+            "SELECT vector_blob, dimension, model FROM embeddings WHERE session_id = ?",
+            (str(session_id),),
+        ).fetchone()
+        if query_row is None:
+            return []
+        query_vec = _unpack_vector(query_row[0], query_row[1])
+        query_model = query_row[2]
+        # Filter on model so we never compare across embedding spaces.
+        rows = self._conn.execute(
+            """
+            SELECT session_id, vector_blob, dimension, model, generated_at
+            FROM embeddings
+            WHERE model = ? AND session_id != ?
+            """,
+            (query_model, str(session_id)),
+        ).fetchall()
+        scored: list[tuple[SessionEmbedding, float]] = []
+        for row in rows:
+            other_vec = _unpack_vector(row[1], row[2])
+            sim = _cosine_similarity(query_vec, other_vec)
+            if sim >= min_similarity:
+                scored.append((_row_to_embedding(UUID(row[0]), row[1:5]), sim))
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        return scored[:k]
+
     async def get_recent_threats(self, *, limit: int = 50) -> list[ThreatAssessment]:
         """Most-recently-updated threat assessments, newest first."""
         self._require_open()
@@ -672,3 +795,75 @@ class SessionStore:
 
 def _utcnow_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Embedding helpers (Stage 8 slice 3)
+# ---------------------------------------------------------------------------
+
+
+def _pack_vector(vector: Sequence[float]) -> bytes:
+    """Pack a vector as little-endian float32 bytes (4 bytes per element).
+
+    Float32 is enough precision for cosine similarity over 768-1024-
+    dim embedding vectors; halving the byte footprint vs float64 keeps
+    the audit-log + DB write costs proportional. Little-endian is the
+    SQLite convention and matches every x86_64 host Anglerfish runs on.
+    """
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def _unpack_vector(blob: bytes, dimension: int) -> tuple[float, ...]:
+    """Unpack a float32 blob into a tuple of floats.
+
+    Raises :class:`ValueError` if the blob length does not match
+    ``dimension * 4``; the row is then corrupted and the caller drops
+    it.
+    """
+    expected_bytes = dimension * 4
+    if len(blob) != expected_bytes:
+        raise ValueError(
+            f"vector blob length {len(blob)} does not match dimension "
+            f"{dimension} (expected {expected_bytes} bytes)",
+        )
+    return tuple(struct.unpack(f"<{dimension}f", blob))
+
+
+def _row_to_embedding(session_id: UUID, row: Sequence[Any]) -> SessionEmbedding:
+    """Build a :class:`SessionEmbedding` from a query row.
+
+    ``row`` is expected to contain ``(vector_blob, dimension, model,
+    generated_at)`` in that order. Used by both get_embedding and
+    find_similar (which slices its own row tuple to that shape).
+    """
+    vector = _unpack_vector(row[0], row[1])
+    return SessionEmbedding(
+        session_id=session_id,
+        vector=vector,
+        dimension=row[1],
+        model=row[2],
+        generated_at=datetime.fromisoformat(row[3]),
+    )
+
+
+def _cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
+    """Cosine similarity between two equal-length vectors.
+
+    Returns 0.0 when either vector is the zero vector. Caller filters
+    on a configurable threshold afterwards.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"cosine similarity requires equal-length vectors, got {len(a)} and {len(b)}",
+        )
+    dot = 0.0
+    a_norm_sq = 0.0
+    b_norm_sq = 0.0
+    for av, bv in zip(a, b, strict=True):
+        dot += av * bv
+        a_norm_sq += av * av
+        b_norm_sq += bv * bv
+    if not a_norm_sq or not b_norm_sq:
+        # Zero-norm vectors have no defined cosine; treat as no match.
+        return 0.0
+    return dot / (math.sqrt(a_norm_sq) * math.sqrt(b_norm_sq))

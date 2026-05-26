@@ -65,8 +65,9 @@ def _intent_for(session_id) -> IntentSummary:
 # ---------------------------------------------------------------------------
 
 
-def test_current_schema_version_is_two() -> None:
-    assert CURRENT_SCHEMA_VERSION == 2
+def test_current_schema_version_is_at_least_two() -> None:
+    """Stage 7 introduced v2; later stages bump it further. v2 is the floor."""
+    assert CURRENT_SCHEMA_VERSION >= 2
 
 
 def test_migration_creates_intents_table(tmp_path: Path) -> None:
@@ -74,7 +75,7 @@ def test_migration_creates_intents_table(tmp_path: Path) -> None:
     conn = sqlite3.connect(db)
     try:
         version = run_migrations(conn)
-        assert version == 2
+        assert version >= 2
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='intents'"
         ).fetchall()
@@ -90,7 +91,7 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
         run_migrations(conn)
         # Re-running on an up-to-date DB is a no-op.
         run_migrations(conn)
-        assert current_schema_version(conn) == 2
+        assert current_schema_version(conn) == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 
