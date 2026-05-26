@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
+from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 
 if TYPE_CHECKING:
@@ -296,6 +297,8 @@ class AuditTailer:
             )
         elif event_type == "lure.session_closed":
             await self._handle_closed(session_id, event)
+        elif event_type == "bridge.intent_extracted":
+            await self._handle_intent_extracted(session_id, event)
         # Everything else: silently ignored. Future stages add types
         # without churning the tailer.
 
@@ -377,6 +380,25 @@ class AuditTailer:
         del event  # unused; signature kept for symmetry
         self._accumulators.pop(session_id, None)
         await self._state.end_session(session_id)
+
+    async def _handle_intent_extracted(
+        self,
+        session_id: UUID,
+        event: dict[str, Any],
+    ) -> None:
+        """Persist a Stage 7 :class:`IntentSummary` event.
+
+        The bridge audits the full payload; we reconstruct the
+        :class:`IntentSummary` from the event fields and delegate to
+        :meth:`DashboardState.upsert_intent`. Missing or
+        type-mismatched fields skip the event silently (matches the
+        existing tailer pattern - the log is best-effort, not
+        load-bearing).
+        """
+        summary = _parse_intent_event(session_id, event)
+        if summary is None:
+            return
+        await self._state.upsert_intent(summary)
 
     # ------------------------------------------------------------------
     # Offset cache
@@ -471,3 +493,74 @@ def _parse_ts(event: dict[str, Any]) -> datetime | None:
 def _str_field(event: dict[str, Any], key: str, *, default: str) -> str:
     value = event.get(key)
     return value if isinstance(value, str) and value else default
+
+
+_VALID_ACTOR_PROFILES = frozenset({"opportunistic", "automated", "targeted", "exploratory"})
+_VALID_CONFIDENCES = frozenset({"low", "medium", "high"})
+
+
+def _parse_intent_event(
+    session_id: UUID,
+    event: dict[str, Any],
+) -> IntentSummary | None:
+    """Reconstruct an :class:`IntentSummary` from a bridge.intent_extracted event.
+
+    Returns :data:`None` (with a warning log) when any required
+    field is missing or type-mismatched. The audit log is best-
+    effort context for the tailer; a malformed record never
+    crashes the tailer.
+    """
+    actor_profile = event.get("actor_profile")
+    confidence = event.get("confidence")
+    intent = event.get("intent")
+    why = event.get("why")
+    summary = event.get("summary")
+    extracted_at_raw = event.get("extracted_at")
+    if (
+        actor_profile not in _VALID_ACTOR_PROFILES
+        or confidence not in _VALID_CONFIDENCES
+        or not isinstance(intent, str)
+        or not isinstance(why, str)
+        or not isinstance(summary, str)
+        or not isinstance(extracted_at_raw, str)
+    ):
+        _logger.warning(
+            "audit_tailer: bridge.intent_extracted event missing or "
+            "malformed required fields for session_id=%s",
+            session_id,
+        )
+        return None
+    techniques_raw = event.get("matched_techniques", [])
+    if not isinstance(techniques_raw, list):
+        techniques_raw = []
+    techniques = tuple(t for t in techniques_raw if isinstance(t, str))
+    try:
+        extracted_at = datetime.fromisoformat(extracted_at_raw)
+    except ValueError:
+        _logger.warning(
+            "audit_tailer: bridge.intent_extracted has malformed extracted_at=%r for session_id=%s",
+            extracted_at_raw,
+            session_id,
+        )
+        return None
+    try:
+        return IntentSummary(
+            session_id=session_id,
+            actor_profile=actor_profile,
+            intent=intent,
+            why=why,
+            matched_techniques=techniques,
+            confidence=confidence,
+            summary=summary,
+            extracted_at=extracted_at,
+        )
+    except ValueError as exc:
+        # Pydantic validation (string-length caps, etc.) - the
+        # bridge produced a record the schema rejects. Audit-side
+        # data corruption; log + drop.
+        _logger.warning(
+            "audit_tailer: bridge.intent_extracted failed schema validation for session_id=%s: %s",
+            session_id,
+            exc,
+        )
+        return None

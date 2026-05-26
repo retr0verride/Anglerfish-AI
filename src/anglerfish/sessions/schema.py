@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 
-CURRENT_SCHEMA_VERSION: Final[int] = 1
+CURRENT_SCHEMA_VERSION: Final[int] = 2
 
 
 # Connection-level pragmas applied on every open. WAL gives us
@@ -97,9 +97,29 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
-# Migration chain: index = target version. Adding v2 means adding
-# _MIGRATION_2 and appending here; run_migrations walks the chain.
-_MIGRATIONS: Final[tuple[str, ...]] = (_MIGRATION_1,)
+# v1 -> v2: Stage 7 intents table. One row per session keyed on
+# session_id (1:1 with sessions); cascade-delete with the session.
+_MIGRATION_2: Final[str] = """
+CREATE TABLE IF NOT EXISTS intents (
+    session_id              TEXT PRIMARY KEY
+        REFERENCES sessions(session_id) ON DELETE CASCADE,
+    actor_profile           TEXT NOT NULL,
+    intent                  TEXT NOT NULL,
+    why                     TEXT NOT NULL,
+    matched_techniques_json TEXT NOT NULL DEFAULT '[]',
+    confidence              TEXT NOT NULL,
+    summary                 TEXT NOT NULL,
+    extracted_at            TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_intents_extracted_at ON intents(extracted_at);
+CREATE INDEX IF NOT EXISTS idx_intents_confidence   ON intents(confidence);
+"""
+
+
+# Migration chain: index = target version. Adding v3 means adding
+# _MIGRATION_3 and appending here; run_migrations walks the chain.
+_MIGRATIONS: Final[tuple[str, ...]] = (_MIGRATION_1, _MIGRATION_2)
 
 
 def current_schema_version(conn: sqlite3.Connection) -> int:

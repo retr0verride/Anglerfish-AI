@@ -32,6 +32,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
 from anglerfish.sessions.schema import PRAGMAS, run_migrations
@@ -269,6 +270,49 @@ class SessionStore:
             ),
         )
 
+    async def upsert_intent(self, summary: IntentSummary) -> None:
+        """Persist an :class:`IntentSummary` keyed by ``session_id``.
+
+        FK to the ``sessions`` row is enforced (cascade-delete);
+        callers must have already persisted the session itself.
+        Repeated calls for the same session overwrite the row -
+        Stage 7 produces at most one summary per session today, but
+        the schema does not lock that invariant in.
+        """
+        self._require_open()
+        async with self._lock:
+            await asyncio.to_thread(self._upsert_intent_locked, summary)
+
+    def _upsert_intent_locked(self, summary: IntentSummary) -> None:
+        assert self._conn is not None  # noqa: S101
+        techniques_json = json.dumps(list(summary.matched_techniques), separators=(",", ":"))
+        self._conn.execute(
+            """
+            INSERT INTO intents (
+                session_id, actor_profile, intent, why,
+                matched_techniques_json, confidence, summary, extracted_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                actor_profile           = excluded.actor_profile,
+                intent                  = excluded.intent,
+                why                     = excluded.why,
+                matched_techniques_json = excluded.matched_techniques_json,
+                confidence              = excluded.confidence,
+                summary                 = excluded.summary,
+                extracted_at            = excluded.extracted_at
+            """,
+            (
+                str(summary.session_id),
+                summary.actor_profile,
+                summary.intent,
+                summary.why,
+                techniques_json,
+                summary.confidence,
+                summary.summary,
+                summary.extracted_at.isoformat(),
+            ),
+        )
+
     async def end_session(self, session_id: UUID, ended_at: datetime) -> None:
         """Mark a session as ended. Subsequent active-list queries exclude it."""
         self._require_open()
@@ -425,6 +469,38 @@ class SessionStore:
             )
             for row in cur.fetchall()
         ]
+
+    async def get_intent(self, session_id: UUID) -> IntentSummary | None:
+        """Return the persisted :class:`IntentSummary` or :data:`None`."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._get_intent_locked, session_id)
+
+    def _get_intent_locked(self, session_id: UUID) -> IntentSummary | None:
+        assert self._conn is not None  # noqa: S101
+        row = self._conn.execute(
+            """
+            SELECT actor_profile, intent, why, matched_techniques_json,
+                   confidence, summary, extracted_at
+            FROM intents
+            WHERE session_id = ?
+            """,
+            (str(session_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        techniques_raw = json.loads(row[3]) if row[3] else []
+        techniques = tuple(t for t in techniques_raw if isinstance(t, str))
+        return IntentSummary(
+            session_id=session_id,
+            actor_profile=row[0],
+            intent=row[1],
+            why=row[2],
+            matched_techniques=techniques,
+            confidence=row[4],
+            summary=row[5],
+            extracted_at=datetime.fromisoformat(row[6]),
+        )
 
     async def get_recent_threats(self, *, limit: int = 50) -> list[ThreatAssessment]:
         """Most-recently-updated threat assessments, newest first."""

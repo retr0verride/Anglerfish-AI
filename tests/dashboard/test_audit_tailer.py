@@ -618,3 +618,106 @@ async def test_dispatched_command_carries_correct_source_enum(
 def test_uuid_type_for_session_id_field() -> None:
     """Type-shape sanity: dispatch path accepts only valid UUIDs."""
     assert UUID("00000000-0000-0000-0000-000000000000") is not None
+
+
+# ---------------------------------------------------------------------------
+# Stage 7 slice 3: bridge.intent_extracted dispatch
+# ---------------------------------------------------------------------------
+
+
+async def test_intent_extracted_persists_to_store(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    # Open the session so the FK on the intents row resolves.
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "lure.session_opened",
+            session_id=str(sid),
+            source_ip="203.0.113.7",
+            username="root",
+        ),
+        _audit_line(
+            "bridge.intent_extracted",
+            session_id=str(sid),
+            actor_profile="automated",
+            confidence="high",
+            intent="Deploy cryptominer.",
+            why="Downloaded miner; configured pool URL.",
+            matched_techniques=["T1059.004", "T1496"],
+            summary="Automated session.",
+            extracted_at=datetime(2026, 5, 25, 12, 30, tzinfo=UTC).isoformat(),
+        ),
+    )
+    await tailer._poll_once()
+    loaded = await dashboard_state.get_intent(sid)
+    assert loaded is not None
+    assert loaded.actor_profile == "automated"
+    assert loaded.confidence == "high"
+    assert loaded.matched_techniques == ("T1059.004", "T1496")
+
+
+async def test_intent_extracted_with_malformed_actor_profile_is_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """A bogus actor_profile is dropped silently; tailer keeps running."""
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "lure.session_opened",
+            session_id=str(sid),
+            source_ip="1.1.1.1",
+            username="root",
+        ),
+        _audit_line(
+            "bridge.intent_extracted",
+            session_id=str(sid),
+            actor_profile="not-a-valid-profile",
+            confidence="high",
+            intent="x",
+            why="x",
+            matched_techniques=[],
+            summary="x",
+            extracted_at=datetime(2026, 5, 25, 12, 30, tzinfo=UTC).isoformat(),
+        ),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_intent(sid) is None
+
+
+async def test_intent_extracted_with_malformed_extracted_at_is_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "lure.session_opened",
+            session_id=str(sid),
+            source_ip="1.1.1.1",
+            username="root",
+        ),
+        _audit_line(
+            "bridge.intent_extracted",
+            session_id=str(sid),
+            actor_profile="opportunistic",
+            confidence="low",
+            intent="x",
+            why="x",
+            matched_techniques=[],
+            summary="x",
+            extracted_at="definitely-not-iso",
+        ),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_intent(sid) is None
+
+

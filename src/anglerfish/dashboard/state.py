@@ -33,6 +33,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import CommandTurn, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 from anglerfish.sessions import SessionStore
@@ -56,6 +57,7 @@ class DashboardEventKind(StrEnum):
     SESSION_ENDED = "session_ended"
     COMMAND = "command"
     THREAT = "threat"
+    INTENT = "intent"
 
 
 class DashboardEvent(BaseModel):
@@ -210,6 +212,20 @@ class DashboardState:
                 payload=assessment.model_dump(mode="json"),
             ),
         )
+
+    async def upsert_intent(self, summary: IntentSummary) -> None:
+        """Persist an :class:`IntentSummary` and publish an INTENT event."""
+        await self._store.upsert_intent(summary)
+        await self.publish(
+            DashboardEvent(
+                kind=DashboardEventKind.INTENT,
+                timestamp=_utcnow(),
+                payload=summary.model_dump(mode="json"),
+            ),
+        )
+
+    async def get_intent(self, session_id: UUID) -> IntentSummary | None:
+        return await self._store.get_intent(session_id)
 
     # ------------------------------------------------------------------
     # Queries - called by REST routes.
