@@ -24,7 +24,7 @@ integration tests can switch it on with one line.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -216,6 +216,3 @@ def _payload_to_event(payload: _LLMClassifierPayload) -> PersistenceEvent | None
         payload=payload.payload,
         source="llm",
     )
-
-
-_LLM_KIND: Literal["llm"] = "llm"  # reserved for static-type-check ergonomics

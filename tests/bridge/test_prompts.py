@@ -56,3 +56,68 @@ def test_build_messages_cwd_appears_in_system_prompt() -> None:
     cfg = BridgeConfig(fake_cwd="/root")
     messages = build_messages("pwd", config=cfg, cwd="/etc", history=())
     assert "Working directory: /etc" in messages[0].content
+
+
+# ---------------------------------------------------------------------------
+# Stage 10: persistence-state prompt block
+# ---------------------------------------------------------------------------
+
+
+def _persistence_event(kind: str, payload: str, sub_key: str | None = None):  # type: ignore[no-untyped-def]
+    from anglerfish.models.persistence import PersistenceEvent
+
+    return PersistenceEvent(
+        kind=kind,  # type: ignore[arg-type]
+        sub_key=sub_key,
+        payload=payload,
+        source="regex",
+    )
+
+
+def test_persistence_block_omitted_when_no_events() -> None:
+    """Empty / None persistence_events preserves the pre-Stage-10 prompt shape."""
+    cfg = BridgeConfig()
+    prompt = build_system_prompt(cfg, cwd="/root", persistence_events=None)
+    assert "Installed cron entries" not in prompt
+    assert "Installed/enabled systemd units" not in prompt
+    assert "Appended ~/.ssh/authorized_keys" not in prompt
+
+
+def test_persistence_block_renders_crontab_entry() -> None:
+    cfg = BridgeConfig()
+    events = [_persistence_event("crontab", "0 * * * * /tmp/.beacon")]
+    prompt = build_system_prompt(cfg, cwd="/root", persistence_events=events)
+    assert "Installed cron entries" in prompt
+    assert "0 * * * * /tmp/.beacon" in prompt
+
+
+def test_persistence_block_renders_systemctl_unit() -> None:
+    cfg = BridgeConfig()
+    events = [
+        _persistence_event("systemctl", "backdoor.service", sub_key="backdoor.service"),
+    ]
+    prompt = build_system_prompt(cfg, cwd="/root", persistence_events=events)
+    assert "Installed/enabled systemd units" in prompt
+    assert "backdoor.service" in prompt
+
+
+def test_persistence_block_renders_authorized_keys_entry() -> None:
+    cfg = BridgeConfig()
+    events = [_persistence_event("authorized_keys", "ssh-ed25519 AAAA attacker@x")]
+    prompt = build_system_prompt(cfg, cwd="/root", persistence_events=events)
+    assert "Appended ~/.ssh/authorized_keys entries" in prompt
+    assert "ssh-ed25519 AAAA attacker@x" in prompt
+
+
+def test_persistence_block_groups_all_three_kinds() -> None:
+    """Mixed events render under per-kind sections in the same prompt."""
+    cfg = BridgeConfig()
+    events = [
+        _persistence_event("crontab", "0 * * * * /tmp/.x"),
+        _persistence_event("systemctl", "evil.service", sub_key="evil.service"),
+        _persistence_event("authorized_keys", "ssh-rsa AAAA attacker"),
+    ]
+    prompt = build_system_prompt(cfg, cwd="/root", persistence_events=events)
+    assert "Installed cron entries" in prompt
+    assert "Installed/enabled systemd units" in prompt
+    assert "Appended ~/.ssh/authorized_keys" in prompt
