@@ -56,6 +56,7 @@ from anglerfish.bridge.strategies import (
     get_strategy,
 )
 from anglerfish.config.settings import AnglerfishSettings
+from anglerfish.honeytokens import Honeytoken, HoneytokenPlacementService
 from anglerfish.intel import EmbeddingGenerator, IntentExtractor
 from anglerfish.llm import LLMClient, TokenBudget
 from anglerfish.llm.budget import BudgetExhaustedError
@@ -98,6 +99,7 @@ class AIBridgeService:
         embedding_generator: EmbeddingGenerator | None = None,
         persona_selector: PersonaSelector | None = None,
         persistence_classifier: PersistenceClassifier | None = None,
+        honeytoken_placement: HoneytokenPlacementService | None = None,
         session_store_reader: SessionStoreReader | None = None,
         sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -176,6 +178,29 @@ class AIBridgeService:
         # SessionContext.persistence_events from prior cross-session
         # installs.
         self._persistence_classifier = persistence_classifier
+        # Stage 11: optional honeytoken placement service. Triggered
+        # from record_threat_assessment when threat.score crosses
+        # settings.honeytokens.placement_threshold. Spawns a fire-
+        # and-forget task that audits bridge.honeytoken_placed; the
+        # dashboard tailer (slice 11.2) persists into the registry.
+        # Per-session tokens become visible to the attacker on the
+        # NEXT session from the same source IP (the lure overlay is
+        # set at session-open from the registry, mirroring Stage 10's
+        # cross-session pattern).
+        self._honeytoken_placement = honeytoken_placement
+        # Set tracking source IPs we have already triggered placement
+        # for; placement service de-dupes per session, this set
+        # bounds duplicate audits within a single bridge process
+        # lifetime when the threat scorer fires repeatedly for the
+        # same session above the threshold.
+        self._honeytoken_placed_for: set[UUID] = set()
+        # Stage 11: parallel map of session_id -> source_ip the HTTP
+        # server populates at session-open via
+        # record_session_source_ip. Cleaner than reaching into
+        # bridge.server's sessions dict (would create a circular
+        # import) and avoids tying the threshold-hook to the HTTP
+        # process topology.
+        self._source_ip_by_session: dict[UUID, str] = {}
         self._session_store_reader = session_store_reader
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
@@ -263,6 +288,9 @@ class AIBridgeService:
         self._wasted_ms.pop(session_id, None)
         self._wasted_exhausted.discard(session_id)
         self._latest_threat.pop(session_id, None)
+        # Stage 11 per-session state cleanup.
+        self._honeytoken_placed_for.discard(session_id)
+        self._source_ip_by_session.pop(session_id, None)
 
     def record_threat_assessment(
         self,
@@ -275,8 +303,83 @@ class AIBridgeService:
         prompt context when the session closes. The threat engine
         calls this after each scoring pass; only the latest result
         per session is retained.
+
+        Stage 11: when honeytoken placement is wired AND
+        ``settings.honeytokens.enabled`` AND threat.score crosses
+        ``settings.honeytokens.placement_threshold``, schedule a
+        fire-and-forget placement task for this session's source
+        IP. Per-source-IP de-dup via ``_honeytoken_placed_for``
+        bounds the audit-log noise when the scorer fires
+        repeatedly above the threshold for the same session.
         """
         self._latest_threat[session_id] = threat
+        self._maybe_schedule_honeytoken_placement(session_id, threat)
+
+    def _maybe_schedule_honeytoken_placement(
+        self,
+        session_id: UUID,
+        threat: ThreatAssessment,
+    ) -> None:
+        """Trigger one honeytoken-placement task per session above threshold."""
+        if not self._settings.honeytokens.enabled:
+            return
+        if self._honeytoken_placement is None:
+            return
+        if threat.score < self._settings.honeytokens.placement_threshold:
+            return
+        if session_id in self._honeytoken_placed_for:
+            return
+        # Look up the source IP for this session. We pull it from
+        # the latest snapshot the bridge has in memory - if the
+        # session is not in the sessions dict, we silently skip
+        # (the bridge process is in tear-down or the threat-engine
+        # is firing for a stranger session_id). Don't surface that
+        # as an error - record_threat_assessment is fire-and-
+        # forget for the caller.
+        source_ip = self._source_ip_for(session_id)
+        if source_ip is None:
+            return
+        self._honeytoken_placed_for.add(session_id)
+        self._honeytoken_placement.schedule_placement(
+            source_ip=source_ip,
+            session_id=session_id,
+        )
+
+    def _source_ip_for(self, session_id: UUID) -> str | None:
+        """Best-effort source-IP lookup for an active session.
+
+        Returns :data:`None` when the session is unknown. The
+        bridge process holds active sessions in
+        :class:`anglerfish.bridge.server`'s ``sessions`` dict,
+        which is not visible from this module; rely on the
+        latest-threat cache being populated alongside the
+        session itself (the threat engine pulls source IP from
+        the same snapshot it scores). For Stage 11 we read from
+        the cached ``_latest_threat`` plus a parallel
+        ``_source_ip_by_session`` set the threat engine
+        populates - which it doesn't yet. Workaround: take
+        source_ip directly via a setter on this service.
+        """
+        # Stage 11 v1 takes source_ip from the threat-engine
+        # caller via a separate setter (record_session_source_ip)
+        # so this service doesn't reach into bridge.server's
+        # state. See the docstring on record_session_source_ip.
+        return self._source_ip_by_session.get(session_id)
+
+    def record_session_source_ip(
+        self,
+        session_id: UUID,
+        source_ip: str,
+    ) -> None:
+        """Stash source IP for cross-method lookups.
+
+        The bridge HTTP server's POST /api/v1/session calls this
+        once at session-open. Stage 11's threshold hook then has
+        a way to map session_id -> source_ip without reaching
+        into bridge.server.sessions (which would create a
+        circular import).
+        """
+        self._source_ip_by_session[session_id] = source_ip
 
     async def select_persona(self, source_ip: str) -> SelectionResult | None:
         """Pick a persona for ``source_ip`` via the configured selector.
@@ -334,6 +437,30 @@ class AIBridgeService:
         return await self._session_store_reader.list_persistence_for_source_ip(
             source_ip,
         )
+
+    async def load_honeytokens_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[Honeytoken]:
+        """Return honeytokens to merge into this session's fakefs_overlay.
+
+        Combines static-base tokens (visible to every session)
+        with per-source-IP tokens previously generated for this
+        IP. Returns an empty list when honeytokens are disabled
+        or no reader is wired. Used by the bridge HTTP server at
+        session-open to seed the lure ``SessionStartResponse``
+        with the AWS/SSH bait payloads at their configured
+        ``placed_at`` paths.
+        """
+        if not self._settings.honeytokens.enabled:
+            return []
+        if self._session_store_reader is None:
+            return []
+        static = await self._session_store_reader.list_static_honeytokens()
+        per_ip = await self._session_store_reader.list_honeytokens_for_source_ip(
+            source_ip,
+        )
+        return [*static, *per_ip]
 
     async def classify_command(
         self,

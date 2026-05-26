@@ -991,3 +991,72 @@ class PersonaConfig(BaseModel):
             "persona is a stronger commitment than firing an alert."
         ),
     )
+
+
+class HoneytokensConfig(BaseModel):
+    """Decoy data poisoning settings (Stage 11). See
+    ``docs/design/STAGE_11_decoy_data_poisoning.md``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Stage 11 master switch. Default False: the bridge does NOT "
+            "generate or distribute honeytokens until the operator "
+            "explicitly flips this flag (env var or POST /api/settings/"
+            "features). Wizard prompts operator to read "
+            "docs/HONEYTOKENS.md before enabling - the heaviest "
+            "install gate any stage uses, matching the responsibility "
+            "transfer (we are now distributing tracking beacons that "
+            "honest visitors could accidentally trigger callbacks from)."
+        ),
+    )
+    callback_base_url: str | None = Field(
+        default=None,
+        max_length=512,
+        description=(
+            "Public-reachable URL the operator deploys the slice 11.4 "
+            "callback receiver on. Embedded in generated tokens so "
+            "AWS-key callbacks hit it implicitly via SDK region "
+            "resolution. enabled=True without callback_base_url set "
+            "raises a settings-load ValidationError so the bridge "
+            "never starts with tokens that point at nothing."
+        ),
+    )
+    placement_threshold: int = Field(
+        default=50,
+        ge=0,
+        le=100,
+        description=(
+            "ThreatAssessment.score threshold that triggers per-session "
+            "honeytoken generation. Below: no fresh tokens (the static "
+            "base set still ships to every session). 0 = generate for "
+            "every session; 100 = effectively never. Mirrors the threat "
+            "scorer's [0, 100] scoring range."
+        ),
+    )
+    static_base_paths: tuple[str, ...] = Field(
+        default=(
+            "/root/.aws/credentials",
+            "/root/.ssh/id_rsa",
+        ),
+        description=(
+            "Operator-defined fakefs paths the static-base honeytoken "
+            "set seeds at bridge startup. The slice 11.3 placement "
+            "service ensures one token per kind per path exists in the "
+            "registry on the first session-open after enabled=True "
+            "flips. Empty tuple = static base disabled (rare; per-"
+            "session-only mode)."
+        ),
+    )
+
+    def model_post_init(self, _context: object) -> None:
+        if self.enabled and not self.callback_base_url:
+            raise ValueError(
+                "HoneytokensConfig.enabled=True requires callback_base_url "
+                "to be set (operators bind the slice 11.4 callback "
+                "receiver at that URL; tokens that point at nothing are "
+                "operator-confusing).",
+            )

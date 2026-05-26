@@ -301,6 +301,10 @@ def create_bridge_app(
         # installs for this source IP. Returns an empty list when
         # engaged_persistence is disabled or no reader is wired.
         prior_events = await service.load_persistence_for_source_ip(req.source_ip)
+        # Stage 11: load static-base + per-IP honeytokens for the
+        # fakefs_overlay merge. Returns an empty list when
+        # honeytokens.enabled=False or no reader is wired.
+        honeytokens = await service.load_honeytokens_for_source_ip(req.source_ip)
         ctx = SessionContext(
             uuid4(),
             source_ip=req.source_ip,
@@ -314,6 +318,10 @@ def create_bridge_app(
         )
         async with lock:
             sessions[ctx.session_id] = ctx
+        # Stage 11: record source_ip for the
+        # record_threat_assessment honeytoken-placement hook to
+        # look up.
+        service.record_session_source_ip(ctx.session_id, req.source_ip)
         if selection is not None:
             service.record_persona_selected(
                 session_id=ctx.session_id,
@@ -326,13 +334,22 @@ def create_bridge_app(
             req.source_ip,
             ctx.persona_name,
         )
+        # Stage 11: merge honeytoken payloads into the persona's
+        # existing fakefs_overlay. Honeytoken paths override any
+        # persona-defined entry at the same path (operator-
+        # surprising; documented in HONEYTOKENS.md). The lure's
+        # native cat handler serves the merged overlay as the
+        # file content the attacker exfiltrates.
+        overlay: dict[str, str] = dict(persona.fakefs_overlay) if persona is not None else {}
+        for token in honeytokens:
+            overlay[token.placed_at] = token.payload
         return SessionStartResponse(
             session_id=ctx.session_id,
             fake_hostname=ctx.fake_hostname,
             fake_username=ctx.fake_username,
             fake_cwd=ctx.cwd,
             persona_name=persona.name if persona is not None else None,
-            persona_overlay=dict(persona.fakefs_overlay) if persona is not None else {},
+            persona_overlay=overlay,
         )
 
     @app.post("/api/v1/session/{session_id}/command", response_model=None)

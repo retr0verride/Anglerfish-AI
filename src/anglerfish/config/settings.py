@@ -34,6 +34,7 @@ from anglerfish.config.models import (
     DefenseConfig,
     FingerprintConfig,
     GeoConfig,
+    HoneytokensConfig,
     LogLevel,
     OllamaConfig,
     PersonaConfig,
@@ -80,6 +81,7 @@ class AnglerfishSettings(BaseSettings):
     sessions: SessionStoreConfig = Field(default_factory=SessionStoreConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
+    honeytokens: HoneytokensConfig = Field(default_factory=HoneytokensConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")

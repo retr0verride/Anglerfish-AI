@@ -128,6 +128,7 @@ def bridge_serve(
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
     from anglerfish.bridge.defense import ModelIntegrityError, verify_all_roles
     from anglerfish.bridge.overrides_reader import BridgeOverridesReader
+    from anglerfish.honeytokens import HoneytokenGenerator, HoneytokenPlacementService
     from anglerfish.intel import EmbeddingGenerator, IntentExtractor
     from anglerfish.llm import WarmPool
     from anglerfish.persistence import PersistenceClassifier
@@ -257,6 +258,37 @@ def bridge_serve(
                 )
                 raise typer.Exit(code=2) from exc
 
+    # Stage 11: optional honeytoken placement. Wired only when
+    # settings.honeytokens.enabled (the default is False; operators
+    # opt in via the wizard prompt + env var). Reuses the same
+    # SessionStoreReader as Stage 9 + 10 so the bridge process
+    # never opens a writer connection on the shared SQLite file.
+    honeytoken_placement: HoneytokenPlacementService | None = None
+    if settings.honeytokens.enabled:
+        # Pydantic-validated at settings load: callback_base_url
+        # cannot be None when enabled=True. Telling mypy by
+        # asserting + cast.
+        callback_url = settings.honeytokens.callback_base_url
+        assert callback_url is not None  # noqa: S101
+        honeytoken_placement = HoneytokenPlacementService(
+            generator=HoneytokenGenerator(callback_base_url=str(callback_url)),
+            audit_log=audit_log,
+        )
+        if persona_reader is None:
+            persona_reader = SessionStoreReader(settings.sessions)
+            try:
+                asyncio.run(persona_reader.open())
+            except FileNotFoundError as exc:
+                Console().print(
+                    Panel(
+                        str(exc) + "\n\nStart the dashboard at least once before "
+                        "the bridge, or disable honeytokens with "
+                        "ANGLERFISH_HONEYTOKENS__ENABLED=false.",
+                        title="[red]Honeytoken session-store reader failed to open[/red]",
+                    ),
+                )
+                raise typer.Exit(code=2) from exc
+
     service = AIBridgeService(
         settings,
         client=ai_client,
@@ -266,6 +298,7 @@ def bridge_serve(
         embedding_generator=embedding_generator,
         persona_selector=persona_selector,
         persistence_classifier=persistence_classifier,
+        honeytoken_placement=honeytoken_placement,
         session_store_reader=persona_reader,
     )
     warm_pool = WarmPool(

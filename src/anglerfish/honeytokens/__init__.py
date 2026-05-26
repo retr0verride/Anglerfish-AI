@@ -21,6 +21,7 @@ the THREAT_MODEL update.
 from __future__ import annotations
 
 from anglerfish.honeytokens.generators import HoneytokenGenerator
+from anglerfish.honeytokens.placement import HoneytokenPlacementService
 from anglerfish.honeytokens.schema import (
     Honeytoken,
     HoneytokenKind,
@@ -31,5 +32,6 @@ __all__ = [
     "Honeytoken",
     "HoneytokenGenerator",
     "HoneytokenKind",
+    "HoneytokenPlacementService",
     "new_lookup_id",
 ]
