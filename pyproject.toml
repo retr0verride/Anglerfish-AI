@@ -42,6 +42,10 @@ dependencies = [
     "anyio>=4.3,<5",
     "asyncssh>=2.18,<3",
     "cryptography>=46.0.7,<47",
+    # Stage 9: persona YAML loader uses yaml.safe_load only.
+    # Previously transitive via pre-commit; pinned explicit because
+    # the persona registry is runtime code.
+    "pyyaml>=6.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -76,6 +80,7 @@ dev = [
     "ruff>=0.4.4,<1",
     "mypy>=1.10,<2",
     "pre-commit>=3.7,<5",
+    "types-PyYAML>=6.0,<7",
     # All runtime extras flattened in for full test coverage.
     "fastapi>=0.110,<1",
     "uvicorn[standard]>=0.29,<1",
@@ -110,6 +115,7 @@ anglerfish = [
     "dashboard/static/*.svg",
     "dashboard/static/*.webp",
     "dashboard/static/*.ico",
+    "persona/personas/*.yaml",
 ]
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,81 @@
+name: ad-joined-workstation
+description: >-
+  Ubuntu workstation joined to a corporate Active Directory via SSSD,
+  Samba, and Kerberos. Looks like a corp-managed dev seat: realm
+  membership, GPO-style sudoers rules, and a winbind cache.
+
+hostname: ws-corp-217
+username: jdoe@corp.example.com
+cwd: /home/jdoe@corp.example.com
+
+prompt_block: |-
+  This is a corporate Ubuntu workstation joined to the corp.example.com
+  Active Directory domain via SSSD + realmd. The current shell user is
+  a domain user (jdoe@corp.example.com), home directory under
+  /home/<user>@corp.example.com per the SSSD default. Kerberos ticket
+  cache is in /tmp/krb5cc_<uid>; klist would show a valid TGT. winbind
+  is running and serving id-mapping. The sudoers rule allows the
+  Domain Admins group via /etc/sudoers.d/ad-admins. CrowdStrike Falcon
+  agent is installed and running as the falcon-sensor service.
+
+fakefs_overlay:
+  /etc/hostname: |
+    ws-corp-217
+  /etc/os-release: |
+    PRETTY_NAME="Ubuntu 22.04.4 LTS"
+    NAME="Ubuntu"
+    VERSION_ID="22.04"
+    VERSION="22.04.4 LTS (Jammy Jellyfish)"
+    VERSION_CODENAME=jammy
+    ID=ubuntu
+    HOME_URL="https://www.ubuntu.com/"
+    SUPPORT_URL="https://help.ubuntu.com/"
+    BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+  /etc/krb5.conf: |
+    [libdefaults]
+        default_realm = CORP.EXAMPLE.COM
+        rdns = false
+        dns_lookup_realm = true
+        dns_lookup_kdc = true
+        ticket_lifetime = 24h
+        renew_lifetime = 7d
+        forwardable = true
+
+    [realms]
+        CORP.EXAMPLE.COM = {
+            kdc = dc01.corp.example.com
+            kdc = dc02.corp.example.com
+            admin_server = dc01.corp.example.com
+        }
+
+    [domain_realm]
+        .corp.example.com = CORP.EXAMPLE.COM
+        corp.example.com = CORP.EXAMPLE.COM
+  /etc/sssd/sssd.conf: |
+    [sssd]
+    domains = corp.example.com
+    config_file_version = 2
+    services = nss, pam
+
+    [domain/corp.example.com]
+    ad_domain = corp.example.com
+    krb5_realm = CORP.EXAMPLE.COM
+    realmd_tags = manages-system joined-with-adcli
+    cache_credentials = True
+    id_provider = ad
+    krb5_store_password_if_offline = True
+    default_shell = /bin/bash
+    ldap_id_mapping = True
+    use_fully_qualified_names = True
+    fallback_homedir = /home/%u@%d
+    access_provider = ad
+  /var/log/apt/history.log: |
+    Start-Date: 2026-02-19  13:44:51
+    Commandline: apt-get install -y realmd sssd sssd-tools samba-common-bin krb5-user
+    Install: realmd:amd64 (0.17.0-2build1), sssd:amd64 (2.6.3-1ubuntu3.7), sssd-tools:amd64 (2.6.3-1ubuntu3.7), samba-common-bin:amd64 (2:4.15.13+dfsg-0ubuntu1.6), krb5-user:amd64 (1.19.2-2ubuntu0.4)
+    End-Date: 2026-02-19  13:45:13
+
+    Start-Date: 2026-04-02  11:17:08
+    Commandline: dpkg -i /tmp/falcon-sensor_7.18.0-17104_amd64.deb
+    Install: falcon-sensor:amd64 (7.18.0-17104)
+    End-Date: 2026-04-02  11:17:22

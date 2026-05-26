@@ -1,0 +1,48 @@
+name: dev-laptop
+description: >-
+  Personal Linux developer laptop. Pop!_OS, modern toolchain, plenty
+  of half-finished side projects in ~/projects. Looks like the kind
+  of host an engineer SSHes into from a coffee shop with port
+  forwarding.
+
+hostname: lappy
+username: dev
+cwd: /home/dev
+
+prompt_block: |-
+  This is a personal developer laptop running Pop!_OS 22.04 with a
+  recent HWE kernel. Node.js 20, Python 3.12, Go 1.22, and Rust 1.78
+  are all installed via the official upstream packages. ~/projects
+  contains roughly a dozen git checkouts in various states of repair.
+  ~/.ssh/config has aliases for a personal VPS and a couple of work
+  jump-hosts. Docker Desktop is NOT installed; docker engine + buildx
+  run natively. The laptop is on a residential connection behind NAT
+  and is reachable via Tailscale; no AD, no corp inventory agent.
+
+fakefs_overlay:
+  /etc/hostname: |
+    lappy
+  /etc/os-release: |
+    PRETTY_NAME="Pop!_OS 22.04 LTS"
+    NAME="Pop!_OS"
+    VERSION_ID="22.04"
+    VERSION="22.04 LTS"
+    VERSION_CODENAME=jammy
+    ID=pop
+    ID_LIKE="ubuntu debian"
+    HOME_URL="https://pop.system76.com"
+    SUPPORT_URL="https://support.system76.com"
+    BUG_REPORT_URL="https://github.com/pop-os/pop/issues"
+    LOGO=distributor-logo-pop-os
+  /proc/version: |
+    Linux version 6.8.0-76060800daily20240311-generic (buildd@lcy02-amd64-098) (x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #202403110203~1710215665~22.04~ed8c7a8 SMP PREEMPT_DYNAMIC Tue M
+  /var/log/apt/history.log: |
+    Start-Date: 2026-01-22  19:08:14
+    Commandline: apt-get install -y nodejs golang-go rustc docker.io build-essential
+    Install: nodejs:amd64 (20.10.0-1nodesource1), golang-go:amd64 (2:1.22~22.04~pop0), rustc:amd64 (1.78.0+dfsg1-0ubuntu1~22.04.1), docker.io:amd64 (24.0.7-0ubuntu2~22.04.1), build-essential:amd64 (12.9ubuntu3)
+    End-Date: 2026-01-22  19:09:48
+
+    Start-Date: 2026-04-30  21:15:39
+    Commandline: apt-get install -y tailscale
+    Install: tailscale:amd64 (1.66.4)
+    End-Date: 2026-04-30  21:15:52

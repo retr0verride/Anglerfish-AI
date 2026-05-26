@@ -1,0 +1,45 @@
+name: gpu-rig
+description: >-
+  Single-tenant ML workstation with two consumer NVIDIA cards. Used
+  for training and the occasional crypto-curious experiment. Loaded
+  with CUDA, PyTorch, and a partly-built nvidia-docker setup.
+
+hostname: gpu-rig-04
+username: ml
+cwd: /home/ml
+
+prompt_block: |-
+  This host is a dual-GPU machine learning workstation. Two NVIDIA
+  RTX 4090 cards visible via nvidia-smi, CUDA 12.3 installed, PyTorch
+  2.4 in /home/ml/.venv. nvidia-container-toolkit is half-configured:
+  the daemon is running but the user is not in the docker group, so
+  attempts to run GPU containers as a non-root user fail with a
+  permission error. The home directory contains a handful of
+  HuggingFace model snapshots and a long-running training session in
+  tmux. The box is on a flat lab network with no LDAP or AD.
+
+fakefs_overlay:
+  /etc/hostname: |
+    gpu-rig-04
+  /etc/os-release: |
+    PRETTY_NAME="Ubuntu 22.04.4 LTS"
+    NAME="Ubuntu"
+    VERSION_ID="22.04"
+    VERSION="22.04.4 LTS (Jammy Jellyfish)"
+    VERSION_CODENAME=jammy
+    ID=ubuntu
+    HOME_URL="https://www.ubuntu.com/"
+    SUPPORT_URL="https://help.ubuntu.com/"
+    BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+  /proc/version: |
+    Linux version 6.5.0-35-generic (buildd@lcy02-amd64-005) (x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #35-Ubuntu SMP PREEMPT_DYNAMIC Fri May 17 16:01:21 UTC 2026
+  /var/log/apt/history.log: |
+    Start-Date: 2026-01-12  14:08:31
+    Commandline: apt-get install -y nvidia-driver-545 cuda-toolkit-12-3 nvidia-container-toolkit
+    Install: nvidia-driver-545:amd64 (545.29.06-0ubuntu1), cuda-toolkit-12-3:amd64 (12.3.2-1), nvidia-container-toolkit:amd64 (1.14.5-1)
+    End-Date: 2026-01-12  14:14:02
+
+    Start-Date: 2026-03-04  09:11:18
+    Commandline: apt-get install -y python3-pip tmux git-lfs
+    Install: python3-pip:amd64 (22.0.2+dfsg-1ubuntu0.5), tmux:amd64 (3.2a-4ubuntu0.2), git-lfs:amd64 (3.0.2-1ubuntu0.2)
+    End-Date: 2026-03-04  09:11:42

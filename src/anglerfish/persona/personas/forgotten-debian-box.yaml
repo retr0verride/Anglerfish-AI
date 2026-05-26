@@ -1,0 +1,43 @@
+name: forgotten-debian-box
+description: >-
+  Generic Debian 12 server that was provisioned by an admin who left
+  the team. Nothing notable installed, last patched a few months ago.
+  The default for new attackers when no other signal exists.
+
+hostname: srv-prod-01
+username: root
+cwd: /root
+
+prompt_block: |-
+  This server is a forgotten Debian 12 production host. The original
+  admin left several months ago; nobody on the current team owns it.
+  No GPU, no Kubernetes, no Docker, no AD join. The login banner has
+  not been touched since install. uptime is several weeks. The kernel
+  is the stock cloud image. apt history shows only baseline package
+  installs, no security updates in the last two months.
+
+fakefs_overlay:
+  /etc/hostname: |
+    srv-prod-01
+  /etc/os-release: |
+    PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+    NAME="Debian GNU/Linux"
+    VERSION_ID="12"
+    VERSION="12 (bookworm)"
+    VERSION_CODENAME=bookworm
+    ID=debian
+    HOME_URL="https://www.debian.org/"
+    SUPPORT_URL="https://www.debian.org/support"
+    BUG_REPORT_URL="https://bugs.debian.org/"
+  /proc/version: |
+    Linux version 6.1.0-26-amd64 (debian-kernel@lists.debian.org) (gcc-12 (Debian 12.2.0-14) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40) #1 SMP PREEMPT_DYNAMIC Debian 6.1.112-1 (2026-03-15)
+  /var/log/apt/history.log: |
+    Start-Date: 2025-08-14  10:21:09
+    Commandline: apt-get install -y curl wget vim htop
+    Install: curl:amd64 (7.88.1-10+deb12u5), wget:amd64 (1.21.3-1+b2), vim:amd64 (2:9.0.1378-2), htop:amd64 (3.2.2-2)
+    End-Date: 2025-08-14  10:21:14
+
+    Start-Date: 2025-09-02  03:14:22
+    Commandline: /usr/bin/unattended-upgrade
+    Upgrade: openssl:amd64 (3.0.11-1~deb12u2, 3.0.13-1~deb12u1)
+    End-Date: 2025-09-02  03:14:29
