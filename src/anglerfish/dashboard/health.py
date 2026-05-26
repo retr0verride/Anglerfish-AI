@@ -60,6 +60,10 @@ _INTEGRITY_EVENT_TYPES = frozenset(
     },
 )
 _WARMUP_EVENT_TYPES = frozenset({"llm.warmup_succeeded", "llm.warmup_failed"})
+_WASTING_WINDOW_MIN = 60
+_WASTING_APPLIED_EVENT = "bridge.wasting_applied"
+_WASTING_EXHAUSTED_EVENT = "bridge.wasting_budget_exhausted"
+_SESSION_CLOSED_EVENT = "lure.session_closed"
 
 
 async def ollama_health(
@@ -113,6 +117,7 @@ async def sessions_health(
     active = stats.active_sessions
     utilisation_pct = (active / cap * 100.0) if cap > 0 else 0.0
     rate = _command_rate_per_minute(audit_log.path, _SESSION_RATE_WINDOW_MIN)
+    wasting = _wasting_stats(audit_log.path, settings.bridge.wasting_strategy)
     return {
         "active_sessions": active,
         "max_concurrent_requests": cap,
@@ -121,6 +126,7 @@ async def sessions_health(
             "window_minutes": _SESSION_RATE_WINDOW_MIN,
             "rate": rate,
         },
+        "wasting": wasting,
     }
 
 
@@ -192,6 +198,66 @@ def _latest_warmup_per_role(audit_path: Path) -> dict[str, dict[str, Any]]:
             "status": "succeeded" if event_type == "llm.warmup_succeeded" else "failed",
         }
     return latest
+
+
+def _wasting_stats(audit_path: Path, static_strategy: str) -> dict[str, Any]:
+    """Aggregate per-session wasting stats from the audit log.
+
+    Scans ``bridge.wasting_applied`` + ``bridge.wasting_budget_exhausted``
+    events within the last :data:`_WASTING_WINDOW_MIN` minutes. Returns:
+
+    * ``strategy`` - the bridge's static config (cross-process; the
+      runtime-overrides JSON is the source of truth at request time
+      but the dashboard doesn't share that file's read path here).
+    * ``avg_wasted_ms_per_session`` - sum of wasted_ms over all
+      applied events in window, divided by distinct session_ids.
+    * ``sessions_at_budget_cap`` - count of distinct session_ids
+      that emitted ``bridge.wasting_budget_exhausted`` and have not
+      since emitted ``lure.session_closed``.
+
+    Missing audit log or empty window returns zeroed counters.
+    """
+    now = datetime.now(tz=UTC)
+    cutoff = now - timedelta(minutes=_WASTING_WINDOW_MIN)
+
+    total_wasted_ms = 0
+    sessions_with_wasting: set[str] = set()
+    sessions_exhausted: set[str] = set()
+    sessions_closed: set[str] = set()
+
+    for event in iter_events(audit_path):
+        event_type = event.get("event_type")
+        if event_type not in (
+            _WASTING_APPLIED_EVENT,
+            _WASTING_EXHAUSTED_EVENT,
+            _SESSION_CLOSED_EVENT,
+        ):
+            continue
+        ts = parse_event_timestamp(event)
+        if ts is None or ts < cutoff:
+            continue
+        session_id = event.get("session_id")
+        if not isinstance(session_id, str):
+            continue
+        if event_type == _WASTING_APPLIED_EVENT:
+            sessions_with_wasting.add(session_id)
+            wasted = event.get("wasted_ms")
+            if isinstance(wasted, int):
+                total_wasted_ms += wasted
+        elif event_type == _WASTING_EXHAUSTED_EVENT:
+            sessions_exhausted.add(session_id)
+        else:  # _SESSION_CLOSED_EVENT
+            sessions_closed.add(session_id)
+
+    distinct = len(sessions_with_wasting)
+    avg = total_wasted_ms // distinct if distinct > 0 else 0
+    still_capped = sessions_exhausted - sessions_closed
+    return {
+        "strategy": static_strategy,
+        "window_minutes": _WASTING_WINDOW_MIN,
+        "avg_wasted_ms_per_session": avg,
+        "sessions_at_budget_cap": len(still_capped),
+    }
 
 
 def _command_rate_per_minute(audit_path: Path, window_minutes: int) -> float:

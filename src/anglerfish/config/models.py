@@ -392,6 +392,21 @@ class BridgeConfig(BaseModel):
             "keeping aggressive's delay-based wasting."
         ),
     )
+    session_wasted_ms_cap: int = Field(
+        default=1_800_000,
+        ge=0,
+        le=86_400_000,
+        description=(
+            "Per-attacker-session ceiling on the milliseconds the "
+            "wasting strategy is allowed to add. Default 1_800_000 ms "
+            "(30 min) is well above the production median dwell time "
+            "so the cap rarely bites; sessions that hit it drop to "
+            "the 'off' strategy for the rest of their lifetime and "
+            "emit a single bridge.wasting_budget_exhausted audit. "
+            "Set to 0 to disable the cap (legitimate in closed-lab "
+            "analysis runs where the strategy should run unbounded)."
+        ),
+    )
 
     @field_validator("fake_hostname")
     @classmethod

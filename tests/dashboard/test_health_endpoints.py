@@ -157,3 +157,69 @@ def test_unauthenticated_health_alias_still_open(client: TestClient) -> None:
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/health/ollama").status_code == 200
     assert client.get("/api/health/sessions").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 slice 5: /api/health/sessions includes a wasting block
+# ---------------------------------------------------------------------------
+
+
+def test_sessions_endpoint_wasting_block_defaults_when_empty(
+    client: TestClient,
+) -> None:
+    body = client.get("/api/health/sessions").json()
+    wasting = body["wasting"]
+    assert wasting["strategy"] == "off"  # default BridgeConfig
+    assert wasting["avg_wasted_ms_per_session"] == 0
+    assert wasting["sessions_at_budget_cap"] == 0
+
+
+def test_sessions_endpoint_wasting_aggregates_recent_events(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    now = datetime.now(tz=UTC)
+    ts = (now - timedelta(seconds=30)).isoformat()
+    sid_a = "11111111-1111-1111-1111-111111111111"
+    sid_b = "22222222-2222-2222-2222-222222222222"
+    lines = [
+        # two wasting applications against session A: 1000 + 2000 ms.
+        '{"ts":"' + ts + '","event_type":"bridge.wasting_applied",'
+        '"session_id":"' + sid_a + '","strategy":"light","wasted_ms":1000,'
+        '"pre_message":false,"clarification_injected":false}',
+        '{"ts":"' + ts + '","event_type":"bridge.wasting_applied",'
+        '"session_id":"' + sid_a + '","strategy":"light","wasted_ms":2000,'
+        '"pre_message":false,"clarification_injected":false}',
+        # one against session B: 4000 ms; B then hits the cap.
+        '{"ts":"' + ts + '","event_type":"bridge.wasting_applied",'
+        '"session_id":"' + sid_b + '","strategy":"aggressive","wasted_ms":4000,'
+        '"pre_message":true,"clarification_injected":false}',
+        '{"ts":"' + ts + '","event_type":"bridge.wasting_budget_exhausted",'
+        '"session_id":"' + sid_b + '","wasted_ms":4000,"cap_ms":3000}',
+    ]
+    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = client.get("/api/health/sessions").json()
+    wasting = body["wasting"]
+    # 1000 + 2000 + 4000 = 7000 across 2 distinct sessions = 3500 avg.
+    assert wasting["avg_wasted_ms_per_session"] == 3500
+    # Session B is still capped (no lure.session_closed seen).
+    assert wasting["sessions_at_budget_cap"] == 1
+
+
+def test_sessions_endpoint_wasting_drops_closed_capped_sessions(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    now = datetime.now(tz=UTC)
+    ts = (now - timedelta(seconds=30)).isoformat()
+    sid = "33333333-3333-3333-3333-333333333333"
+    lines = [
+        '{"ts":"' + ts + '","event_type":"bridge.wasting_budget_exhausted",'
+        '"session_id":"' + sid + '","wasted_ms":4000,"cap_ms":3000}',
+        '{"ts":"' + ts + '","event_type":"lure.session_closed","session_id":"' + sid + '"}',
+    ]
+    audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = client.get("/api/health/sessions").json()
+    # The session hit the cap then closed; no longer counted as
+    # "currently at cap".
+    assert body["wasting"]["sessions_at_budget_cap"] == 0

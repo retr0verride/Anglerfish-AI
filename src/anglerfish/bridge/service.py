@@ -109,6 +109,15 @@ class AIBridgeService:
         # strategy to enforce the one-clarification-per-chain rule.
         # Dropped by end_session_budget alongside the budget entry.
         self._last_clarification: dict[UUID, int] = {}
+        # Per-session running total of milliseconds the wasting strategy
+        # has added (slice 6.5). When it crosses
+        # settings.bridge.session_wasted_ms_cap, the session is forced
+        # to "off" for the rest of its lifetime regardless of the
+        # operator-selected strategy. Dropped by end_session_budget.
+        self._wasted_ms: dict[UUID, int] = {}
+        # Set of session_ids that have already emitted the budget-
+        # exhausted audit; gates the one-per-session emission.
+        self._wasted_exhausted: set[UUID] = set()
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -149,15 +158,17 @@ class AIBridgeService:
         if pre_effect.pre_delay_ms > 0:
             await self._sleep(pre_effect.pre_delay_ms / 1000.0)
 
-    def _current_strategy(self) -> WastingStrategyBase:
+    def _current_strategy(self, session_id: UUID) -> WastingStrategyBase:
         """Resolve the active wasting strategy for this command.
 
-        Reads the dashboard-published runtime overrides JSON if a
-        reader was wired in; otherwise falls back to the static
-        ``settings.bridge.wasting_strategy`` value. Unknown names from
-        the reader fall through to the static config too (the reader
-        already audits the failure).
+        Sessions that have hit the per-session wasted-ms cap (slice
+        6.5) always get :class:`OffStrategy` regardless of the
+        operator selection. Otherwise the dashboard-published runtime
+        overrides JSON wins (slice 6.1 / 6.2 / 6.3); missing or
+        invalid values fall back to ``settings.bridge.wasting_strategy``.
         """
+        if session_id in self._wasted_exhausted:
+            return get_strategy("off")
         if self._overrides_reader is not None:
             try:
                 name = self._overrides_reader.current_wasting_strategy()
@@ -185,6 +196,22 @@ class AIBridgeService:
         """Drop per-session state. Safe to call for unknown ids."""
         self._budgets.pop(session_id, None)
         self._last_clarification.pop(session_id, None)
+        self._wasted_ms.pop(session_id, None)
+        self._wasted_exhausted.discard(session_id)
+
+    def wasting_stats(self) -> dict[str, int]:
+        """Return a snapshot of per-process wasting counters.
+
+        Operator-facing: the dashboard runs in a separate process
+        and reads its dashboard health view from the audit log, so
+        this method is for in-process consumers (CLI tools, tests,
+        future Stage 7+ analytics that share the bridge process).
+        """
+        return {
+            "active_sessions_with_wasting": len(self._wasted_ms),
+            "sessions_at_budget_cap": len(self._wasted_exhausted),
+            "total_wasted_ms": sum(self._wasted_ms.values()),
+        }
 
     async def handle_command(
         self,
@@ -389,12 +416,12 @@ class AIBridgeService:
         accumulated: list[str] = []
         error: LLMError | None = None
         budget = self.budget_for(session.session_id)
-        strategy = self._current_strategy()
+        strategy = self._current_strategy(session.session_id)
         strategy_ctx = StrategyContext(
             session_id=session.session_id,
             command=sanitised,
             command_count=session.command_count,
-            wasted_ms_so_far=0,  # slice 6.5 wires the per-session cap
+            wasted_ms_so_far=self._wasted_ms.get(session.session_id, 0),
             bridge_config=self._settings.bridge,
             last_clarification_command_count=self._last_clarification.get(
                 session.session_id,
@@ -455,6 +482,7 @@ class AIBridgeService:
                 pre_message=pre_effect.pre_message is not None,
                 clarification_injected=pre_effect.inject_clarification,
             )
+        self._accumulate_wasted_ms(session, wasted_ms)
 
         if error is None:
             # Post-stream defense filter. Detection only; the chunks
@@ -530,6 +558,41 @@ class AIBridgeService:
             session_id=str(session.session_id),
             attacker_ip=session.source_ip,
         )
+
+    def _accumulate_wasted_ms(
+        self,
+        session: SessionContext,
+        wasted_ms: int,
+    ) -> None:
+        """Update the per-session wasted-ms total and fire the cap audit.
+
+        ``wasted_ms`` is the contribution from the just-completed
+        command. Adds it to the running per-session total; if the
+        total crosses ``settings.bridge.session_wasted_ms_cap`` for
+        the first time, emits ``bridge.wasting_budget_exhausted`` once
+        and marks the session so subsequent commands route through
+        the off strategy via :meth:`_current_strategy`. cap=0 disables
+        enforcement.
+        """
+        if wasted_ms <= 0:
+            return
+        session_id = session.session_id
+        new_total = self._wasted_ms.get(session_id, 0) + wasted_ms
+        self._wasted_ms[session_id] = new_total
+        cap = self._settings.bridge.session_wasted_ms_cap
+        if cap <= 0:
+            return  # disabled by operator
+        if session_id in self._wasted_exhausted:
+            return
+        if new_total >= cap:
+            self._wasted_exhausted.add(session_id)
+            self._audit_log.record(
+                "bridge.wasting_budget_exhausted",
+                session_id=str(session_id),
+                attacker_ip=session.source_ip,
+                wasted_ms=new_total,
+                cap_ms=cap,
+            )
 
     def _record_wasting_applied(
         self,

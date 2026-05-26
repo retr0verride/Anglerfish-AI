@@ -24,7 +24,8 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
 * Bridge: ``bridge.defense_fired``, ``bridge.defense_scan_truncated``,
   ``bridge.model_integrity_verified``, ``bridge.model_integrity_failed``,
   ``bridge.model_integrity_skipped``, ``bridge.budget_exhausted``,
-  ``bridge.overrides_read_failed``, ``bridge.wasting_applied``.
+  ``bridge.overrides_read_failed``, ``bridge.wasting_applied``,
+  ``bridge.wasting_budget_exhausted``.
 * Dashboard (Stage 6): ``dashboard.overrides_published``,
   ``dashboard.overrides_publish_failed``.
 * Lure: ``lure.server_started``, ``lure.server_stopped``,

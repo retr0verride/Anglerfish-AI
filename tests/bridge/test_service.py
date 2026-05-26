@@ -1337,3 +1337,149 @@ async def test_clarification_one_per_chain_blocks_follow_up(
     # no clarification, off-equivalent for this command).
     clarification_events = [e for e in wasting_events if e[1].get("clarification_injected")]
     assert len(clarification_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 slice 5: per-session wasted-ms cap
+# ---------------------------------------------------------------------------
+
+
+async def test_wasting_budget_exhausts_drops_to_off_strategy(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """When wasted_ms crosses the cap, the session falls back to off."""
+    import json as _json
+
+    body = (
+        _json.dumps({"message": {"content": "a"}, "done": False})
+        + "\n"
+        + _json.dumps({"done": True, "prompt_eval_count": 1, "eval_count": 2})
+        + "\n"
+    )
+
+    seen_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(_json.loads(request.read()))
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    # Tiny cap so the first aggressive-with-clarification command
+    # exhausts it. cap=100ms means any pre-effect or chunk delay
+    # >100ms crosses immediately.
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        bridge=BridgeConfig(
+            wasting_strategy="aggressive",
+            aggressive_clarification_rate=0.0,  # delays only
+            session_wasted_ms_cap=100,
+        ),
+    )
+    audit = _MockAudit()
+
+    async def fake_sleep(_seconds: float) -> None:
+        return
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+        sleep=fake_sleep,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        # First command: aggressive applies inter-chunk delay (~200-500ms),
+        # which crosses the 100ms cap; budget-exhausted fires.
+        _ = [c async for c in service.handle_command_stream(session, "ls /etc")]
+        # Subsequent commands should run with the off strategy: no delays.
+        _ = [c async for c in service.handle_command_stream(session, "ls /var")]
+        _ = [c async for c in service.handle_command_stream(session, "ls /tmp")]
+    finally:
+        await service.aclose()
+
+    # Exactly one budget-exhausted event for the session.
+    exhausted_events = [e for e in audit.events if e[0] == "bridge.wasting_budget_exhausted"]
+    assert len(exhausted_events) == 1
+    _, fields = exhausted_events[0]
+    assert fields["session_id"] == str(session.session_id)
+    assert fields["cap_ms"] == 100
+    assert fields["wasted_ms"] >= 100
+
+    # Three commands made it to Ollama (off path is still a real LLM call).
+    assert len(seen_payloads) == 3
+
+    # Wasting-applied audits: first command emitted; second + third
+    # don't because the strategy returned no delays (off).
+    wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
+    assert len(wasting_events) == 1
+
+
+async def test_session_wasted_ms_cap_zero_disables_enforcement(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """cap=0 means the budget-exhausted event never fires."""
+    import json as _json
+
+    body = _json.dumps({"done": True}) + "\n"
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    settings = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        bridge=BridgeConfig(
+            wasting_strategy="aggressive",
+            aggressive_clarification_rate=0.0,
+            session_wasted_ms_cap=0,
+        ),
+    )
+    audit = _MockAudit()
+
+    async def fake_sleep(_seconds: float) -> None:
+        return
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+        sleep=fake_sleep,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        for _ in range(5):
+            _ = [c async for c in service.handle_command_stream(session, "ls")]
+    finally:
+        await service.aclose()
+
+    exhausted_events = [e for e in audit.events if e[0] == "bridge.wasting_budget_exhausted"]
+    assert exhausted_events == []
+
+
+async def test_end_session_budget_clears_wasting_state(
+    settings: AnglerfishSettings,
+) -> None:
+    """A new session-id under the same service does not inherit exhaustion."""
+    import json as _json
+
+    body = _json.dumps({"done": True}) + "\n"
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    service = AIBridgeService(settings, client=_mock_ollama_client(handler))
+    sid_1 = uuid4()
+    service._wasted_ms[sid_1] = 999_999
+    service._wasted_exhausted.add(sid_1)
+    service.end_session_budget(sid_1)
+    assert sid_1 not in service._wasted_ms
+    assert sid_1 not in service._wasted_exhausted
+    snapshot = service.wasting_stats()
+    assert snapshot == {
+        "active_sessions_with_wasting": 0,
+        "sessions_at_budget_cap": 0,
+        "total_wasted_ms": 0,
+    }
+    await service.aclose()
