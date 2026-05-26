@@ -12,6 +12,7 @@ from __future__ import annotations
 from anglerfish.models.credentials import CredentialRecord, CredentialStats
 from anglerfish.models.fingerprint import SessionFingerprint, SshBannerInfo
 from anglerfish.models.geo import GeoRecord
+from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import (
     BridgeChunk,
     BridgeResponse,
@@ -28,6 +29,7 @@ __all__ = [
     "CredentialRecord",
     "CredentialStats",
     "GeoRecord",
+    "IntentSummary",
     "ResponseSource",
     "SessionFingerprint",
     "SessionSnapshot",
