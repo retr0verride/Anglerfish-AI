@@ -70,6 +70,17 @@ def _get_audit(request: Request) -> AuditLog:
     return cast("AuditLog", audit)
 
 
+def _get_persona_registry(request: Request) -> Any | None:
+    """Return the persona registry attached at startup, or None.
+
+    The persona pin endpoints raise 503 when this is None (Stage 9
+    disabled via ``settings.persona.enabled=False``) so the SPA can
+    grey-disable the pin controls cleanly rather than getting a 422
+    for every persona name it tries.
+    """
+    return getattr(request.app.state, "persona_registry", None)
+
+
 def _get_overrides_publisher(request: Request) -> Any:
     """Return the runtime-overrides publisher, or None if not attached.
 
@@ -106,6 +117,20 @@ class _FeatureFlagsUpdate(BaseModel):
     engaged_persistence: bool | None = None
     decoy_poisoning: bool | None = None
     counter_deception: bool | None = None
+
+
+class _PersonaPinRequest(BaseModel):
+    """POST /api/persona/pin request body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_ip: str = Field(min_length=1, max_length=64)
+    persona: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9-]+$",
+        description="Persona name; validated against the loaded PersonaRegistry.",
+    )
 
 
 def build_router(*, templates: Jinja2Templates) -> APIRouter:
@@ -226,6 +251,75 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             "count": len(items),
             "items": items,
         }
+
+    # Stage 9 slice 9.4: operator persona pins. The selector consults
+    # these before the source-IP recurrence query. Auth + CSRF gates
+    # match the existing settings + features POST surface.
+
+    @router.post(
+        "/api/persona/pin",
+        dependencies=[Depends(require_auth), Depends(require_csrf)],
+    )
+    async def upsert_persona_pin(
+        request: Request,
+        body: _PersonaPinRequest = Body(...),  # noqa: B008
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+        registry: Any = Depends(_get_persona_registry),  # noqa: B008
+    ) -> dict[str, Any]:
+        if registry is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="persona registry not loaded; set ANGLERFISH_PERSONA__ENABLED=true",
+            )
+        if body.persona not in registry:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown persona {body.persona!r}; registered: {list(registry.names())}",
+            )
+        actor = _actor(request)
+        pin = await state.upsert_persona_pin(
+            source_ip=body.source_ip,
+            persona=body.persona,
+            created_by=actor,
+        )
+        audit.record(
+            "dashboard.persona_pinned",
+            source_ip=pin.source_ip,
+            persona=pin.persona,
+            operator=actor,
+        )
+        return pin.model_dump(mode="json")
+
+    @router.get("/api/persona/pin", dependencies=[Depends(require_auth)])
+    async def list_persona_pins(
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        pins = await state.list_persona_pins()
+        return {
+            "count": len(pins),
+            "items": [pin.model_dump(mode="json") for pin in pins],
+        }
+
+    @router.delete(
+        "/api/persona/pin/{source_ip}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(require_auth), Depends(require_csrf)],
+    )
+    async def delete_persona_pin(
+        source_ip: str,
+        request: Request,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> None:
+        deleted = await state.delete_persona_pin(source_ip)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        audit.record(
+            "dashboard.persona_unpinned",
+            source_ip=source_ip,
+            operator=_actor(request),
+        )
 
     @router.get("/api/commands", dependencies=[Depends(require_auth)])
     async def recent_commands(

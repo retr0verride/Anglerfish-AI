@@ -184,3 +184,109 @@ async def test_reader_persists_persona_on_session_snapshot(tmp_path: Path) -> No
         assert loaded.persona_name == "ad-joined-workstation"
     finally:
         await writer.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Stage 9 slice 9.4: SessionStore persona_pins CRUD + update_session_persona
+# ---------------------------------------------------------------------------
+
+
+async def test_persona_pin_round_trip(tmp_path: Path) -> None:
+    writer, config = await _make_writer(tmp_path)
+    try:
+        await writer.upsert_persona_pin(
+            source_ip="203.0.113.7",
+            persona="gpu-rig",
+            created_by="operator",
+        )
+        async with SessionStoreReader(config) as reader:
+            assert await reader.get_persona_pin("203.0.113.7") == "gpu-rig"
+    finally:
+        await writer.aclose()
+
+
+async def test_persona_pin_upsert_overwrites(tmp_path: Path) -> None:
+    writer, config = await _make_writer(tmp_path)
+    try:
+        await writer.upsert_persona_pin(
+            source_ip="203.0.113.7",
+            persona="gpu-rig",
+            created_by="op1",
+        )
+        latest = await writer.upsert_persona_pin(
+            source_ip="203.0.113.7",
+            persona="dev-laptop",
+            created_by="op2",
+        )
+        assert latest.persona == "dev-laptop"
+        assert latest.created_by == "op2"
+        async with SessionStoreReader(config) as reader:
+            assert await reader.get_persona_pin("203.0.113.7") == "dev-laptop"
+    finally:
+        await writer.aclose()
+
+
+async def test_list_persona_pins_newest_first(tmp_path: Path) -> None:
+    writer, _ = await _make_writer(tmp_path)
+    try:
+        # Two distinct IPs so neither upserts over the other; the
+        # second insert produces a later created_at.
+        await writer.upsert_persona_pin(
+            source_ip="203.0.113.1",
+            persona="gpu-rig",
+            created_by="op",
+        )
+        # Tiny delay so created_at strictly orders.
+        import asyncio
+
+        await asyncio.sleep(0.01)
+        await writer.upsert_persona_pin(
+            source_ip="203.0.113.2",
+            persona="dev-laptop",
+            created_by="op",
+        )
+        pins = await writer.list_persona_pins()
+        assert [p.source_ip for p in pins] == ["203.0.113.2", "203.0.113.1"]
+    finally:
+        await writer.aclose()
+
+
+async def test_delete_persona_pin_returns_true_when_removed(tmp_path: Path) -> None:
+    writer, _ = await _make_writer(tmp_path)
+    try:
+        await writer.upsert_persona_pin(
+            source_ip="203.0.113.7",
+            persona="gpu-rig",
+            created_by="op",
+        )
+        assert await writer.delete_persona_pin("203.0.113.7") is True
+        assert await writer.delete_persona_pin("203.0.113.7") is False
+    finally:
+        await writer.aclose()
+
+
+async def test_update_session_persona_rewrites_value(tmp_path: Path) -> None:
+    writer, _ = await _make_writer(tmp_path)
+    try:
+        snap = _snapshot(persona_name="forgotten-debian-box")
+        await writer.upsert_session(snap)
+        changed = await writer.update_session_persona(snap.session_id, "gpu-rig")
+        assert changed is True
+        reloaded = await writer.get_session(snap.session_id)
+        assert reloaded is not None
+        assert reloaded.persona_name == "gpu-rig"
+    finally:
+        await writer.aclose()
+
+
+async def test_update_session_persona_unknown_session_returns_false(
+    tmp_path: Path,
+) -> None:
+    writer, _ = await _make_writer(tmp_path)
+    try:
+        from uuid import uuid4
+
+        changed = await writer.update_session_persona(uuid4(), "gpu-rig")
+        assert changed is False
+    finally:
+        await writer.aclose()

@@ -30,6 +30,7 @@ from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.dashboard.routes import build_router
 from anglerfish.dashboard.state import DashboardState
 from anglerfish.dashboard.websocket import build_websocket_router
+from anglerfish.persona import PersonaLoadError, PersonaRegistry
 from anglerfish.sessions import SessionStore
 
 __all__ = ["create_app", "default_static_dir", "default_templates_dir"]
@@ -77,6 +78,7 @@ def create_app(
     audit: AuditLog | None = None,
     audit_tailer: AuditTailer | None = None,
     login_rate_limiter: LoginRateLimiter | None = None,
+    persona_registry: PersonaRegistry | None = None,
     templates_dir: Path | None = None,
     static_dir: Path | None = None,
 ) -> FastAPI:
@@ -107,6 +109,27 @@ def create_app(
         session_store=session_store,
     )
     audit_log = audit if audit is not None else AuditLog(settings.audit.log_path)
+    # Stage 9: load the persona registry once at startup so the
+    # POST /api/persona/pin route can validate persona names + so the
+    # tailer can resolve neighbour persona names on cluster-bias
+    # rebound. Registry load errors abort startup with a clear
+    # message rather than producing a silently-degraded dashboard.
+    # Operators who do not want persona features can pass an
+    # explicit empty registry via the keyword arg.
+    if persona_registry is not None:
+        persona_registry_instance: PersonaRegistry | None = persona_registry
+    elif settings.persona.enabled:
+        try:
+            persona_registry_instance = PersonaRegistry.load(
+                override_dir=settings.persona.config_dir,
+                default_name=settings.persona.default_persona,
+            )
+        except (PersonaLoadError, ValueError) as exc:
+            raise RuntimeError(
+                f"dashboard: persona registry load failed: {exc}",
+            ) from exc
+    else:
+        persona_registry_instance = None
     tailer_instance = (
         audit_tailer
         if audit_tailer is not None
@@ -116,6 +139,7 @@ def create_app(
             offset_cache_path=settings.data_dir / "audit_tailer.json",
             audit_log=audit_log,
             cluster_similarity_threshold=settings.bridge.cluster_similarity_threshold,
+            persona_bias_threshold=settings.persona.persona_bias_threshold,
         )
     )
 
@@ -158,6 +182,11 @@ def create_app(
     app.state.dashboard_state = state_instance
     app.state.credential_store = credential_store
     app.state.audit = audit_log
+    # Stage 9: persona registry the POST /api/persona/pin route
+    # uses to validate operator-submitted persona names. None when
+    # settings.persona.enabled=False; the route returns 503 in that
+    # case so the SPA can grey-disable the pin UI cleanly.
+    app.state.persona_registry = persona_registry_instance
     # Stage 3: in-process mutable overrides the settings endpoints
     # update. Reset on dashboard restart back to env-file values; see
     # docs/design/STAGE_3_dashboard_control_plane.md for the boundary.

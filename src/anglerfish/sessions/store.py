@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
+from anglerfish.models.persona_pin import PersonaPin
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
 from anglerfish.sessions.schema import PRAGMAS, run_migrations
@@ -557,6 +558,128 @@ class SessionStore:
             summary=row[5],
             extracted_at=datetime.fromisoformat(row[6]),
         )
+
+    # ------------------------------------------------------------------
+    # Persona pins + rebound (Stage 9 slice 9.4)
+    # ------------------------------------------------------------------
+
+    async def upsert_persona_pin(
+        self,
+        *,
+        source_ip: str,
+        persona: str,
+        created_by: str,
+    ) -> PersonaPin:
+        """Pin ``source_ip`` to ``persona``; returns the persisted record.
+
+        INSERT OR REPLACE on source_ip so pinning the same IP twice
+        overwrites with a fresh created_at. The bridge's
+        :class:`SessionStoreReader.get_persona_pin` reads what
+        this writes.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._upsert_persona_pin_locked,
+                source_ip,
+                persona,
+                created_by,
+            )
+
+    def _upsert_persona_pin_locked(
+        self,
+        source_ip: str,
+        persona: str,
+        created_by: str,
+    ) -> PersonaPin:
+        assert self._conn is not None  # noqa: S101
+        created_at = datetime.now(tz=UTC)
+        self._conn.execute(
+            """
+            INSERT INTO persona_pins (source_ip, persona, created_at, created_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_ip) DO UPDATE SET
+                persona    = excluded.persona,
+                created_at = excluded.created_at,
+                created_by = excluded.created_by
+            """,
+            (source_ip, persona, created_at.isoformat(), created_by),
+        )
+        return PersonaPin(
+            source_ip=source_ip,
+            persona=persona,
+            created_at=created_at,
+            created_by=created_by,
+        )
+
+    async def list_persona_pins(self) -> list[PersonaPin]:
+        """Return every active pin, newest first."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._list_persona_pins_locked)
+
+    def _list_persona_pins_locked(self) -> list[PersonaPin]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT source_ip, persona, created_at, created_by
+            FROM persona_pins
+            ORDER BY created_at DESC
+            """,
+        )
+        return [
+            PersonaPin(
+                source_ip=row[0],
+                persona=row[1],
+                created_at=datetime.fromisoformat(row[2]),
+                created_by=row[3],
+            )
+            for row in cur.fetchall()
+        ]
+
+    async def delete_persona_pin(self, source_ip: str) -> bool:
+        """Remove ``source_ip``'s pin if present. Returns True iff a row was deleted."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._delete_persona_pin_locked, source_ip)
+
+    def _delete_persona_pin_locked(self, source_ip: str) -> bool:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            "DELETE FROM persona_pins WHERE source_ip = ?",
+            (source_ip,),
+        )
+        return cur.rowcount > 0
+
+    async def update_session_persona(
+        self,
+        session_id: UUID,
+        persona: str,
+    ) -> bool:
+        """Set the persona on an existing session row. Returns True iff updated.
+
+        Used by the dashboard tailer's cluster-bias rebound path
+        (slice 9.4): when a freshly closed session's embedding has a
+        strong neighbour with a different persona, the tailer
+        rewrites the just-closed session's persona so the selector's
+        recurrence query picks up the rebound on the next session-
+        open from this source IP.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._update_session_persona_locked,
+                session_id,
+                persona,
+            )
+
+    def _update_session_persona_locked(self, session_id: UUID, persona: str) -> bool:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            "UPDATE sessions SET persona = ? WHERE session_id = ?",
+            (persona, str(session_id)),
+        )
+        return cur.rowcount > 0
 
     # ------------------------------------------------------------------
     # Embeddings (Stage 8)

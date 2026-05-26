@@ -1011,3 +1011,242 @@ async def test_dashboard_state_round_trips_embedding(
     assert loaded.dimension == 64
     # find_similar passes through to the store.
     assert await dashboard_state.find_similar(sid) == []
+
+
+# ---------------------------------------------------------------------------
+# Stage 9 slice 9.4: cluster-bias persona rebound
+# ---------------------------------------------------------------------------
+
+
+def _make_tailer_with_persona_bias(
+    *,
+    tmp_path: Path,
+    dashboard_state: DashboardState,
+    audit_log: _CaptureAudit,
+    cluster_threshold: float = 0.5,
+    bias_threshold: float = 0.9,
+) -> AuditTailer:
+    return AuditTailer(
+        audit_path=tmp_path / "audit.jsonl",
+        dashboard_state=dashboard_state,
+        offset_cache_path=tmp_path / "audit_tailer.json",
+        poll_interval_seconds=0.05,
+        audit_log=audit_log,  # type: ignore[arg-type]
+        cluster_similarity_threshold=cluster_threshold,
+        persona_bias_threshold=bias_threshold,
+    )
+
+
+def _persona_session_opened(sid: UUID, *, source_ip: str, persona: str) -> str:
+    """Audit line shape that the tailer turns into a sessions row with persona."""
+    return _audit_line(
+        "lure.session_opened",
+        session_id=str(sid),
+        source_ip=source_ip,
+        username="root",
+    )
+
+
+async def _seed_session_with_persona(
+    dashboard_state: DashboardState,
+    *,
+    sid: UUID,
+    source_ip: str,
+    persona: str,
+) -> None:
+    """Insert a session row directly with a persona name set."""
+    from anglerfish.models.session import SessionSnapshot
+
+    now = datetime(2026, 5, 26, 12, 0, tzinfo=UTC)
+    snap = SessionSnapshot(
+        session_id=sid,
+        source_ip=source_ip,
+        username="root",
+        fake_hostname=persona,
+        fake_username="root",
+        fake_cwd="/root",
+        started_at=now,
+        last_activity_at=now,
+        turns=(),
+        persona_name=persona,
+    )
+    await dashboard_state.update_session(snap)
+
+
+def test_construction_rejects_persona_bias_outside_unit_interval(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="persona_bias_threshold"):
+        AuditTailer(
+            audit_path=tmp_path / "audit.jsonl",
+            dashboard_state=dashboard_state,
+            offset_cache_path=tmp_path / "audit_tailer.json",
+            persona_bias_threshold=1.5,
+        )
+
+
+async def test_rebound_fires_when_neighbour_above_bias_and_different_persona(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """Strong neighbour + different persona -> sessions.persona rewritten."""
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_persona_bias(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+        cluster_threshold=0.5,
+        bias_threshold=0.9,
+    )
+    neighbour_sid = uuid4()
+    closed_sid = uuid4()
+    # Seed: neighbour already in the DB with persona "gpu-rig".
+    await _seed_session_with_persona(
+        dashboard_state,
+        sid=neighbour_sid,
+        source_ip="203.0.113.1",
+        persona="gpu-rig",
+    )
+    # Closed session opened later with persona "dev-laptop" via the
+    # tailer's normal lure.session_opened + bridge.embedding_generated
+    # flow, then update_session_persona via the direct path so the
+    # closed session has a persona value.
+    await _seed_session_with_persona(
+        dashboard_state,
+        sid=closed_sid,
+        source_ip="203.0.113.2",
+        persona="dev-laptop",
+    )
+    # Identical vectors -> cosine 1.0 (well above 0.9 bias).
+    vector = [1.0] + [0.0] * 63
+    # Persist the neighbour embedding first so find_similar finds it.
+    from anglerfish.models.embedding import SessionEmbedding
+
+    now = datetime(2026, 5, 26, 12, 30, tzinfo=UTC)
+    await dashboard_state.upsert_embedding(
+        SessionEmbedding(
+            session_id=neighbour_sid,
+            vector=tuple(vector),
+            dimension=64,
+            model="embed-test",
+            generated_at=now,
+        ),
+    )
+
+    _append(
+        tailer.audit_path,
+        _embedding_event(closed_sid, vector=vector),
+    )
+    await tailer._poll_once()
+
+    rebounds = [e for e in audit.events if e[0] == "bridge.persona_rebound"]
+    assert len(rebounds) == 1
+    _, fields = rebounds[0]
+    assert fields["session_id"] == str(closed_sid)
+    assert fields["source_ip"] == "203.0.113.2"
+    assert fields["old_persona"] == "dev-laptop"
+    assert fields["new_persona"] == "gpu-rig"
+    assert fields["neighbour_session_id"] == str(neighbour_sid)
+    # Sessions.persona on the closed row is rewritten so the selector
+    # picks up the rebound on the next session-open.
+    reloaded = await dashboard_state.get_session(closed_sid)
+    assert reloaded is not None
+    assert reloaded.persona_name == "gpu-rig"
+
+
+async def test_rebound_skipped_below_bias_threshold(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """cluster_match fires but persona_bias_threshold blocks rebound."""
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_persona_bias(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+        cluster_threshold=0.5,
+        bias_threshold=0.99,  # very strict
+    )
+    neighbour_sid = uuid4()
+    closed_sid = uuid4()
+    await _seed_session_with_persona(
+        dashboard_state,
+        sid=neighbour_sid,
+        source_ip="203.0.113.1",
+        persona="gpu-rig",
+    )
+    await _seed_session_with_persona(
+        dashboard_state,
+        sid=closed_sid,
+        source_ip="203.0.113.2",
+        persona="dev-laptop",
+    )
+    # Slightly different vectors -> similarity ~ 0.7 to 0.85; well
+    # under 0.99 bias.
+    vec_a = [1.0, 0.5] + [0.0] * 62
+    vec_b = [1.0, -0.5] + [0.0] * 62
+    from anglerfish.models.embedding import SessionEmbedding
+
+    now = datetime(2026, 5, 26, 12, 30, tzinfo=UTC)
+    await dashboard_state.upsert_embedding(
+        SessionEmbedding(
+            session_id=neighbour_sid,
+            vector=tuple(vec_a),
+            dimension=64,
+            model="embed-test",
+            generated_at=now,
+        ),
+    )
+    _append(tailer.audit_path, _embedding_event(closed_sid, vector=vec_b))
+    await tailer._poll_once()
+    assert not [e for e in audit.events if e[0] == "bridge.persona_rebound"]
+    # Persona column on the closed session unchanged.
+    reloaded = await dashboard_state.get_session(closed_sid)
+    assert reloaded is not None
+    assert reloaded.persona_name == "dev-laptop"
+
+
+async def test_rebound_skipped_when_personas_match(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """High similarity + same persona -> nothing to rebound to."""
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_persona_bias(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+        cluster_threshold=0.5,
+        bias_threshold=0.9,
+    )
+    neighbour_sid = uuid4()
+    closed_sid = uuid4()
+    await _seed_session_with_persona(
+        dashboard_state,
+        sid=neighbour_sid,
+        source_ip="203.0.113.1",
+        persona="gpu-rig",
+    )
+    await _seed_session_with_persona(
+        dashboard_state,
+        sid=closed_sid,
+        source_ip="203.0.113.2",
+        persona="gpu-rig",
+    )
+    vector = [1.0] + [0.0] * 63
+    from anglerfish.models.embedding import SessionEmbedding
+
+    now = datetime(2026, 5, 26, 12, 30, tzinfo=UTC)
+    await dashboard_state.upsert_embedding(
+        SessionEmbedding(
+            session_id=neighbour_sid,
+            vector=tuple(vector),
+            dimension=64,
+            model="embed-test",
+            generated_at=now,
+        ),
+    )
+    _append(tailer.audit_path, _embedding_event(closed_sid, vector=vector))
+    await tailer._poll_once()
+    assert not [e for e in audit.events if e[0] == "bridge.persona_rebound"]

@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
+from anglerfish.models.persona_pin import PersonaPin
 from anglerfish.models.session import CommandTurn, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 from anglerfish.sessions import SessionStore
@@ -262,6 +263,34 @@ class DashboardState:
             k=k,
             min_similarity=min_similarity,
         )
+
+    # ------------------------------------------------------------------
+    # Persona pins + rebound (Stage 9 slice 9.4)
+    # ------------------------------------------------------------------
+
+    async def upsert_persona_pin(
+        self,
+        *,
+        source_ip: str,
+        persona: str,
+        created_by: str,
+    ) -> PersonaPin:
+        """Pin ``source_ip`` to ``persona``; returns the persisted record."""
+        return await self._store.upsert_persona_pin(
+            source_ip=source_ip,
+            persona=persona,
+            created_by=created_by,
+        )
+
+    async def list_persona_pins(self) -> list[PersonaPin]:
+        return await self._store.list_persona_pins()
+
+    async def delete_persona_pin(self, source_ip: str) -> bool:
+        return await self._store.delete_persona_pin(source_ip)
+
+    async def update_session_persona(self, session_id: UUID, persona: str) -> bool:
+        """Rebound the persona on an already-persisted session row."""
+        return await self._store.update_session_persona(session_id, persona)
 
     # ------------------------------------------------------------------
     # Queries - called by REST routes.

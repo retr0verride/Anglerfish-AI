@@ -115,12 +115,17 @@ class AuditTailer:
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         audit_log: AuditLog | None = None,
         cluster_similarity_threshold: float = 0.85,
+        persona_bias_threshold: float = 0.92,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
         if not 0.0 <= cluster_similarity_threshold <= 1.0:
             raise ValueError(
                 "cluster_similarity_threshold must be in [0, 1]",
+            )
+        if not 0.0 <= persona_bias_threshold <= 1.0:
+            raise ValueError(
+                "persona_bias_threshold must be in [0, 1]",
             )
         self._audit_path = audit_path
         self._state = dashboard_state
@@ -134,6 +139,15 @@ class AuditTailer:
         # emission is silently skipped in that case.
         self._audit_log = audit_log
         self._cluster_threshold = cluster_similarity_threshold
+        # Stage 9 slice 9.4: when a neighbour's similarity crosses the
+        # persona-bias threshold AND its persona differs from the
+        # just-closed session's, the tailer rewrites the closed
+        # session's persona column so the selector's recurrence query
+        # picks up the rebound on the next session-open. Default 0.92
+        # is stricter than cluster_similarity_threshold (0.85) because
+        # rebounding a future session's persona is stronger than
+        # firing an alert.
+        self._persona_bias_threshold = persona_bias_threshold
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
@@ -431,13 +445,22 @@ class AuditTailer:
         session_id: UUID,
         event: dict[str, Any],
     ) -> None:
-        """Persist a Stage 8 :class:`SessionEmbedding` + emit cluster_match.
+        """Persist a Stage 8 :class:`SessionEmbedding` + emit cluster_match
+        + (Stage 9) check for cluster-bias persona rebound.
 
         After upserting, runs find_similar against the freshly
         persisted vector; if any neighbours cross the configured
         threshold, emits ``bridge.cluster_match`` via the optional
         audit-log handle. Cluster-match emission is skipped (silently)
         when no audit_log was wired into the tailer.
+
+        Stage 9: when the top neighbour's similarity also crosses the
+        persona_bias_threshold AND its persona differs from the just-
+        closed session's persona, rewrite the just-closed session's
+        persona column to the neighbour's and emit
+        ``bridge.persona_rebound``. The selector's recurrence query
+        picks up the rebound on the next session-open from this
+        source IP.
         """
         embedding = _parse_embedding_event(session_id, event)
         if embedding is None:
@@ -464,6 +487,42 @@ class AuditTailer:
                 }
                 for neighbour, similarity in neighbours
             ],
+        )
+        await self._maybe_rebound_persona(session_id, neighbours)
+
+    async def _maybe_rebound_persona(
+        self,
+        session_id: UUID,
+        neighbours: list[tuple[SessionEmbedding, float]],
+    ) -> None:
+        """Stage 9 cluster-bias rebound: rewrite persona if top match crosses bias.
+
+        Pre-conditions guaranteed by caller: ``neighbours`` is non-
+        empty and an audit_log handle is wired. The top neighbour is
+        the highest-similarity entry (find_similar returns
+        descending-by-similarity).
+        """
+        top_neighbour, top_similarity = neighbours[0]
+        if top_similarity < self._persona_bias_threshold:
+            return
+        closed = await self._state.get_session(session_id)
+        neighbour_row = await self._state.get_session(top_neighbour.session_id)
+        if closed is None or neighbour_row is None:
+            return
+        new_persona = neighbour_row.persona_name
+        old_persona = closed.persona_name
+        if new_persona is None or new_persona == old_persona:
+            return
+        await self._state.update_session_persona(session_id, new_persona)
+        assert self._audit_log is not None  # noqa: S101  # guarded by caller
+        self._audit_log.record(
+            "bridge.persona_rebound",
+            session_id=str(session_id),
+            source_ip=closed.source_ip,
+            old_persona=old_persona,
+            new_persona=new_persona,
+            neighbour_session_id=str(top_neighbour.session_id),
+            similarity=round(top_similarity, 6),
         )
 
     # ------------------------------------------------------------------
