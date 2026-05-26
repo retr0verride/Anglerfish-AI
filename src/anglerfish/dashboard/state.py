@@ -33,6 +33,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.persistence import PersistenceEvent
@@ -326,6 +327,33 @@ class DashboardState:
         source_ip: str,
     ) -> list[PersistenceEvent]:
         return await self._store.list_persistence_events_for_source_ip(source_ip)
+
+    # ------------------------------------------------------------------
+    # Honeytokens (Stage 11 slice 11.2)
+    # ------------------------------------------------------------------
+
+    async def register_honeytoken(self, token: Honeytoken) -> bool:
+        """Persist a Stage 11 :class:`Honeytoken`.
+
+        Returns True iff a new row was inserted; False on the
+        already-present-via-PK idempotent path. No pub/sub
+        publish: honeytokens surface to operators via the
+        existing alerts-panel ``honeytoken_callback_hit`` kind
+        (live after slice 11.4), not via WebSocket fan-out.
+        """
+        return await self._store.register_honeytoken(token)
+
+    async def get_honeytoken(self, token_id: str) -> Honeytoken | None:
+        return await self._store.get_honeytoken(token_id)
+
+    async def list_honeytokens_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[Honeytoken]:
+        return await self._store.list_honeytokens_for_source_ip(source_ip)
+
+    async def list_static_honeytokens(self) -> list[Honeytoken]:
+        return await self._store.list_static_honeytokens()
 
     # ------------------------------------------------------------------
     # Queries - called by REST routes.

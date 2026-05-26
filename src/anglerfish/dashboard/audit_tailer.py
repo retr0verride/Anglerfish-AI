@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
 from anglerfish.audit import AuditLog
+from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.persistence import PersistenceEvent
@@ -311,6 +312,13 @@ class AuditTailer:
         event_type = event.get("event_type")
         if not isinstance(event_type, str):
             return
+        # Stage 11: honeytoken_placed events for static-base tokens
+        # carry session_id=null intentionally. Dispatch before the
+        # session_id parse so those don't fall through the gate.
+        if event_type == "bridge.honeytoken_placed":
+            await self._handle_honeytoken_placed(event)
+            return
+
         session_id_raw = event.get("session_id")
         if not isinstance(session_id_raw, str):
             # session_id is only on events we care about; everything
@@ -527,6 +535,23 @@ class AuditTailer:
             neighbour_session_id=str(top_neighbour.session_id),
             similarity=round(top_similarity, 6),
         )
+
+    async def _handle_honeytoken_placed(self, event: dict[str, Any]) -> None:
+        """Persist a Stage 11 ``bridge.honeytoken_placed`` audit event.
+
+        Parses the event into a :class:`Honeytoken` and forwards
+        to :meth:`DashboardState.register_honeytoken`. Malformed
+        events log a warning and skip (matches the intent +
+        embedding + persistence parser patterns).
+
+        Replay of an already-persisted line lands as an INSERT OR
+        IGNORE on the PK at the SQL layer; the handler does not
+        distinguish a fresh insert from a deduped replay.
+        """
+        token = _parse_honeytoken_placed_event(event)
+        if token is None:
+            return
+        await self._state.register_honeytoken(token)
 
     async def _handle_persistence_attempt(
         self,
@@ -867,3 +892,95 @@ def _parse_persistence_attempt_event(
         )
         return None
     return persistence_event, source_ip, created_at
+
+
+_VALID_HONEYTOKEN_KINDS = frozenset({"aws", "ssh_key"})
+
+
+def _parse_honeytoken_placed_event(event: dict[str, Any]) -> Honeytoken | None:
+    """Reconstruct a :class:`Honeytoken` from a bridge.honeytoken_placed event.
+
+    Returns :data:`None` (with a warning log) when any required
+    field is missing or type-mismatched. Mirrors the slice 10.2
+    persistence parser shape.
+
+    Static-base tokens carry ``source_ip=null`` + ``session_id=null``
+    intentionally; the parser preserves that.
+    """
+    token_id = event.get("token_id")
+    kind = event.get("kind")
+    payload = event.get("payload")
+    callback_url = event.get("callback_url")
+    placed_at = event.get("placed_at")
+    created_at_raw = event.get("created_at")
+    if (
+        not isinstance(token_id, str)
+        or kind not in _VALID_HONEYTOKEN_KINDS
+        or not isinstance(payload, str)
+        or not payload
+        or not isinstance(callback_url, str)
+        or not callback_url
+        or not isinstance(placed_at, str)
+        or not placed_at
+        or not isinstance(created_at_raw, str)
+    ):
+        _logger.warning(
+            "audit_tailer: bridge.honeytoken_placed event missing or "
+            "malformed required fields (token_id=%r)",
+            token_id,
+        )
+        return None
+    source_ip_raw = event.get("source_ip")
+    if source_ip_raw is not None and not isinstance(source_ip_raw, str):
+        _logger.warning(
+            "audit_tailer: bridge.honeytoken_placed source_ip has wrong type "
+            "for token_id=%s; dropping",
+            token_id,
+        )
+        return None
+    session_id_raw = event.get("session_id")
+    session_id: UUID | None = None
+    if session_id_raw is not None:
+        if not isinstance(session_id_raw, str):
+            _logger.warning(
+                "audit_tailer: bridge.honeytoken_placed session_id has wrong "
+                "type for token_id=%s; dropping",
+                token_id,
+            )
+            return None
+        try:
+            session_id = UUID(session_id_raw)
+        except ValueError:
+            _logger.warning(
+                "audit_tailer: bridge.honeytoken_placed session_id is not a "
+                "UUID for token_id=%s; dropping",
+                token_id,
+            )
+            return None
+    try:
+        created_at = datetime.fromisoformat(created_at_raw)
+    except ValueError:
+        _logger.warning(
+            "audit_tailer: bridge.honeytoken_placed has malformed created_at=%r for token_id=%s",
+            created_at_raw,
+            token_id,
+        )
+        return None
+    try:
+        return Honeytoken(
+            id=token_id,
+            kind=kind,
+            payload=payload,
+            callback_url=callback_url,
+            placed_at=placed_at,
+            source_ip=source_ip_raw,
+            session_id=session_id,
+            created_at=created_at,
+        )
+    except ValueError as exc:
+        _logger.warning(
+            "audit_tailer: bridge.honeytoken_placed failed schema validation for token_id=%s: %s",
+            token_id,
+            exc,
+        )
+        return None

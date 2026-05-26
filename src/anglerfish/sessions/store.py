@@ -34,6 +34,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.persistence import PersistenceEvent
@@ -561,6 +562,129 @@ class SessionStore:
         )
 
     # ------------------------------------------------------------------
+    # Honeytokens (Stage 11 slice 11.2)
+    # ------------------------------------------------------------------
+
+    async def register_honeytoken(self, token: Honeytoken) -> bool:
+        """Insert a :class:`Honeytoken` into the registry.
+
+        Returns True iff a new row was inserted; False on the
+        already-present-via-PK idempotent path (the audit-tailer
+        replays the same audit line after offset-cache loss; the
+        UNIQUE PK on id makes that safe).
+
+        No FK to sessions: honeytokens outlive their generating
+        session. The callback receiver looks tokens up by ``id``;
+        the bridge looks them up by ``source_ip`` at session-open
+        to seed the lure overlay.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._register_honeytoken_locked, token)
+
+    def _register_honeytoken_locked(self, token: Honeytoken) -> bool:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO honeytokens (
+                id, kind, payload, callback_url, placed_at,
+                source_ip, session_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                token.id,
+                token.kind,
+                token.payload,
+                token.callback_url,
+                token.placed_at,
+                token.source_ip,
+                str(token.session_id) if token.session_id is not None else None,
+                token.created_at.isoformat(),
+            ),
+        )
+        return cur.rowcount > 0
+
+    async def get_honeytoken(self, token_id: str) -> Honeytoken | None:
+        """Look up one honeytoken by its 16-char base32 id.
+
+        Used by the slice 11.4 callback receiver: extract the 16
+        chars from incoming requests, query, audit
+        bridge.honeytoken_callback on hit, return generic 403
+        on miss (no information leak about which IDs exist).
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._get_honeytoken_locked, token_id)
+
+    def _get_honeytoken_locked(self, token_id: str) -> Honeytoken | None:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens WHERE id = ?
+            """,
+            (token_id,),
+        )
+        row = cur.fetchone()
+        return _row_to_honeytoken(row) if row is not None else None
+
+    async def list_honeytokens_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[Honeytoken]:
+        """Return per-session honeytokens generated for ``source_ip``.
+
+        Excludes static-base tokens (those have ``source_ip IS NULL``)
+        - the bridge merges those separately into every session's
+        overlay. This query feeds the slice 11.3 session-open
+        seeding.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_honeytokens_locked,
+                source_ip,
+            )
+
+    def _list_honeytokens_locked(self, source_ip: str) -> list[Honeytoken]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens
+            WHERE source_ip = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (source_ip,),
+        )
+        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+
+    async def list_static_honeytokens(self) -> list[Honeytoken]:
+        """Return the operator-defined static-base tokens (source_ip IS NULL).
+
+        Shipped to every session via the bridge's session-open
+        overlay merge alongside any per-source-IP rows.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._list_static_honeytokens_locked)
+
+    def _list_static_honeytokens_locked(self) -> list[Honeytoken]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens
+            WHERE source_ip IS NULL
+            ORDER BY created_at ASC, id ASC
+            """,
+        )
+        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+
+    # ------------------------------------------------------------------
     # Fake persistence state (Stage 10 slice 10.2)
     # ------------------------------------------------------------------
 
@@ -1028,6 +1152,31 @@ class SessionStore:
 
 def _utcnow_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Honeytoken row hydration (Stage 11 slice 11.2)
+# ---------------------------------------------------------------------------
+
+
+def _row_to_honeytoken(row: Sequence[Any]) -> Honeytoken:
+    """Rehydrate one honeytokens row into a :class:`Honeytoken`.
+
+    Row column order matches the SELECT in
+    :meth:`SessionStore._get_honeytoken_locked` /
+    :meth:`SessionStore._list_honeytokens_locked`.
+    """
+    session_id_raw = row[6]
+    return Honeytoken(
+        id=row[0],
+        kind=row[1],
+        payload=row[2],
+        callback_url=row[3],
+        placed_at=row[4],
+        source_ip=row[5],
+        session_id=UUID(session_id_raw) if session_id_raw is not None else None,
+        created_at=datetime.fromisoformat(row[7]),
+    )
 
 
 # ---------------------------------------------------------------------------

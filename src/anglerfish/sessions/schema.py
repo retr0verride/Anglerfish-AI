@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 
-CURRENT_SCHEMA_VERSION: Final[int] = 5
+CURRENT_SCHEMA_VERSION: Final[int] = 6
 
 
 # Connection-level pragmas applied on every open. WAL gives us
@@ -205,14 +205,45 @@ CREATE INDEX IF NOT EXISTS idx_fps_kind      ON fake_persistence_state(kind);
 """
 
 
-# Migration chain: index = target version. Adding v6 means adding
-# _MIGRATION_6 and appending here; run_migrations walks the chain.
+# v5 -> v6: Stage 11 decoy data poisoning. Tracks AWS / SSH
+# honeytokens placed in the fake filesystem so the slice 11.4
+# callback receiver can correlate inbound hits back to the
+# source-session that distributed them.
+#
+# Rows are INSERT OR IGNORE on the PK so audit-log replay (after
+# a tailer offset-cache loss) is idempotent. No FK to sessions:
+# honeytokens outlive the session that generated them - a
+# callback can land months later, well after the session row
+# was pruned. session_id is stored as a denormalised TEXT for
+# operator triage; the cross-session lookup join key is
+# source_ip (NULL on static-base tokens that ship to every
+# session).
+_MIGRATION_6: Final[str] = """
+CREATE TABLE IF NOT EXISTS honeytokens (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    payload       TEXT NOT NULL,
+    callback_url  TEXT NOT NULL,
+    placed_at     TEXT NOT NULL,
+    source_ip     TEXT,
+    session_id    TEXT,
+    created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_honeytokens_source_ip ON honeytokens(source_ip);
+CREATE INDEX IF NOT EXISTS idx_honeytokens_kind      ON honeytokens(kind);
+"""
+
+
+# Migration chain: index = target version. Adding v7 means adding
+# _MIGRATION_7 and appending here; run_migrations walks the chain.
 _MIGRATIONS: Final[tuple[str, ...]] = (
     _MIGRATION_1,
     _MIGRATION_2,
     _MIGRATION_3,
     _MIGRATION_4,
     _MIGRATION_5,
+    _MIGRATION_6,
 )
 
 

@@ -21,7 +21,9 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self
+from uuid import UUID
 
+from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.sessions.schema import PRAGMAS
 
@@ -196,6 +198,81 @@ class SessionStoreReader:
             for row in cur.fetchall()
         ]
 
+    async def get_honeytoken(self, token_id: str) -> Honeytoken | None:
+        """Stage 11: callback-receiver lookup by 16-char base32 id.
+
+        Returns :data:`None` for unknown token_ids (the callback
+        receiver still serves a generic 403 to avoid leaking
+        which IDs exist).
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._get_honeytoken_locked, token_id)
+
+    def _get_honeytoken_locked(self, token_id: str) -> Honeytoken | None:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens WHERE id = ?
+            """,
+            (token_id,),
+        )
+        row = cur.fetchone()
+        return _row_to_honeytoken(row) if row is not None else None
+
+    async def list_honeytokens_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[Honeytoken]:
+        """Stage 11: per-session honeytokens for the bridge session-open seed.
+
+        Oldest first. Excludes static-base tokens (those have
+        ``source_ip IS NULL``); slice 11.3's bridge integration
+        merges static + per-IP rows separately into the lure
+        ``fakefs_overlay``.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_honeytokens_locked,
+                source_ip,
+            )
+
+    def _list_honeytokens_locked(self, source_ip: str) -> list[Honeytoken]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens
+            WHERE source_ip = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (source_ip,),
+        )
+        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+
+    async def list_static_honeytokens(self) -> list[Honeytoken]:
+        """Stage 11: operator-defined static-base tokens (source_ip IS NULL)."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._list_static_honeytokens_locked)
+
+    def _list_static_honeytokens_locked(self) -> list[Honeytoken]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens
+            WHERE source_ip IS NULL
+            ORDER BY created_at ASC, id ASC
+            """,
+        )
+        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+
     # -----------------------------------------------------------------
     # Internals
     # -----------------------------------------------------------------
@@ -207,3 +284,24 @@ class SessionStoreReader:
 
 def _utcnow() -> datetime:  # pragma: no cover - reserved for future writers
     return datetime.now(tz=UTC)
+
+
+def _row_to_honeytoken(row: tuple[object, ...]) -> Honeytoken:
+    """Rehydrate one honeytokens row into a :class:`Honeytoken`.
+
+    Mirrors :func:`anglerfish.sessions.store._row_to_honeytoken`;
+    duplicated here so the reader has no import dependency on the
+    writer module. The two helpers stay in lock-step because they
+    SELECT the same column order.
+    """
+    session_id_raw = row[6]
+    return Honeytoken(
+        id=str(row[0]),
+        kind=str(row[1]),  # type: ignore[arg-type]
+        payload=str(row[2]),
+        callback_url=str(row[3]),
+        placed_at=str(row[4]),
+        source_ip=str(row[5]) if row[5] is not None else None,
+        session_id=UUID(str(session_id_raw)) if session_id_raw is not None else None,
+        created_at=datetime.fromisoformat(str(row[7])),
+    )

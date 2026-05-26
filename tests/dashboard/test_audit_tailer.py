@@ -1394,3 +1394,143 @@ async def test_persistence_attempt_malformed_created_at_skipped(
         "203.0.113.7",
     )
     assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Stage 11 slice 11.2: bridge.honeytoken_placed dispatch
+# ---------------------------------------------------------------------------
+
+
+def _honeytoken_placed_line(
+    *,
+    token_id: str = "AAAAAAAAAAAAAAAA",  # noqa: S107 - test fixture, not a credential
+    kind: str = "aws",
+    source_ip: str | None = "203.0.113.7",
+    session_id: UUID | None = None,
+    payload: str = "[default]\naws_access_key_id = AKIAAAAAAAAAAAAAAAA\n",
+    placed_at: str = "/root/.aws/credentials",
+    callback_url: str = "https://honey.example.com/cb/AAAAAAAAAAAAAAAA",
+    created_at: datetime | None = None,
+) -> str:
+    fields: dict[str, object] = {
+        "token_id": token_id,
+        "kind": kind,
+        "payload": payload,
+        "placed_at": placed_at,
+        "callback_url": callback_url,
+        "source_ip": source_ip,
+        "session_id": str(session_id) if session_id is not None else None,
+        "created_at": (created_at or datetime(2026, 5, 26, 12, 0, tzinfo=UTC)).isoformat(),
+    }
+    return _audit_line("bridge.honeytoken_placed", **fields)
+
+
+async def test_honeytoken_placed_persists_per_session_token(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _honeytoken_placed_line(token_id="PERSESSIONAAAAAA", session_id=sid),
+    )
+    await tailer._poll_once()
+    loaded = await dashboard_state.get_honeytoken("PERSESSIONAAAAAA")
+    assert loaded is not None
+    assert loaded.kind == "aws"
+    assert loaded.session_id == sid
+
+
+async def test_honeytoken_placed_persists_static_base_with_nulls(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """source_ip + session_id = null is the static-base shape; tailer accepts it."""
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _honeytoken_placed_line(
+            token_id="STATICAAAAAAAAAA",
+            source_ip=None,
+            session_id=None,
+        ),
+    )
+    await tailer._poll_once()
+    loaded = await dashboard_state.get_honeytoken("STATICAAAAAAAAAA")
+    assert loaded is not None
+    assert loaded.is_static_base()
+
+
+async def test_honeytoken_placed_replay_is_idempotent(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    sid = uuid4()
+    line = _honeytoken_placed_line(token_id="REPLAYREPLAYAAAA", session_id=sid)
+    _append(tailer.audit_path, line)
+    await tailer._poll_once()
+    tailer._offset = 0  # type: ignore[attr-defined]
+    await tailer._poll_once()
+    ip_rows = await dashboard_state.list_honeytokens_for_source_ip("203.0.113.7")
+    assert len(ip_rows) == 1
+
+
+async def test_honeytoken_placed_missing_required_field_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "bridge.honeytoken_placed",
+            token_id="MISSINGPAYLOADAA",
+            kind="aws",
+            placed_at="/root/.aws/credentials",
+            callback_url="https://honey.example.com/cb/x",
+            source_ip="203.0.113.7",
+            session_id=None,
+            created_at=datetime(2026, 5, 26, 12, 0, tzinfo=UTC).isoformat(),
+            # payload deliberately missing
+        ),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_honeytoken("MISSINGPAYLOADAA") is None
+
+
+async def test_honeytoken_placed_unknown_kind_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _honeytoken_placed_line(token_id="BADKINDAAAAAAAAA", kind="postgres_dsn"),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_honeytoken("BADKINDAAAAAAAAA") is None
+
+
+async def test_honeytoken_placed_malformed_session_id_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "bridge.honeytoken_placed",
+            token_id="BADSESSIONIDAAAA",
+            kind="aws",
+            payload="x",
+            placed_at="/x",
+            callback_url="https://x/cb/x",
+            source_ip="203.0.113.7",
+            session_id="not-a-uuid",
+            created_at=datetime(2026, 5, 26, 12, 0, tzinfo=UTC).isoformat(),
+        ),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_honeytoken("BADSESSIONIDAAAA") is None
