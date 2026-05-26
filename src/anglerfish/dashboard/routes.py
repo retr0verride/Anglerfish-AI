@@ -173,6 +173,60 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         return intent.model_dump(mode="json")
 
+    @router.get(
+        "/api/sessions/{session_id}/similar",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_session_similar(
+        session_id: UUID,
+        request: Request,
+        k: int = Query(default=5, ge=1, le=20),
+        min_similarity: float | None = Query(default=None, ge=0.0, le=1.0),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return up to ``k`` neighbour sessions ranked by cosine similarity.
+
+        404 when the query session has no persisted embedding (the
+        bridge has not run :class:`EmbeddingGenerator` for it yet, or
+        the session closed below the min-commands threshold).
+        ``min_similarity`` defaults to
+        ``settings.bridge.cluster_similarity_threshold`` so the
+        endpoint surfaces the same neighbour set the alerts panel
+        sees by default; callers can lower the threshold to
+        explore looser clusters without affecting alert noise.
+        """
+        if await state.get_embedding(session_id) is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        threshold = (
+            min_similarity
+            if min_similarity is not None
+            else request.app.state.settings.bridge.cluster_similarity_threshold
+        )
+        neighbours = await state.find_similar(
+            session_id,
+            k=k,
+            min_similarity=threshold,
+        )
+        items: list[dict[str, Any]] = []
+        for embedding, similarity in neighbours:
+            session = await state.get_session(embedding.session_id)
+            items.append(
+                {
+                    "session_id": str(embedding.session_id),
+                    "similarity": round(similarity, 6),
+                    "model": embedding.model,
+                    "generated_at": embedding.generated_at.isoformat(),
+                    "session": session.model_dump(mode="json") if session else None,
+                },
+            )
+        return {
+            "session_id": str(session_id),
+            "k": k,
+            "min_similarity": threshold,
+            "count": len(items),
+            "items": items,
+        }
+
     @router.get("/api/commands", dependencies=[Depends(require_auth)])
     async def recent_commands(
         limit: int = Query(default=100, ge=1, le=1000),

@@ -41,6 +41,12 @@ _ALERT_EVENT_TYPES: dict[str, str] = {
     # alert; operators chip-filter by kind="intent_summary" in the
     # SPA. The previous available:false stub flipped here.
     "bridge.intent_extracted": "intent_summary",
+    # Stage 8 slice 5: the tailer emits bridge.cluster_match after
+    # persisting an embedding when find_similar returns one or more
+    # neighbours above settings.bridge.cluster_similarity_threshold.
+    # The previous behavioral_cluster_matches:available=false stub
+    # flipped here in the same commit.
+    "bridge.cluster_match": "cluster_match",
     # Persistence-attempt event ships under Stage 10; the type name
     # is reserved here so the alerts endpoint surfaces it the moment
     # the bridge starts emitting it, with no dashboard change.
@@ -54,7 +60,6 @@ ALERT_KINDS: frozenset[str] = frozenset(_ALERT_EVENT_TYPES.values())
 # to /api/stage/*.
 ALERT_STUBS: dict[str, dict[str, Any]] = {
     "honeytoken_callback_hits": {"available": False, "stage": 11},
-    "behavioral_cluster_matches": {"available": False, "stage": 8},
 }
 
 
@@ -152,32 +157,83 @@ def _render_alert(
 
 
 def _summarise_event(event: dict[str, Any], label: str) -> str:
-    """One-line detail string per alert kind."""
-    if label == "defense_fired":
-        detector = event.get("detector", "unknown")
-        score = event.get("score")
-        return f"{detector} (score={score})" if score is not None else str(detector)
-    if label == "defense_scan_truncated":
-        kind = event.get("kind", "unknown")
-        scan_cap = event.get("scan_max_chars")
-        input_len = event.get("input_length")
-        return f"{kind} scan truncated: input={input_len} chars, cap={scan_cap} chars"
-    if label == "subsystem_refused":
-        kind = event.get("kind", "unknown")
-        return f"refused {kind}"
-    if label == "high_severity_session":
-        score = event.get("score")
-        return f"high-severity session (score={score})"
-    if label == "persistence_attempt":
-        return str(event.get("detail") or "persistence attempted")
-    if label == "intent_summary":
-        profile = event.get("actor_profile", "unknown")
-        confidence = event.get("confidence", "unknown")
-        intent = event.get("intent")
-        if isinstance(intent, str) and intent:
-            return f"{profile} / {confidence}: {intent}"
-        return f"{profile} / {confidence}"
-    return "alert"
+    """One-line detail string per alert kind.
+
+    Dispatches to a per-label helper so each branch stays small and
+    the registry trivially extends when a new kind ships.
+    """
+    summariser = _SUMMARISERS.get(label)
+    return summariser(event) if summariser is not None else "alert"
+
+
+def _summarise_defense_fired(event: dict[str, Any]) -> str:
+    detector = event.get("detector", "unknown")
+    score = event.get("score")
+    return f"{detector} (score={score})" if score is not None else str(detector)
+
+
+def _summarise_defense_scan_truncated(event: dict[str, Any]) -> str:
+    kind = event.get("kind", "unknown")
+    scan_cap = event.get("scan_max_chars")
+    input_len = event.get("input_length")
+    return f"{kind} scan truncated: input={input_len} chars, cap={scan_cap} chars"
+
+
+def _summarise_subsystem_refused(event: dict[str, Any]) -> str:
+    kind = event.get("kind", "unknown")
+    return f"refused {kind}"
+
+
+def _summarise_high_severity_session(event: dict[str, Any]) -> str:
+    return f"high-severity session (score={event.get('score')})"
+
+
+def _summarise_persistence_attempt(event: dict[str, Any]) -> str:
+    return str(event.get("detail") or "persistence attempted")
+
+
+def _summarise_intent_summary(event: dict[str, Any]) -> str:
+    profile = event.get("actor_profile", "unknown")
+    confidence = event.get("confidence", "unknown")
+    intent = event.get("intent")
+    if isinstance(intent, str) and intent:
+        return f"{profile} / {confidence}: {intent}"
+    return f"{profile} / {confidence}"
+
+
+def _summarise_cluster_match(event: dict[str, Any]) -> str:
+    matches = event.get("matches")
+    count = len(matches) if isinstance(matches, list) else 0
+    top = _top_match_similarity(matches)
+    threshold = event.get("threshold")
+    if top is not None and isinstance(threshold, (int, float)):
+        return (
+            f"{count} similar session(s); top={top:.3f} "
+            f"(threshold={float(threshold):.2f})"
+        )
+    return f"{count} similar session(s)"
+
+
+def _top_match_similarity(matches: object) -> float | None:
+    """Pull the first ``similarity`` value out of a matches list, if any."""
+    if not isinstance(matches, list) or not matches:
+        return None
+    first = matches[0]
+    if not isinstance(first, dict):
+        return None
+    sim = first.get("similarity")
+    return float(sim) if isinstance(sim, (int, float)) else None
+
+
+_SUMMARISERS: dict[str, Any] = {
+    "defense_fired": _summarise_defense_fired,
+    "defense_scan_truncated": _summarise_defense_scan_truncated,
+    "subsystem_refused": _summarise_subsystem_refused,
+    "high_severity_session": _summarise_high_severity_session,
+    "persistence_attempt": _summarise_persistence_attempt,
+    "intent_summary": _summarise_intent_summary,
+    "cluster_match": _summarise_cluster_match,
+}
 
 
 def _parse_cursor(cursor: str | None) -> tuple[int, int] | None:

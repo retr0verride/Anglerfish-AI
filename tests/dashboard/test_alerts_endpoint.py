@@ -54,11 +54,12 @@ def test_alerts_endpoint_returns_empty_page_with_stubs_when_no_events(
     assert body["next_cursor"] is None
     stubs = body["stubs"]
     assert stubs["honeytoken_callback_hits"]["available"] is False
-    assert stubs["behavioral_cluster_matches"]["available"] is False
-    # intent_summary_alerts flipped to live in Stage 7 slice 4 and is
-    # therefore no longer in the stub list (operators see real events
-    # at /api/alerts?kind=intent_summary).
+    # intent_summary_alerts flipped to live in Stage 7 slice 4 and
+    # behavioral_cluster_matches flipped to live in Stage 8 slice 5;
+    # both are absent from the stub list (operators see real events
+    # at /api/alerts?kind=intent_summary / cluster_match).
     assert "intent_summary_alerts" not in stubs
+    assert "behavioral_cluster_matches" not in stubs
 
 
 # ---------------------------------------------------------------------------
@@ -248,3 +249,59 @@ def test_alerts_fetch_emits_dashboard_audit_read(
     client.get("/api/alerts")
     text = audit_path.read_text(encoding="utf-8")
     assert "dashboard.audit_read" in text
+
+
+# ---------------------------------------------------------------------------
+# Stage 8 slice 5: cluster_match kind is live
+# ---------------------------------------------------------------------------
+
+
+def test_alerts_surfaces_cluster_match_events(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(10),
+                "event_type": "bridge.cluster_match",
+                "session_id": "abc-123",
+                "model": "embed-test",
+                "threshold": 0.85,
+                "matches": [
+                    {"session_id": "def-456", "similarity": 0.92},
+                    {"session_id": "ghi-789", "similarity": 0.88},
+                ],
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=cluster_match").json()
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["kind"] == "cluster_match"
+    assert item["session_id"] == "abc-123"
+    assert "2 similar session(s)" in item["detail"]
+    assert "top=0.920" in item["detail"]
+
+
+def test_alerts_cluster_match_without_matches_renders_zero(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    """Malformed cluster_match (missing matches list) still renders."""
+    _write_events(
+        audit_path,
+        [
+            {
+                "ts": _ts(5),
+                "event_type": "bridge.cluster_match",
+                "session_id": "abc-123",
+                "model": "embed-test",
+                "threshold": 0.85,
+            },
+        ],
+    )
+    body = client.get("/api/alerts?kind=cluster_match").json()
+    assert len(body["items"]) == 1
+    assert "0 similar session(s)" in body["items"][0]["detail"]
