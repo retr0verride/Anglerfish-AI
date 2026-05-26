@@ -1,9 +1,17 @@
-"""Audit-log tailer that wires lure session events into the Stage 4 store.
+"""Audit-log tailer that wires bridge + lure events into the persistent stores.
 
 Background asyncio task. Runs in the dashboard process. Reads the
-append-only audit JSONL at ``settings.audit.log_path``, translates
-relevant ``lure.*`` events into :class:`DashboardState` writes, and
-relies on the facade to fire WebSocket fan-out.
+append-only audit JSONL at ``settings.audit.log_path`` and dispatches
+each recognised event to :class:`DashboardState`:
+
+* ``lure.session_opened`` / ``lure.command_*`` / ``lure.fallback_served``
+  / ``lure.session_closed`` (Stage 4.2) populate the Stage 4 session
+  store.
+* ``bridge.intent_extracted`` (Stage 7) persists the operator-facing
+  intent summary keyed on session_id.
+
+Every dispatched event additionally triggers a WebSocket fan-out via
+the DashboardState facade so the SPA receives live updates.
 
 Path "alpha" from the Stage 4.2 design discussion: zero new IPC,
 zero new auth surface. The audit log is the wire format.

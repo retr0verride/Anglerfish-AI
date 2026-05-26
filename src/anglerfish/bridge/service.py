@@ -148,6 +148,10 @@ class AIBridgeService:
         self._overrides_reader = overrides_reader
         # Injected for tests so strategy delays do not park real wall-clock
         # time during the suite. Defaults to asyncio.sleep at construct.
+        # The type-ignore exists because asyncio.sleep returns a Coroutine
+        # that is structurally compatible with the Future-returning
+        # callable our other paths require, but mypy cannot prove the
+        # equivalence without wrapping every call in ensure_future.
         self._sleep: Callable[[float], asyncio.Future[None]] = (
             sleep if sleep is not None else asyncio.sleep  # type: ignore[assignment]
         )

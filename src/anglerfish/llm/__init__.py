@@ -8,18 +8,26 @@ test in lockstep.
 
 Public surface:
 
-* :class:`LLMClient` - async chat client; ``chat()`` returns a
-  :class:`ChatResult` carrying both content and Ollama-reported
-  token usage. Streaming, structured output, and per-session
-  budgets land in later Stage 5 slices.
-* :class:`LLMRole` - ``FAST`` and ``DEEP``. The fast tier handles
-  every command; deep is reserved for Stage 7+ summarisation
-  paths. Embed is deferred to Stage 8 (when its consumer lands).
+* :class:`LLMClient` - async client around Ollama. Exposes
+  ``chat()`` (buffered), ``stream_chat()`` (NDJSON streaming),
+  ``structured_chat()`` (Pydantic-schema-validated with
+  retry-on-malformed), ``embed()`` (vector for a text), and
+  ``warm()`` (no-op call with ``keep_alive=-1`` to pin the model
+  in Ollama's memory). All take an optional :class:`TokenBudget`.
+* :class:`LLMRole` - three tiers: ``FAST`` for per-command shell
+  responses, ``DEEP`` for Stage 7+ intent extraction, ``EMBED``
+  for Stage 8 behavioural clustering.
 * :class:`ChatMessage` - one Ollama chat-protocol message.
-* :class:`ChatResult` / :class:`TokenUsage` - parsed response.
-* Error types mirror the original module:
-  :class:`anglerfish.bridge.errors.OllamaUnavailableError` and
-  :class:`OllamaResponseError`.
+* :class:`ChatResult` / :class:`ChatChunk` / :class:`TokenUsage` -
+  parsed responses (buffered, streamed, and the usage block).
+* :class:`TokenBudget` + :class:`BudgetExhaustedError` - per-
+  session token cap with one bucket per role.
+* :class:`WarmPool` + :class:`WarmStatus` - background warm-up
+  task that keeps every configured role resident.
+* Errors: :class:`anglerfish.llm.errors.LLMError` base plus
+  :class:`OllamaUnavailableError` (network / 5xx),
+  :class:`OllamaResponseError` (4xx / malformed body), and
+  :class:`StructuredOutputError` (schema retries exhausted).
 """
 
 from __future__ import annotations

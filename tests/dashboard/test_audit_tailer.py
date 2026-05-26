@@ -719,5 +719,3 @@ async def test_intent_extracted_with_malformed_extracted_at_is_skipped(
     )
     await tailer._poll_once()
     assert await dashboard_state.get_intent(sid) is None
-
-

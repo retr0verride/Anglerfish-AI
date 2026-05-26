@@ -170,6 +170,13 @@ def _summarise_event(event: dict[str, Any], label: str) -> str:
         return f"high-severity session (score={score})"
     if label == "persistence_attempt":
         return str(event.get("detail") or "persistence attempted")
+    if label == "intent_summary":
+        profile = event.get("actor_profile", "unknown")
+        confidence = event.get("confidence", "unknown")
+        intent = event.get("intent")
+        if isinstance(intent, str) and intent:
+            return f"{profile} / {confidence}: {intent}"
+        return f"{profile} / {confidence}"
     return "alert"
 
 

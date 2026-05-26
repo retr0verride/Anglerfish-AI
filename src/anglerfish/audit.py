@@ -17,25 +17,32 @@ tamper-evidence.
 
 Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
 
-* Wizard: ``wizard.run``, ``wizard.secrets_regenerated``.
+* Wizard: ``wizard.run``. (Secret-regeneration is a structured
+  ``secrets_regenerated`` field on the ``wizard.run`` event,
+  not a separate event.)
 * Credentials: ``credentials.key_rotated``.
 * Dashboard: ``dashboard.login_success``, ``dashboard.login_failure``,
-  ``login_rate_limited``, ``dashboard.export_served``.
+  ``dashboard.login_rate_limited``, ``dashboard.logout``,
+  ``dashboard.export_served``, ``dashboard.audit_read``,
+  ``dashboard.settings_changed``, ``dashboard.feature_toggled``,
+  ``dashboard.overrides_published``,
+  ``dashboard.overrides_publish_failed``.
 * Bridge: ``bridge.defense_fired``, ``bridge.defense_scan_truncated``,
   ``bridge.model_integrity_verified``, ``bridge.model_integrity_failed``,
   ``bridge.model_integrity_skipped``, ``bridge.budget_exhausted``,
   ``bridge.overrides_read_failed``, ``bridge.wasting_applied``,
   ``bridge.wasting_budget_exhausted``, ``bridge.intent_extracted``,
   ``bridge.intent_extraction_failed``.
-* Dashboard (Stage 6): ``dashboard.overrides_published``,
-  ``dashboard.overrides_publish_failed``.
 * Lure: ``lure.server_started``, ``lure.server_stopped``,
   ``lure.session_opened``, ``lure.session_closed``,
   ``lure.command_native``, ``lure.command_bridge``,
   ``lure.fallback_served``, ``lure.bridge_unavailable``,
   ``lure.rate_limited``, ``lure.subsystem_refused``,
   ``lure.fingerprint_observed``, ``lure.login_attempt``.
-* Threat: ``threat.alert_fired``.
+* Threat: ``threat.alert_fired`` (reserved; wired in
+  ``dashboard/alerts.py`` as ``high_severity_session`` ahead of
+  the Stage 9+ threat-engine emission. No code path emits it yet
+  but the alerts panel surfaces it the moment it lands).
 * Geo: ``geo.update_succeeded``, ``geo.update_failed``.
 * LLM: ``llm.warmup_succeeded``, ``llm.warmup_failed``.
 
