@@ -37,6 +37,10 @@ _ALERT_EVENT_TYPES: dict[str, str] = {
     "bridge.defense_scan_truncated": "defense_scan_truncated",
     "lure.subsystem_refused": "subsystem_refused",
     "threat.alert_fired": "high_severity_session",
+    # Stage 7: every successful intent extraction surfaces as an
+    # alert; operators chip-filter by kind="intent_summary" in the
+    # SPA. The previous available:false stub flipped here.
+    "bridge.intent_extracted": "intent_summary",
     # Persistence-attempt event ships under Stage 10; the type name
     # is reserved here so the alerts endpoint surfaces it the moment
     # the bridge starts emitting it, with no dashboard change.
@@ -51,7 +55,6 @@ ALERT_KINDS: frozenset[str] = frozenset(_ALERT_EVENT_TYPES.values())
 ALERT_STUBS: dict[str, dict[str, Any]] = {
     "honeytoken_callback_hits": {"available": False, "stage": 11},
     "behavioral_cluster_matches": {"available": False, "stage": 8},
-    "intent_summary_alerts": {"available": False, "stage": 7},
 }
 
 

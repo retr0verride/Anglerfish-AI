@@ -27,6 +27,7 @@ from anglerfish.dashboard.csrf import require_csrf
 from anglerfish.dashboard.export import (
     ExportRangeError,
     audit_export_payload,
+    intent_export_payload,
     parse_range,
     session_csv_rows,
     session_export_payload,
@@ -157,6 +158,20 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         if session is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         return session.model_dump(mode="json")
+
+    @router.get(
+        "/api/sessions/{session_id}/intent",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_session_intent(
+        session_id: UUID,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return the persisted IntentSummary or 404 if not extracted yet."""
+        intent = await state.get_intent(session_id)
+        if intent is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        return intent.model_dump(mode="json")
 
     @router.get("/api/commands", dependencies=[Depends(require_auth)])
     async def recent_commands(
@@ -377,6 +392,34 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         audit.record(
             "dashboard.export_served",
             kind="audit",
+            export_format="json",
+            from_=start.isoformat(),
+            to=end.isoformat(),
+            item_count=payload["count"],
+            actor=_actor(request),
+        )
+        return payload
+
+    @router.get("/api/export/intents", dependencies=[Depends(require_auth)])
+    async def export_intents(
+        request: Request,
+        from_: str | None = Query(default=None, alias="from"),
+        to: str | None = Query(default=None),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Export persisted Stage 7 IntentSummaries in a date range."""
+        try:
+            start, end = parse_range(from_=from_, to_=to)
+        except ExportRangeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        payload = await intent_export_payload(state, start=start, end=end)
+        audit.record(
+            "dashboard.export_served",
+            kind="intents",
             export_format="json",
             from_=start.isoformat(),
             to=end.isoformat(),

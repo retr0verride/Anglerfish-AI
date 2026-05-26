@@ -55,7 +55,10 @@ def test_alerts_endpoint_returns_empty_page_with_stubs_when_no_events(
     stubs = body["stubs"]
     assert stubs["honeytoken_callback_hits"]["available"] is False
     assert stubs["behavioral_cluster_matches"]["available"] is False
-    assert stubs["intent_summary_alerts"]["available"] is False
+    # intent_summary_alerts flipped to live in Stage 7 slice 4 and is
+    # therefore no longer in the stub list (operators see real events
+    # at /api/alerts?kind=intent_summary).
+    assert "intent_summary_alerts" not in stubs
 
 
 # ---------------------------------------------------------------------------

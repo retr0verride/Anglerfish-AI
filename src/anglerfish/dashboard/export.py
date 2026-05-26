@@ -39,6 +39,7 @@ __all__ = [
     "MAX_EXPORT_WINDOW_DAYS",
     "ExportRangeError",
     "audit_export_payload",
+    "intent_export_payload",
     "parse_range",
     "session_csv_rows",
     "session_export_payload",
@@ -52,7 +53,6 @@ MAX_EXPORT_WINDOW_DAYS = 7
 EXPORT_STUBS: dict[str, dict[str, Any]] = {
     "stix2": {"available": False, "stage": 13},
     "misp_json": {"available": False, "stage": 13},
-    "intent_summary": {"available": False, "stage": 7},
     "honeytoken_report": {"available": False, "stage": 11},
 }
 
@@ -135,6 +135,31 @@ async def session_csv_rows(
     yield _csv_row(columns)
     for item in items:
         yield _csv_row([_csv_value(item.get(c)) for c in columns])
+
+
+async def intent_export_payload(
+    dashboard_state: DashboardState,
+    *,
+    start: datetime,
+    end: datetime,
+) -> dict[str, Any]:
+    """Build the JSON response for an intent-summary export.
+
+    Returns every :class:`IntentSummary` whose ``extracted_at``
+    falls inside ``[start, end]``. Newest-first (matches the
+    SessionStore query order); operators reverse client-side if
+    they want chronological order.
+    """
+    items = await dashboard_state.get_intents_in_range(start=start, end=end)
+    return {
+        "available": True,
+        "format": "json",
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "count": len(items),
+        "items": [item.model_dump(mode="json") for item in items],
+        "stubs": EXPORT_STUBS,
+    }
 
 
 def audit_export_payload(

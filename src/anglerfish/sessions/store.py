@@ -476,6 +476,55 @@ class SessionStore:
         async with self._lock:
             return await asyncio.to_thread(self._get_intent_locked, session_id)
 
+    async def get_intents_in_range(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[IntentSummary]:
+        """Return intents with ``extracted_at`` in ``[start, end]``, newest first."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_intents_in_range_locked,
+                start,
+                end,
+            )
+
+    def _get_intents_in_range_locked(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> list[IntentSummary]:
+        assert self._conn is not None  # noqa: S101
+        rows = self._conn.execute(
+            """
+            SELECT session_id, actor_profile, intent, why,
+                   matched_techniques_json, confidence, summary, extracted_at
+            FROM intents
+            WHERE extracted_at >= ? AND extracted_at <= ?
+            ORDER BY extracted_at DESC
+            """,
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+        out: list[IntentSummary] = []
+        for row in rows:
+            techniques_raw = json.loads(row[4]) if row[4] else []
+            techniques = tuple(t for t in techniques_raw if isinstance(t, str))
+            out.append(
+                IntentSummary(
+                    session_id=UUID(row[0]),
+                    actor_profile=row[1],
+                    intent=row[2],
+                    why=row[3],
+                    matched_techniques=techniques,
+                    confidence=row[5],
+                    summary=row[6],
+                    extracted_at=datetime.fromisoformat(row[7]),
+                ),
+            )
+        return out
+
     def _get_intent_locked(self, session_id: UUID) -> IntentSummary | None:
         assert self._conn is not None  # noqa: S101
         row = self._conn.execute(

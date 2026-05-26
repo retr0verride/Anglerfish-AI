@@ -227,6 +227,14 @@ class DashboardState:
     async def get_intent(self, session_id: UUID) -> IntentSummary | None:
         return await self._store.get_intent(session_id)
 
+    async def get_intents_in_range(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[IntentSummary]:
+        return await self._store.get_intents_in_range(start=start, end=end)
+
     # ------------------------------------------------------------------
     # Queries - called by REST routes.
     # ------------------------------------------------------------------
