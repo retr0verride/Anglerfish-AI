@@ -17,6 +17,7 @@ from collections.abc import Sequence
 
 from anglerfish.config.models import BridgeConfig
 from anglerfish.llm import ChatMessage
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.session import CommandTurn
 from anglerfish.persona.schema import Persona
 
@@ -64,6 +65,7 @@ def build_system_prompt(
     *,
     cwd: str,
     persona: Persona | None = None,
+    persistence_events: Sequence[PersistenceEvent] | None = None,
 ) -> str:
     """Render the system prompt with the chosen fake-environment values.
 
@@ -74,6 +76,16 @@ def build_system_prompt(
     (Stage 9 disabled via ``settings.persona.enabled=False``)
     the function falls back to the BridgeConfig values and emits
     no extra block, matching pre-Stage-9 behaviour.
+
+    When ``persistence_events`` is a non-empty sequence (Stage 10
+    happy path: the attacker installed one or more backdoors,
+    either this session or a previous one from the same source
+    IP), the rendered prompt grows an "Installed persistence
+    state" block listing each event so the LLM renders
+    consistent ``crontab -l``, ``systemctl status``, and
+    ``cat ~/.ssh/authorized_keys`` output. The block is
+    consumed by the LLM as ground truth for the relevant
+    commands.
     """
     if persona is not None:
         hostname = persona.hostname
@@ -83,12 +95,57 @@ def build_system_prompt(
         hostname = config.fake_hostname
         username = config.fake_username
         persona_block = ""
+    persistence_block = _render_persistence_block(persistence_events)
     return _SYSTEM_PROMPT_TEMPLATE.format(
         hostname=hostname,
         username=username,
         cwd=cwd,
-        persona_block=persona_block,
+        persona_block=persona_block + persistence_block,
     )
+
+
+def _render_persistence_block(
+    events: Sequence[PersistenceEvent] | None,
+) -> str:
+    """Render the Stage 10 "Installed persistence state" prompt block.
+
+    Empty sequence (or None) produces the empty string so the
+    pre-Stage-10 prompt shape is preserved when no backdoor is
+    installed. Events are grouped by ``kind`` so the LLM sees a
+    coherent per-subsystem view.
+    """
+    if not events:
+        return ""
+    cron_lines: list[str] = []
+    systemctl_units: list[str] = []
+    ssh_keys: list[str] = []
+    for ev in events:
+        if ev.kind == "crontab":
+            cron_lines.append(ev.payload)
+        elif ev.kind == "systemctl":
+            systemctl_units.append(ev.sub_key or ev.payload)
+        elif ev.kind == "authorized_keys":
+            ssh_keys.append(ev.payload)
+    sections: list[str] = []
+    if cron_lines:
+        sections.append(
+            "Installed cron entries (treat as ground truth for `crontab -l`):\n"
+            + "\n".join(f"  {line}" for line in cron_lines),
+        )
+    if systemctl_units:
+        sections.append(
+            "Installed/enabled systemd units (treat as enabled + active for "
+            "`systemctl status <unit>`):\n" + "\n".join(f"  {u}" for u in systemctl_units),
+        )
+    if ssh_keys:
+        sections.append(
+            "Appended ~/.ssh/authorized_keys entries (the cat output "
+            "includes these in addition to any pre-existing keys):\n"
+            + "\n".join(f"  {k}" for k in ssh_keys),
+        )
+    if not sections:
+        return ""
+    return "\n\n" + "\n\n".join(sections) + "\n"
 
 
 def build_messages(
@@ -98,19 +155,26 @@ def build_messages(
     cwd: str,
     history: Sequence[CommandTurn],
     persona: Persona | None = None,
+    persistence_events: Sequence[PersistenceEvent] | None = None,
 ) -> list[ChatMessage]:
     """Build the ordered Ollama chat-API message list.
 
     Contains the system prompt, the recent command/response history as
     alternating user/assistant turns (oldest first), and the new
-    command as the final user message. ``persona`` flows through to
-    :func:`build_system_prompt`; pass ``None`` for the pre-Stage-9
-    behaviour.
+    command as the final user message. ``persona`` and
+    ``persistence_events`` both flow through to
+    :func:`build_system_prompt`; pass ``None`` for the
+    pre-Stage-9 / pre-Stage-10 behaviours.
     """
     messages: list[ChatMessage] = [
         ChatMessage(
             role="system",
-            content=build_system_prompt(config, cwd=cwd, persona=persona),
+            content=build_system_prompt(
+                config,
+                cwd=cwd,
+                persona=persona,
+                persistence_events=persistence_events,
+            ),
         ),
     ]
     for turn in history:
@@ -144,6 +208,7 @@ def build_clarification_messages(
     cwd: str,
     history: Sequence[CommandTurn],
     persona: Persona | None = None,
+    persistence_events: Sequence[PersistenceEvent] | None = None,
 ) -> list[ChatMessage]:
     """Build the message list for an aggressive-strategy clarification turn.
 
@@ -156,7 +221,12 @@ def build_clarification_messages(
     messages: list[ChatMessage] = [
         ChatMessage(
             role="system",
-            content=build_system_prompt(config, cwd=cwd, persona=persona),
+            content=build_system_prompt(
+                config,
+                cwd=cwd,
+                persona=persona,
+                persistence_events=persistence_events,
+            ),
         ),
     ]
     for turn in history:

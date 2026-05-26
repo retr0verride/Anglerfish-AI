@@ -296,6 +296,11 @@ def create_bridge_app(
             fake_hostname = settings.bridge.fake_hostname
             fake_username = settings.bridge.fake_username
             fake_cwd = settings.bridge.fake_cwd
+        # Stage 10: seed the new session's in-memory
+        # persistence_events list from any prior cross-session
+        # installs for this source IP. Returns an empty list when
+        # engaged_persistence is disabled or no reader is wired.
+        prior_events = await service.load_persistence_for_source_ip(req.source_ip)
         ctx = SessionContext(
             uuid4(),
             source_ip=req.source_ip,
@@ -305,6 +310,7 @@ def create_bridge_app(
             fake_cwd=fake_cwd,
             history_window=settings.bridge.history_window,
             persona=persona,
+            persistence_events=prior_events,
         )
         async with lock:
             sessions[ctx.session_id] = ctx
@@ -347,6 +353,11 @@ def create_bridge_app(
             ctx = sessions.get(session_id)
         if ctx is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        # Stage 10: classify pre-LLM so the current command's prompt
+        # build sees the new install in its persistence_events block.
+        # Classifier errors are swallowed inside classify_command +
+        # audited as bridge.persistence_classifier_error.
+        await service.classify_command(req.command, session=ctx)
         if stream:
             return StreamingResponse(
                 _stream_command(service, ctx, req.command),

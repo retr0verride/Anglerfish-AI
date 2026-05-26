@@ -130,6 +130,7 @@ def bridge_serve(
     from anglerfish.bridge.overrides_reader import BridgeOverridesReader
     from anglerfish.intel import EmbeddingGenerator, IntentExtractor
     from anglerfish.llm import WarmPool
+    from anglerfish.persistence import PersistenceClassifier
     from anglerfish.persona import PersonaLoadError, PersonaRegistry, PersonaSelector
     from anglerfish.sessions.reader import SessionStoreReader
 
@@ -227,6 +228,35 @@ def bridge_serve(
             raise typer.Exit(code=2) from exc
         persona_selector = PersonaSelector(registry, persona_reader)
 
+    # Stage 10: the persistence classifier consumes the same
+    # SessionStoreReader as the persona selector (read-only access to
+    # the shared sessions DB; the bridge process never opens a
+    # writer). When engaged_persistence is disabled the classifier
+    # short-circuits on every command and the reader is not wired.
+    persistence_classifier: PersistenceClassifier | None = None
+    if settings.bridge.engaged_persistence:
+        persistence_classifier = PersistenceClassifier(
+            client=ai_client,
+            llm_enabled=settings.bridge.persistence_classifier_llm_enabled,
+            budget_cap_tokens=settings.bridge.persistence_classifier_token_cap,
+        )
+        # If persona support is off but engaged_persistence is on, we
+        # still need a reader for cross-session persistence loads.
+        if persona_reader is None:
+            persona_reader = SessionStoreReader(settings.sessions)
+            try:
+                asyncio.run(persona_reader.open())
+            except FileNotFoundError as exc:
+                Console().print(
+                    Panel(
+                        str(exc) + "\n\nStart the dashboard at least once before "
+                        "the bridge, or disable engaged-persistence with "
+                        "ANGLERFISH_BRIDGE__ENGAGED_PERSISTENCE=false.",
+                        title="[red]Persistence session-store reader failed to open[/red]",
+                    ),
+                )
+                raise typer.Exit(code=2) from exc
+
     service = AIBridgeService(
         settings,
         client=ai_client,
@@ -235,6 +265,8 @@ def bridge_serve(
         intent_extractor=intent_extractor,
         embedding_generator=embedding_generator,
         persona_selector=persona_selector,
+        persistence_classifier=persistence_classifier,
+        session_store_reader=persona_reader,
     )
     warm_pool = WarmPool(
         client=ai_client,

@@ -22,6 +22,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self
 
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.sessions.schema import PRAGMAS
 
 if TYPE_CHECKING:
@@ -152,6 +153,48 @@ class SessionStoreReader:
         )
         row = cur.fetchone()
         return row[0] if row is not None else None
+
+    async def list_persistence_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[PersistenceEvent]:
+        """Stage 10: prior-session persistence events for ``source_ip``.
+
+        Oldest first. Used by the bridge at session-open to seed
+        SessionContext.persistence_events so the prompt builder's
+        Stage 10 block reflects cross-session installs immediately
+        on the new session's first command.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_persistence_for_source_ip_locked,
+                source_ip,
+            )
+
+    def _list_persistence_for_source_ip_locked(
+        self,
+        source_ip: str,
+    ) -> list[PersistenceEvent]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT kind, sub_key, payload, source
+            FROM fake_persistence_state
+            WHERE source_ip = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (source_ip,),
+        )
+        return [
+            PersistenceEvent(
+                kind=row[0],
+                sub_key=row[1],
+                payload=row[2],
+                source=row[3],
+            )
+            for row in cur.fetchall()
+        ]
 
     # -----------------------------------------------------------------
     # Internals

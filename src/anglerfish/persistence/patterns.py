@@ -41,7 +41,53 @@ import re
 
 from anglerfish.models.persistence import PersistenceEvent
 
-__all__ = ["extract_event"]
+__all__ = ["extract_event", "looks_write_shape"]
+
+
+# ---------------------------------------------------------------------------
+# Write-shape heuristic (gates the LLM classifier in slice 10.3)
+# ---------------------------------------------------------------------------
+
+# Tokens whose presence in a command suggest it *might* be writing
+# state somewhere - the cue that justifies a fast-tier LLM
+# classification when the regex catalog above missed. The list is
+# intentionally permissive (recall over precision) because the LLM
+# call's cost is bounded by the budget cap and a false-positive
+# LLM call just returns "not persistence" (no audit, no state).
+_WRITE_SHAPE_TOKENS: tuple[str, ...] = (
+    ">>",  # append redirect
+    "> ",  # truncate redirect (note the space; ">x" inside other tokens is excluded)
+    "tee ",  # tee / tee -a
+    "chmod ",  # making something executable
+    "chown ",  # changing ownership
+    "install ",  # `install -m 0755 ...`
+    "mv ",  # moving into a system path
+    "cp ",  # copying into a system path
+    "ln ",  # symlink
+    "curl ",  # download
+    "wget ",  # download
+    "sed -i ",  # in-place edit
+)
+
+
+def looks_write_shape(command: str) -> bool:
+    """Quick yes/no for "could this command be installing persistence?".
+
+    Used to gate the LLM classifier branch (slice 10.3) - we only
+    pay the LLM cost when the command at least looks like it
+    writes somewhere. Pure-read commands (``ls``, ``cat``, ``ps``)
+    fall through to None without a classification call.
+
+    The check is a substring scan; conservative by design (recall
+    over precision). A false positive just produces an LLM call
+    that returns ``is_persistence=false``; a false negative drops
+    detection of an exotic persistence shape (acceptable per the
+    Stage 10 design's "false negatives degrade to pre-Stage-10
+    behaviour" framing).
+    """
+    if not command:
+        return False
+    return any(token in command for token in _WRITE_SHAPE_TOKENS)
 
 
 # ---------------------------------------------------------------------------

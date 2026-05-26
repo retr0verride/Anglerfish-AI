@@ -493,6 +493,38 @@ class BridgeConfig(BaseModel):
             "matches. Read by the tailer at request time."
         ),
     )
+    engaged_persistence: bool = Field(
+        default=False,
+        description=(
+            "Stage 10 master switch. When False (default), the "
+            "PersistenceClassifier short-circuits to None on every "
+            "command and no fake-state is generated. When True, the "
+            "bridge actively deceives attackers about installed "
+            "backdoors (crontab entries, systemd units, SSH keys). "
+            "See docs/THREAT_MODEL.md row 'Engaged persistence' for "
+            "the responsibility this carries."
+        ),
+    )
+    persistence_classifier_llm_enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, regex-silent write-shape commands go through "
+            "one fast-tier LLM classification. False = regex-only "
+            "detection (cheaper, lower recall). Ignored when "
+            "engaged_persistence is False."
+        ),
+    )
+    persistence_classifier_token_cap: int = Field(
+        default=1500,
+        gt=0,
+        le=8000,
+        description=(
+            "Per-call token budget for the LLM classifier pass. "
+            "Sized for the fast-tier model + the short structured-JSON "
+            "output schema. Ignored when "
+            "persistence_classifier_llm_enabled is False."
+        ),
+    )
 
     @field_validator("fake_hostname")
     @classmethod

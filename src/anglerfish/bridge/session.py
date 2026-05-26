@@ -18,6 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 from anglerfish.persona.schema import Persona
 
@@ -42,6 +43,7 @@ class SessionContext:
         "_fake_username",
         "_history",
         "_last_activity_at",
+        "_persistence_events",
         "_persona",
         "_session_id",
         "_source_ip",
@@ -60,6 +62,7 @@ class SessionContext:
         fake_cwd: str,
         history_window: int,
         persona: Persona | None = None,
+        persistence_events: list[PersistenceEvent] | None = None,
         clock: _UtcNow | None = None,
     ) -> None:
         if history_window < 0:
@@ -82,6 +85,17 @@ class SessionContext:
         # read prompt_block without a registry round-trip; the
         # snapshot persists only the name string.
         self._persona = persona
+        # Stage 10: per-session list of persistence-installation
+        # events the classifier flagged. Seeded at session-open from
+        # the persisted fake_persistence_state for this source IP
+        # (Stage 10 slice 10.3); appended to mid-session whenever
+        # the classifier fires on a new install. The prompt builder
+        # includes the full list as an fs_context block on every
+        # subsequent command so the LLM renders consistent crontab
+        # -l / systemctl status output.
+        self._persistence_events: list[PersistenceEvent] = (
+            list(persistence_events) if persistence_events else []
+        )
         self._history: deque[CommandTurn] = deque(maxlen=history_window)
         # Stage 6: monotonic per-session command counter, distinct from
         # the windowed history length (which caps at history_window).
@@ -139,6 +153,27 @@ class SessionContext:
     def persona_name(self) -> str | None:
         """Name of the assigned persona, or None when persona is disabled."""
         return self._persona.name if self._persona is not None else None
+
+    @property
+    def persistence_events(self) -> tuple[PersistenceEvent, ...]:
+        """Snapshot of persistence-installation events known this session.
+
+        Includes both events seeded at session-open from previously-
+        persisted state for this source IP AND in-session installs the
+        classifier flagged. Tuple to keep callers from mutating the
+        backing list; use :meth:`record_persistence_event` to append.
+        """
+        return tuple(self._persistence_events)
+
+    def record_persistence_event(self, event: PersistenceEvent) -> None:
+        """Append a classifier-detected event to the session's in-memory list.
+
+        The bridge prompt builder includes the full list as an
+        fs_context block on every subsequent command so the LLM
+        renders consistent ``crontab -l`` / ``systemctl status``
+        output for installs done earlier in the same session.
+        """
+        self._persistence_events.append(event)
 
     def history(self) -> tuple[CommandTurn, ...]:
         """Return the recent command/response history (oldest first)."""

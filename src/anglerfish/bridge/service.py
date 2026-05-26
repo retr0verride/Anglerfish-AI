@@ -24,6 +24,7 @@ import logging
 import shlex
 import time
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from typing import Self
 from uuid import UUID
 
@@ -61,6 +62,7 @@ from anglerfish.llm.budget import BudgetExhaustedError
 from anglerfish.llm.errors import LLMError
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
+from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.session import (
     BridgeChunk,
     BridgeResponse,
@@ -68,7 +70,10 @@ from anglerfish.models.session import (
     SessionSnapshot,
 )
 from anglerfish.models.threat import ThreatAssessment
+from anglerfish.persistence import PersistenceClassifier
+from anglerfish.persistence.classifier import PersistenceClassifierError
 from anglerfish.persona import PersonaSelector, SelectionResult
+from anglerfish.sessions.reader import SessionStoreReader
 
 __all__ = ["AIBridgeService"]
 
@@ -92,6 +97,8 @@ class AIBridgeService:
         intent_extractor: IntentExtractor | None = None,
         embedding_generator: EmbeddingGenerator | None = None,
         persona_selector: PersonaSelector | None = None,
+        persistence_classifier: PersistenceClassifier | None = None,
+        session_store_reader: SessionStoreReader | None = None,
         sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
@@ -159,6 +166,17 @@ class AIBridgeService:
         # (selector absent or settings.persona.enabled=False) so
         # SessionContext falls back to BridgeConfig.fake_* values.
         self._persona_selector = persona_selector
+        # Stage 10: optional persistence classifier + session-store
+        # reader. classify_command runs the classifier pre-LLM on
+        # every command; on hit, the event is recorded on the
+        # SessionContext (so subsequent prompt builds reflect it)
+        # AND audited as bridge.persistence_attempt for the
+        # dashboard tailer to persist. load_persistence_for_source_ip
+        # uses the reader at session-open to seed
+        # SessionContext.persistence_events from prior cross-session
+        # installs.
+        self._persistence_classifier = persistence_classifier
+        self._session_store_reader = session_store_reader
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -290,6 +308,112 @@ class AIBridgeService:
             source_ip=source_ip,
             persona=result.persona.name,
             selection_reason=result.reason,
+        )
+
+    # ------------------------------------------------------------------
+    # Stage 10 persistence classification + audit
+    # ------------------------------------------------------------------
+
+    async def load_persistence_for_source_ip(
+        self,
+        source_ip: str,
+    ) -> list[PersistenceEvent]:
+        """Return prior-session persistence events for ``source_ip``.
+
+        Used by the bridge HTTP server at session-open to seed
+        ``SessionContext.persistence_events`` so subsequent
+        commands in the new session render with the attacker's
+        previously-installed state in fs_context. Returns an
+        empty list when engaged_persistence is disabled, no
+        reader is wired, or the source IP has no prior installs.
+        """
+        if not self._settings.bridge.engaged_persistence:
+            return []
+        if self._session_store_reader is None:
+            return []
+        return await self._session_store_reader.list_persistence_for_source_ip(
+            source_ip,
+        )
+
+    async def classify_command(
+        self,
+        command: str,
+        *,
+        session: SessionContext,
+    ) -> PersistenceEvent | None:
+        """Run the persistence classifier on one attacker command.
+
+        Pre-LLM hook called from the bridge command handler. On a
+        regex or LLM hit, records the event on the session +
+        audits ``bridge.persistence_attempt`` so the dashboard
+        tailer persists it to fake_persistence_state.
+
+        Returns the classified event (caller may use it to
+        short-circuit some downstream behaviour) or :data:`None`
+        on miss / disabled / classifier error.
+
+        Classifier errors are caught + audited as
+        ``bridge.persistence_classifier_error``; they never raise
+        to the caller (the engagement degrades to "no fake state
+        recorded for this command" rather than blocking the
+        attacker's session).
+        """
+        if not self._settings.bridge.engaged_persistence or self._persistence_classifier is None:
+            return None
+        try:
+            event = await self._persistence_classifier.classify(
+                command,
+                cwd=session.cwd,
+            )
+        except PersistenceClassifierError as exc:
+            self._record_persistence_classifier_error(
+                session=session,
+                error=str(exc),
+            )
+            return None
+        if event is None:
+            return None
+        session.record_persistence_event(event)
+        self._record_persistence_attempt(
+            session=session,
+            event=event,
+        )
+        return event
+
+    def _record_persistence_attempt(
+        self,
+        *,
+        session: SessionContext,
+        event: PersistenceEvent,
+    ) -> None:
+        """Audit a single bridge.persistence_attempt event.
+
+        The dashboard audit-tailer (slice 10.2) reads this and
+        upserts into fake_persistence_state via the COALESCE-
+        based UNIQUE INDEX so replay is idempotent.
+        """
+        self._audit_log.record(
+            "bridge.persistence_attempt",
+            session_id=str(session.session_id),
+            source_ip=session.source_ip,
+            kind=event.kind,
+            sub_key=event.sub_key,
+            payload=event.payload,
+            source=event.source,
+            created_at=datetime.now(tz=UTC).isoformat(),
+        )
+
+    def _record_persistence_classifier_error(
+        self,
+        *,
+        session: SessionContext,
+        error: str,
+    ) -> None:
+        self._audit_log.record(
+            "bridge.persistence_classifier_error",
+            session_id=str(session.session_id),
+            source_ip=session.source_ip,
+            error=error,
         )
 
     def schedule_intent_extraction(
@@ -506,6 +630,7 @@ class AIBridgeService:
                     cwd=session.cwd,
                     history=session.history(),
                     persona=session.persona,
+                    persistence_events=session.persistence_events,
                 )
                 result = await self._client.chat(messages, budget=budget)
                 # Defense layer (Stage 1): cap FIRST, then scan. Capping
@@ -667,6 +792,7 @@ class AIBridgeService:
                     cwd=session.cwd,
                     history=session.history(),
                     persona=session.persona,
+                    persistence_events=session.persistence_events,
                 )
                 try:
                     async for chunk in self._client.stream_chat(messages, budget=budget):
