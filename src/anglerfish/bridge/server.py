@@ -328,7 +328,14 @@ def create_bridge_app(
     @app.delete("/api/v1/session/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def end_session(session_id: UUID) -> None:
         async with lock:
-            sessions.pop(session_id, None)
+            ctx = sessions.pop(session_id, None)
+        # Stage 7: snapshot before per-session state drops + spawn the
+        # fire-and-forget intent-extraction task. The task runs with a
+        # wall-clock timeout configured via
+        # settings.bridge.intent_extraction_timeout_s; this endpoint
+        # returns 204 immediately regardless of extraction outcome.
+        if ctx is not None:
+            service.schedule_intent_extraction(ctx.snapshot())
         service.end_session_budget(session_id)
         logger.info("bridge.session_ended id=%s", session_id)
 

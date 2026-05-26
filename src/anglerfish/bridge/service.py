@@ -55,10 +55,18 @@ from anglerfish.bridge.strategies import (
     get_strategy,
 )
 from anglerfish.config.settings import AnglerfishSettings
+from anglerfish.intel import IntentExtractor
 from anglerfish.llm import LLMClient, TokenBudget
 from anglerfish.llm.budget import BudgetExhaustedError
 from anglerfish.llm.errors import LLMError
-from anglerfish.models.session import BridgeChunk, BridgeResponse, ResponseSource
+from anglerfish.models.intent import IntentSummary
+from anglerfish.models.session import (
+    BridgeChunk,
+    BridgeResponse,
+    ResponseSource,
+    SessionSnapshot,
+)
+from anglerfish.models.threat import ThreatAssessment
 
 __all__ = ["AIBridgeService"]
 
@@ -79,6 +87,7 @@ class AIBridgeService:
         output_filter: OutputFilter | None = None,
         injection_scorer: InjectionScorer | None = None,
         overrides_reader: BridgeOverridesReader | None = None,
+        intent_extractor: IntentExtractor | None = None,
         sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
@@ -118,6 +127,21 @@ class AIBridgeService:
         # Set of session_ids that have already emitted the budget-
         # exhausted audit; gates the one-per-session emission.
         self._wasted_exhausted: set[UUID] = set()
+        # Stage 7: optional end-of-session intent extractor. None in
+        # tests + dev loops where no deep model is available; real in
+        # production via the CLI. When set + intent_extraction_enabled,
+        # schedule_intent_extraction() spawns a fire-and-forget task on
+        # session close that audits the result.
+        self._intent_extractor = intent_extractor
+        # Tracks the per-session ThreatAssessment so the intent
+        # extractor can feed it as prompt context. Populated by the
+        # threat-engine integration hook (Stage 1.5); read by
+        # schedule_intent_extraction. Dropped via end_session_budget.
+        self._latest_threat: dict[UUID, ThreatAssessment] = {}
+        # Outstanding intent-extraction tasks kept alive so the
+        # asyncio loop does not cancel them on garbage collection.
+        # Tasks self-remove via discard in their done-callback.
+        self._intent_tasks: set[asyncio.Task[None]] = set()
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -198,6 +222,83 @@ class AIBridgeService:
         self._last_clarification.pop(session_id, None)
         self._wasted_ms.pop(session_id, None)
         self._wasted_exhausted.discard(session_id)
+        self._latest_threat.pop(session_id, None)
+
+    def record_threat_assessment(
+        self,
+        session_id: UUID,
+        threat: ThreatAssessment,
+    ) -> None:
+        """Cache the most recent threat assessment for ``session_id``.
+
+        Intent extraction (Stage 7) feeds the cached assessment as
+        prompt context when the session closes. The threat engine
+        calls this after each scoring pass; only the latest result
+        per session is retained.
+        """
+        self._latest_threat[session_id] = threat
+
+    def schedule_intent_extraction(
+        self,
+        snapshot: SessionSnapshot,
+    ) -> asyncio.Task[None] | None:
+        """Spawn a fire-and-forget intent-extraction task for ``snapshot``.
+
+        Returns the spawned :class:`asyncio.Task` (None when intent
+        extraction is disabled or no extractor was wired). The task
+        runs the extractor under
+        ``settings.bridge.intent_extraction_timeout_s`` and audits the
+        result (``bridge.intent_extracted`` on success,
+        ``bridge.intent_extraction_failed`` on every failure shape).
+        The caller does not await the task; the bridge HTTP DELETE
+        endpoint returns 204 immediately.
+        """
+        if not self._settings.bridge.intent_extraction_enabled or self._intent_extractor is None:
+            return None
+        threat = self._latest_threat.get(snapshot.session_id)
+        task = asyncio.create_task(
+            self._run_intent_extraction(snapshot, threat),
+            name=f"intent-extract-{snapshot.session_id}",
+        )
+        self._intent_tasks.add(task)
+        task.add_done_callback(self._intent_tasks.discard)
+        return task
+
+    async def _run_intent_extraction(
+        self,
+        snapshot: SessionSnapshot,
+        threat: ThreatAssessment | None,
+    ) -> None:
+        """Run the extractor under timeout + audit the outcome.
+
+        Never raises - every failure path lands in
+        bridge.intent_extraction_failed. The DELETE HTTP response
+        has already returned 204 by the time this runs, so a raise
+        here would only be visible in the bridge process logs.
+        """
+        if self._intent_extractor is None:  # pragma: no cover - guarded above
+            return
+        timeout_s = self._settings.bridge.intent_extraction_timeout_s
+        try:
+            summary = await asyncio.wait_for(
+                self._intent_extractor.extract(snapshot, threat),
+                timeout=timeout_s,
+            )
+        except TimeoutError:
+            self._record_intent_extraction_failed(
+                snapshot=snapshot,
+                error_type="TimeoutError",
+                error=f"intent extraction exceeded {timeout_s}s",
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - audit + swallow on background task
+            self._record_intent_extraction_failed(
+                snapshot=snapshot,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return
+        self._record_intent_extracted(summary)
 
     def wasting_stats(self) -> dict[str, int]:
         """Return a snapshot of per-process wasting counters.
@@ -557,6 +658,36 @@ class AIBridgeService:
             snippet=verdict.snippet,
             session_id=str(session.session_id),
             attacker_ip=session.source_ip,
+        )
+
+    def _record_intent_extracted(self, summary: IntentSummary) -> None:
+        """Audit a successful intent extraction."""
+        self._audit_log.record(
+            "bridge.intent_extracted",
+            session_id=str(summary.session_id),
+            actor_profile=summary.actor_profile,
+            confidence=summary.confidence,
+            intent=summary.intent,
+            why=summary.why,
+            matched_techniques=list(summary.matched_techniques),
+            summary=summary.summary,
+            extracted_at=summary.extracted_at.isoformat(),
+        )
+
+    def _record_intent_extraction_failed(
+        self,
+        *,
+        snapshot: SessionSnapshot,
+        error_type: str,
+        error: str,
+    ) -> None:
+        """Audit a failed intent-extraction attempt."""
+        self._audit_log.record(
+            "bridge.intent_extraction_failed",
+            session_id=str(snapshot.session_id),
+            attacker_ip=snapshot.source_ip,
+            error_type=error_type,
+            error=error,
         )
 
     def _accumulate_wasted_ms(

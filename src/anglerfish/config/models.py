@@ -407,6 +407,31 @@ class BridgeConfig(BaseModel):
             "analysis runs where the strategy should run unbounded)."
         ),
     )
+    intent_extraction_enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, the bridge spawns an end-of-session intent "
+            "extraction task on each DELETE /api/v1/session/{id} call "
+            "(Stage 7). The task is fire-and-forget with a wall-clock "
+            "timeout; the DELETE endpoint returns 204 immediately. "
+            "Set False to suppress the LLM call - useful in tests, "
+            "dev loops, or operator deployments that do not want "
+            "deep-tier inference fired on every session close."
+        ),
+    )
+    intent_extraction_timeout_s: float = Field(
+        default=60.0,
+        gt=0.0,
+        le=600.0,
+        description=(
+            "Wall-clock cap on a single intent-extraction task. Catches "
+            "a stuck deep-model call without blocking the lure's "
+            "session-close path (which already returned 204). Default "
+            "60s is conservative for typical session sizes; raise for "
+            "very long sessions, lower in operator deployments where "
+            "the deep model is consistently fast."
+        ),
+    )
 
     @field_validator("fake_hostname")
     @classmethod
