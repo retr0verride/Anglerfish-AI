@@ -64,7 +64,7 @@ class WarmPool:
         client: LLMClient,
         config: OllamaConfig,
         audit_log: AuditLog,
-        roles: tuple[LLMRole, ...] = (LLMRole.FAST, LLMRole.DEEP),
+        roles: tuple[LLMRole, ...] = (LLMRole.FAST, LLMRole.DEEP, LLMRole.EMBED),
         logger: logging.Logger | None = None,
         clock: _Clock | None = None,
     ) -> None:

@@ -50,8 +50,10 @@ class TokenBudget:
 
     fast_token_cap: int = 50_000
     deep_token_cap: int = 20_000
+    embed_token_cap: int = 10_000
     consumed_fast: int = field(default=0)
     consumed_deep: int = field(default=0)
+    consumed_embed: int = field(default=0)
 
     def __post_init__(self) -> None:
         if self.fast_token_cap < 0:
@@ -61,6 +63,10 @@ class TokenBudget:
         if self.deep_token_cap < 0:
             raise ValueError(
                 f"TokenBudget.deep_token_cap must be >= 0, got {self.deep_token_cap}",
+            )
+        if self.embed_token_cap < 0:
+            raise ValueError(
+                f"TokenBudget.embed_token_cap must be >= 0, got {self.embed_token_cap}",
             )
 
     def remaining(self, role: LLMRole) -> int:
@@ -84,7 +90,9 @@ class TokenBudget:
             self.consumed_fast += tokens
         elif role is LLMRole.DEEP:
             self.consumed_deep += tokens
-        else:  # pragma: no cover - covered when Stage 8 adds EMBED
+        elif role is LLMRole.EMBED:
+            self.consumed_embed += tokens
+        else:
             raise ValueError(f"unknown role: {role!r}")
 
     def as_dict(self) -> dict[str, dict[str, int]]:
@@ -100,6 +108,11 @@ class TokenBudget:
                 "consumed": self.consumed_deep,
                 "remaining": self.remaining(LLMRole.DEEP),
             },
+            "embed": {
+                "cap": self.embed_token_cap,
+                "consumed": self.consumed_embed,
+                "remaining": self.remaining(LLMRole.EMBED),
+            },
         }
 
     def _cap(self, role: LLMRole) -> int:
@@ -113,4 +126,6 @@ class TokenBudget:
             return self.fast_token_cap, self.consumed_fast
         if role is LLMRole.DEEP:
             return self.deep_token_cap, self.consumed_deep
+        if role is LLMRole.EMBED:
+            return self.embed_token_cap, self.consumed_embed
         raise ValueError(f"unknown role: {role!r}")

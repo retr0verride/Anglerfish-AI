@@ -94,12 +94,13 @@ def test_token_budget_consume_negative_rejected() -> None:
 
 
 def test_token_budget_as_dict_shape() -> None:
-    b = TokenBudget(fast_token_cap=100, deep_token_cap=50)
+    b = TokenBudget(fast_token_cap=100, deep_token_cap=50, embed_token_cap=200)
     b.consume(LLMRole.FAST, 30)
     snapshot = b.as_dict()
     assert snapshot == {
         "fast": {"cap": 100, "consumed": 30, "remaining": 70},
         "deep": {"cap": 50, "consumed": 0, "remaining": 50},
+        "embed": {"cap": 200, "consumed": 0, "remaining": 200},
     }
 
 

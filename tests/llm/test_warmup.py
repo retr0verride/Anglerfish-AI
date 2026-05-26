@@ -176,21 +176,22 @@ async def test_start_runs_initial_warmup_for_every_role(tmp_path: Path) -> None:
 
     client = _make_client(handler)
     audit = AuditLog(tmp_path / "audit.jsonl")
-    # Use the FAST + DEEP defaults.
+    # Stage 8 added EMBED to the WarmPool default roles, so three
+    # warm-up calls fire (one per role: fast/deep/embed).
     pool = WarmPool(client=client, config=client.config, audit_log=audit)
     try:
         await pool.start()
         # Give each task a chance to do its initial warmup. The sleep call
         # after the first warm_once parks them on the long interval.
         for _ in range(50):
-            if len(seen_models) >= 2:
+            if len(seen_models) >= 3:
                 break
             await asyncio.sleep(0)
         await pool.stop()
     finally:
         await client.aclose()
 
-    assert sorted(seen_models) == ["deep:14b", "fast:7b"]
+    assert sorted(seen_models) == ["deep:14b", "fast:7b", "nomic-embed-text"]
 
 
 async def test_start_then_stop_cancels_tasks(tmp_path: Path) -> None:

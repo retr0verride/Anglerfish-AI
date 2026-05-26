@@ -212,6 +212,7 @@ class AIBridgeService:
             budget = TokenBudget(
                 fast_token_cap=self._settings.ollama.session_fast_token_cap,
                 deep_token_cap=self._settings.ollama.session_deep_token_cap,
+                embed_token_cap=self._settings.ollama.session_embed_token_cap,
             )
             self._budgets[session_id] = budget
         return budget

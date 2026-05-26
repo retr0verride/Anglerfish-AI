@@ -127,6 +127,19 @@ class OllamaConfig(BaseModel):
             "phi-4: 14B params, strong structured output."
         ),
     )
+    embed_model: str = Field(
+        default="nomic-embed-text",
+        min_length=1,
+        max_length=128,
+        description=(
+            "Tag of the embedding model used by Stage 8 behavioural "
+            "clustering. The LLMClient calls /api/embeddings for "
+            "this role rather than /api/chat. Default "
+            "nomic-embed-text: 137M params, 768-dim vectors, "
+            "Apache-2.0. Embed models are not chat-capable; do not "
+            "configure a chat model here."
+        ),
+    )
     request_timeout_s: float = Field(default=45.0, gt=0.0, le=600.0)
     connect_timeout_s: float = Field(default=5.0, gt=0.0, le=60.0)
     max_response_tokens: int = Field(default=512, gt=0, le=4096)
@@ -168,6 +181,20 @@ class OllamaConfig(BaseModel):
             "deep tier. Same semantics as session_fast_token_cap; lower "
             "default because deep is reserved for Stage 7+ summarisation "
             "(less frequent, more expensive per call)."
+        ),
+    )
+    session_embed_token_cap: int = Field(
+        default=10_000,
+        ge=0,
+        le=10_000_000,
+        description=(
+            "Per-attacker-session ceiling on tokens billed against the "
+            "embed tier (Stage 8 behavioural clustering). Embed calls "
+            "do not report exact token counts so consumption is "
+            "estimated from input character length (~4 chars/token). "
+            "Default 10_000 covers a session of any practical size "
+            "because the EmbeddingGenerator truncates the input to "
+            "max_command_chars first."
         ),
     )
 

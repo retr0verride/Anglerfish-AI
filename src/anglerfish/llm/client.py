@@ -131,6 +131,8 @@ class LLMClient:
             return self._config.fast_model
         if role is LLMRole.DEEP:
             return self._config.deep_model
+        if role is LLMRole.EMBED:
+            return self._config.embed_model
         raise ValueError(f"unknown role: {role!r}")
 
     async def chat(
@@ -389,35 +391,130 @@ class LLMClient:
     async def warm(self, role: LLMRole) -> None:
         """Pin the model for ``role`` in Ollama's memory.
 
-        Issues a no-op ``POST /api/generate`` with ``prompt=""`` and
-        ``keep_alive=-1`` so Ollama keeps the model resident until the
-        next call. Used by :class:`anglerfish.llm.warmup.WarmPool` at
-        startup and on a periodic refresh cycle. Raises the same error
-        types as :meth:`chat`, but always with the ``/api/generate``
-        endpoint name in the message so log entries are unambiguous.
+        Chat roles (``FAST`` / ``DEEP``) call ``POST /api/generate``
+        with an empty prompt; the embed role calls
+        ``POST /api/embeddings`` with an empty input. Both use
+        ``keep_alive=-1`` so Ollama holds the model resident until
+        the next call. Used by :class:`anglerfish.llm.warmup.WarmPool`
+        at startup and on a periodic refresh cycle. Raises the same
+        error types as :meth:`chat`; the message names the endpoint
+        so log entries are unambiguous.
         """
-        payload: dict[str, Any] = {
-            "model": self.model_for(role),
-            "prompt": "",
-            "stream": False,
-            "keep_alive": -1,
-        }
+        if role is LLMRole.EMBED:
+            endpoint = "/api/embeddings"
+            payload: dict[str, Any] = {
+                "model": self.model_for(role),
+                "input": "",
+                "keep_alive": -1,
+            }
+        else:
+            endpoint = "/api/generate"
+            payload = {
+                "model": self.model_for(role),
+                "prompt": "",
+                "stream": False,
+                "keep_alive": -1,
+            }
         try:
-            response = await self._client.post("/api/generate", json=payload)
+            response = await self._client.post(endpoint, json=payload)
         except httpx.HTTPError as exc:
             raise OllamaUnavailableError(
-                f"Ollama warm request failed: {type(exc).__name__}: {exc}",
+                f"Ollama warm {endpoint} failed: {type(exc).__name__}: {exc}",
             ) from exc
 
         if 500 <= response.status_code < 600:
             raise OllamaUnavailableError(
-                f"Ollama warm returned server error {response.status_code}",
+                f"Ollama warm {endpoint} returned server error {response.status_code}",
             )
         if response.status_code >= 400:
             body_preview = response.text[:200]
             raise OllamaResponseError(
-                f"Ollama warm returned client error {response.status_code}: {body_preview!r}",
+                f"Ollama warm {endpoint} returned client error "
+                f"{response.status_code}: {body_preview!r}",
             )
+
+    async def embed(
+        self,
+        text: str,
+        *,
+        budget: TokenBudget | None = None,
+    ) -> tuple[float, ...]:
+        """Generate an embedding vector for ``text``.
+
+        Calls ``POST /api/embeddings`` against the configured embed
+        model. Returns the vector as an immutable tuple of floats
+        (callers can hash it; downstream storage packs it as a
+        float32 BLOB).
+
+        When ``budget`` is supplied, the embed-tier remaining cap is
+        checked *before* the request; exhausted role raises
+        :class:`BudgetExhaustedError` with no Ollama traffic. Ollama
+        does not report token usage on this endpoint, so consumption
+        is estimated as ``len(text) // 4`` (rough chars-per-token).
+
+        Raises:
+            BudgetExhaustedError: ``budget`` supplied and exhausted.
+            OllamaUnavailableError: network failure or 5xx response.
+            OllamaResponseError: 4xx response, malformed body, or a
+                vector that is not a list of numbers.
+        """
+        if budget is not None:
+            budget.check(LLMRole.EMBED)
+        payload: dict[str, Any] = {
+            "model": self.model_for(LLMRole.EMBED),
+            "input": text,
+        }
+        try:
+            response = await self._client.post("/api/embeddings", json=payload)
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailableError(
+                f"Ollama embed request failed: {type(exc).__name__}: {exc}",
+            ) from exc
+
+        if 500 <= response.status_code < 600:
+            raise OllamaUnavailableError(
+                f"Ollama embed returned server error {response.status_code}",
+            )
+        if response.status_code >= 400:
+            body_preview = response.text[:200]
+            raise OllamaResponseError(
+                f"Ollama embed returned client error {response.status_code}: {body_preview!r}",
+            )
+
+        try:
+            data: dict[str, Any] = response.json()
+        except ValueError as exc:
+            raise OllamaResponseError(
+                f"Ollama embed response was not valid JSON: {exc}",
+            ) from exc
+        if not isinstance(data, dict):
+            raise OllamaResponseError(
+                f"Ollama embed response is not a JSON object: {type(data).__name__}",
+            )
+        # Ollama returns the vector under either "embedding" (older
+        # single-input shape) or "embeddings" (newer batch shape, a
+        # list of one). Accept both; the bridge only ever sends one
+        # input per call.
+        raw = data.get("embedding")
+        if raw is None:
+            batch = data.get("embeddings")
+            if isinstance(batch, list) and batch and isinstance(batch[0], list):
+                raw = batch[0]
+        if not isinstance(raw, list) or not raw:
+            raise OllamaResponseError(
+                f"Ollama embed response missing 'embedding': keys={list(data)}",
+            )
+        try:
+            vector = tuple(float(v) for v in raw)
+        except (TypeError, ValueError) as exc:
+            raise OllamaResponseError(
+                f"Ollama embed response contained non-numeric vector element: {exc}",
+            ) from exc
+        if budget is not None:
+            # Embed responses do not include prompt_eval_count; estimate
+            # token consumption from input length.
+            budget.consume(LLMRole.EMBED, max(1, len(text) // 4))
+        return vector
 
     async def aclose(self) -> None:
         if self._owns_client:
