@@ -97,3 +97,7 @@ class SessionSnapshot(BaseModel):
     started_at: datetime
     last_activity_at: datetime
     turns: tuple[CommandTurn, ...]
+    # Stage 9: persona name assigned at session-open by PersonaSelector.
+    # NULL on pre-Stage-9 rows so the selector's recurrence query can
+    # filter WHERE persona IS NOT NULL and ignore historical data.
+    persona_name: str | None = None

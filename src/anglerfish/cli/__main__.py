@@ -130,6 +130,8 @@ def bridge_serve(
     from anglerfish.bridge.overrides_reader import BridgeOverridesReader
     from anglerfish.intel import EmbeddingGenerator, IntentExtractor
     from anglerfish.llm import WarmPool
+    from anglerfish.persona import PersonaLoadError, PersonaRegistry, PersonaSelector
+    from anglerfish.sessions.reader import SessionStoreReader
 
     try:
         settings = load_settings()
@@ -189,6 +191,42 @@ def bridge_serve(
     )
     intent_extractor = IntentExtractor(ai_client)
     embedding_generator = EmbeddingGenerator(ai_client)
+
+    # Stage 9: load the persona registry + open a read-only handle on
+    # the sessions DB for the selector. Both are wired only when
+    # settings.persona.enabled (the rollback switch); when disabled the
+    # bridge falls back to BridgeConfig.fake_* defaults silently.
+    persona_selector: PersonaSelector | None = None
+    persona_reader: SessionStoreReader | None = None
+    if settings.persona.enabled:
+        try:
+            registry = PersonaRegistry.load(
+                override_dir=settings.persona.config_dir,
+                default_name=settings.persona.default_persona,
+            )
+        except (PersonaLoadError, ValueError) as exc:
+            Console().print(
+                Panel(str(exc), title="[red]Persona registry load failed[/red]"),
+            )
+            raise typer.Exit(code=2) from exc
+        persona_reader = SessionStoreReader(settings.sessions)
+        # Open synchronously here so a missing DB file surfaces at
+        # startup rather than on the first session-open. The dashboard
+        # process must create the DB before the bridge starts.
+        try:
+            asyncio.run(persona_reader.open())
+        except FileNotFoundError as exc:
+            Console().print(
+                Panel(
+                    str(exc) + "\n\nStart the dashboard at least once before "
+                    "the bridge, or disable persona support with "
+                    "ANGLERFISH_PERSONA__ENABLED=false.",
+                    title="[red]Persona session-store reader failed to open[/red]",
+                ),
+            )
+            raise typer.Exit(code=2) from exc
+        persona_selector = PersonaSelector(registry, persona_reader)
+
     service = AIBridgeService(
         settings,
         client=ai_client,
@@ -196,6 +234,7 @@ def bridge_serve(
         overrides_reader=overrides_reader,
         intent_extractor=intent_extractor,
         embedding_generator=embedding_generator,
+        persona_selector=persona_selector,
     )
     warm_pool = WarmPool(
         client=ai_client,

@@ -160,15 +160,17 @@ class SessionStore:
             """
             INSERT INTO sessions (
                 session_id, source_ip, username, fake_hostname, fake_username,
-                fake_cwd, started_at, last_activity_at, ended_at, command_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                fake_cwd, started_at, last_activity_at, ended_at, command_count,
+                persona
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 source_ip        = excluded.source_ip,
                 username         = excluded.username,
                 fake_hostname    = excluded.fake_hostname,
                 fake_username    = excluded.fake_username,
                 fake_cwd         = excluded.fake_cwd,
-                last_activity_at = excluded.last_activity_at
+                last_activity_at = excluded.last_activity_at,
+                persona          = excluded.persona
             """,
             (
                 str(snapshot.session_id),
@@ -180,6 +182,7 @@ class SessionStore:
                 snapshot.started_at.isoformat(),
                 snapshot.last_activity_at.isoformat(),
                 len(snapshot.turns),
+                snapshot.persona_name,
             ),
         )
 
@@ -344,7 +347,7 @@ class SessionStore:
         cur = self._conn.execute(
             """
             SELECT source_ip, username, fake_hostname, fake_username, fake_cwd,
-                   started_at, last_activity_at
+                   started_at, last_activity_at, persona
             FROM sessions WHERE session_id = ?
             """,
             (str(session_id),),
@@ -363,6 +366,7 @@ class SessionStore:
             started_at=datetime.fromisoformat(row[5]),
             last_activity_at=datetime.fromisoformat(row[6]),
             turns=turns,
+            persona_name=row[7],
         )
 
     async def get_active_sessions(self, *, limit: int | None = None) -> list[SessionSnapshot]:
@@ -379,7 +383,7 @@ class SessionStore:
         cur = self._conn.execute(
             """
             SELECT session_id, source_ip, username, fake_hostname, fake_username,
-                   fake_cwd, started_at, last_activity_at
+                   fake_cwd, started_at, last_activity_at, persona
             FROM sessions WHERE ended_at IS NULL
             ORDER BY last_activity_at DESC
             LIMIT ?
@@ -426,7 +430,7 @@ class SessionStore:
         cur = self._conn.execute(
             """
             SELECT session_id, source_ip, username, fake_hostname, fake_username,
-                   fake_cwd, started_at, last_activity_at
+                   fake_cwd, started_at, last_activity_at, persona
             FROM sessions
             WHERE started_at >= ? AND started_at <= ?
             ORDER BY started_at DESC
@@ -790,6 +794,7 @@ class SessionStore:
             started_at=datetime.fromisoformat(row[6]),
             last_activity_at=datetime.fromisoformat(row[7]),
             turns=self._fetch_turns(session_id),
+            persona_name=row[8] if len(row) > 8 else None,
         )
 
 

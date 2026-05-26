@@ -28,11 +28,19 @@ from anglerfish.persona.schema import (
     PersonaLoadError,
     load_persona_yaml,
 )
+from anglerfish.persona.selector import (
+    PersonaSelector,
+    SelectionReason,
+    SelectionResult,
+)
 
 __all__ = [
     "DEFAULT_PERSONA_NAME",
     "Persona",
     "PersonaLoadError",
     "PersonaRegistry",
+    "PersonaSelector",
+    "SelectionReason",
+    "SelectionResult",
     "load_persona_yaml",
 ]

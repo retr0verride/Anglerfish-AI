@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
+from anglerfish.persona.schema import Persona
 
 __all__ = ["SessionContext"]
 
@@ -41,6 +42,7 @@ class SessionContext:
         "_fake_username",
         "_history",
         "_last_activity_at",
+        "_persona",
         "_session_id",
         "_source_ip",
         "_started_at",
@@ -57,6 +59,7 @@ class SessionContext:
         fake_username: str,
         fake_cwd: str,
         history_window: int,
+        persona: Persona | None = None,
         clock: _UtcNow | None = None,
     ) -> None:
         if history_window < 0:
@@ -72,6 +75,13 @@ class SessionContext:
         self._fake_hostname = fake_hostname
         self._fake_username = fake_username
         self._cwd = fake_cwd
+        # Stage 9: assigned at session-open by PersonaSelector. None
+        # when the bridge runs without persona support
+        # (PersonaConfig.enabled=False rollback path). The full
+        # Persona object is held in memory so the prompt builder can
+        # read prompt_block without a registry round-trip; the
+        # snapshot persists only the name string.
+        self._persona = persona
         self._history: deque[CommandTurn] = deque(maxlen=history_window)
         # Stage 6: monotonic per-session command counter, distinct from
         # the windowed history length (which caps at history_window).
@@ -120,6 +130,16 @@ class SessionContext:
         """Total commands recorded against this session (uncapped)."""
         return self._command_count
 
+    @property
+    def persona(self) -> Persona | None:
+        """Persona assigned at session-open by PersonaSelector, or None."""
+        return self._persona
+
+    @property
+    def persona_name(self) -> str | None:
+        """Name of the assigned persona, or None when persona is disabled."""
+        return self._persona.name if self._persona is not None else None
+
     def history(self) -> tuple[CommandTurn, ...]:
         """Return the recent command/response history (oldest first)."""
         return tuple(self._history)
@@ -164,4 +184,5 @@ class SessionContext:
             started_at=self._started_at,
             last_activity_at=self._last_activity_at,
             turns=tuple(self._history),
+            persona_name=self.persona_name,
         )

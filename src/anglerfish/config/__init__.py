@@ -16,6 +16,7 @@ from anglerfish.config.models import (
     GeoConfig,
     LogLevel,
     OllamaConfig,
+    PersonaConfig,
     RateLimitConfig,
     ThreatConfig,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "GeoConfig",
     "LogLevel",
     "OllamaConfig",
+    "PersonaConfig",
     "RateLimitConfig",
     "ThreatConfig",
     "load_settings",

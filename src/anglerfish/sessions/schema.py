@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 
-CURRENT_SCHEMA_VERSION: Final[int] = 3
+CURRENT_SCHEMA_VERSION: Final[int] = 4
 
 
 # Connection-level pragmas applied on every open. WAL gives us
@@ -139,9 +139,36 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_model        ON embeddings(model);
 """
 
 
-# Migration chain: index = target version. Adding v4 means adding
-# _MIGRATION_4 and appending here; run_migrations walks the chain.
-_MIGRATIONS: Final[tuple[str, ...]] = (_MIGRATION_1, _MIGRATION_2, _MIGRATION_3)
+# v3 -> v4: Stage 9 adaptive persona. The sessions table gains a
+# persona column (NULL for pre-Stage-9 rows; the selector's
+# recurrence query filters WHERE persona IS NOT NULL). The new
+# persona_pins table stores operator-driven per-source-IP pins
+# that the selector consults first. A composite index on
+# (source_ip, started_at DESC) keeps the selector's recurrence
+# lookup O(log n) regardless of total session count.
+_MIGRATION_4: Final[str] = """
+ALTER TABLE sessions ADD COLUMN persona TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_sessions_source_ip_started_at
+    ON sessions(source_ip, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS persona_pins (
+    source_ip   TEXT PRIMARY KEY,
+    persona     TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL
+);
+"""
+
+
+# Migration chain: index = target version. Adding v5 means adding
+# _MIGRATION_5 and appending here; run_migrations walks the chain.
+_MIGRATIONS: Final[tuple[str, ...]] = (
+    _MIGRATION_1,
+    _MIGRATION_2,
+    _MIGRATION_3,
+    _MIGRATION_4,
+)
 
 
 def current_schema_version(conn: sqlite3.Connection) -> int:

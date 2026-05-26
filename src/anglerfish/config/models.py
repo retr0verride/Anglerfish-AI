@@ -907,3 +907,55 @@ class SessionStoreConfig(BaseModel):
             "the export module; this knob bounds the active-list view."
         ),
     )
+
+
+class PersonaConfig(BaseModel):
+    """Adaptive persona settings (Stage 9). See
+    ``docs/design/STAGE_9_adaptive_persona.md``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, the bridge constructs a PersonaSelector at "
+            "startup and consults it on every session-open. When False, "
+            "SessionContext falls back to BridgeConfig.fake_* values "
+            "and the lure overlay dict is empty - the rollback switch."
+        ),
+    )
+    config_dir: Path = Field(
+        default=Path("/etc/anglerfish/personas"),
+        description=(
+            "Operator override directory for persona YAML files. "
+            "Bundled personas always load from the package; same-name "
+            "YAML in this directory replaces a bundled entry. Missing "
+            "directory is non-fatal (debug log + skip)."
+        ),
+    )
+    default_persona: str = Field(
+        default="forgotten-debian-box",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9-]+$",
+        description=(
+            "Persona returned by PersonaRegistry.default() when the "
+            "selector has no other signal. Must be a registered name; "
+            "PersonaRegistry construction raises ValueError otherwise."
+        ),
+    )
+    persona_bias_threshold: float = Field(
+        default=0.92,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Cosine-similarity threshold above which the dashboard "
+            "tailer emits a bridge.persona_rebound event after a "
+            "Stage 8 cluster_match (signals the selector to inherit "
+            "the neighbour's persona on the next session-open from "
+            "this source IP). Stricter than "
+            "cluster_similarity_threshold (0.85) because rebounding a "
+            "persona is a stronger commitment than firing an alert."
+        ),
+    )

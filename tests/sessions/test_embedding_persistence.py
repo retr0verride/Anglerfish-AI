@@ -71,8 +71,11 @@ def _embedding_for(
 # ---------------------------------------------------------------------------
 
 
-def test_current_schema_version_is_three() -> None:
-    assert CURRENT_SCHEMA_VERSION == 3
+def test_current_schema_version_at_or_above_three() -> None:
+    # Embeddings table arrived at v3; the assertion tracks the floor
+    # rather than the exact value so future stage bumps do not churn
+    # this test on every schema increment.
+    assert CURRENT_SCHEMA_VERSION >= 3
 
 
 def test_migration_creates_embeddings_table(tmp_path: Path) -> None:

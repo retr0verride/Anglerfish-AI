@@ -271,21 +271,45 @@ def create_bridge_app(
 
     @app.post("/api/v1/session", response_model=SessionStartResponse)
     async def start_session(req: SessionStartRequest) -> SessionStartResponse:
+        # Stage 9: ask the service for a persona before constructing
+        # the SessionContext. select_persona returns None when
+        # persona support is disabled (settings.persona.enabled=False)
+        # or no selector was wired; SessionContext then falls back to
+        # the BridgeConfig.fake_* defaults via the persona=None path.
+        selection = await service.select_persona(req.source_ip)
+        if selection is not None:
+            persona = selection.persona
+            fake_hostname = persona.hostname
+            fake_username = persona.username
+            fake_cwd = persona.cwd
+        else:
+            persona = None
+            fake_hostname = settings.bridge.fake_hostname
+            fake_username = settings.bridge.fake_username
+            fake_cwd = settings.bridge.fake_cwd
         ctx = SessionContext(
             uuid4(),
             source_ip=req.source_ip,
             username=req.username,
-            fake_hostname=settings.bridge.fake_hostname,
-            fake_username=settings.bridge.fake_username,
-            fake_cwd=settings.bridge.fake_cwd,
+            fake_hostname=fake_hostname,
+            fake_username=fake_username,
+            fake_cwd=fake_cwd,
             history_window=settings.bridge.history_window,
+            persona=persona,
         )
         async with lock:
             sessions[ctx.session_id] = ctx
+        if selection is not None:
+            service.record_persona_selected(
+                session_id=ctx.session_id,
+                source_ip=req.source_ip,
+                result=selection,
+            )
         logger.info(
-            "bridge.session_started id=%s source_ip=%s",
+            "bridge.session_started id=%s source_ip=%s persona=%s",
             ctx.session_id,
             req.source_ip,
+            ctx.persona_name,
         )
         return SessionStartResponse(
             session_id=ctx.session_id,

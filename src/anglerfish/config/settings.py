@@ -36,6 +36,7 @@ from anglerfish.config.models import (
     GeoConfig,
     LogLevel,
     OllamaConfig,
+    PersonaConfig,
     RateLimitConfig,
     SessionStoreConfig,
     ThreatConfig,
@@ -78,6 +79,7 @@ class AnglerfishSettings(BaseSettings):
     lure: LureConfig = Field(default_factory=LureConfig)
     sessions: SessionStoreConfig = Field(default_factory=SessionStoreConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
+    persona: PersonaConfig = Field(default_factory=PersonaConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")

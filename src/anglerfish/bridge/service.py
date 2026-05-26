@@ -68,6 +68,7 @@ from anglerfish.models.session import (
     SessionSnapshot,
 )
 from anglerfish.models.threat import ThreatAssessment
+from anglerfish.persona import PersonaSelector, SelectionResult
 
 __all__ = ["AIBridgeService"]
 
@@ -90,6 +91,7 @@ class AIBridgeService:
         overrides_reader: BridgeOverridesReader | None = None,
         intent_extractor: IntentExtractor | None = None,
         embedding_generator: EmbeddingGenerator | None = None,
+        persona_selector: PersonaSelector | None = None,
         sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
@@ -150,6 +152,13 @@ class AIBridgeService:
         # endpoint alongside the intent task.
         self._embedding_generator = embedding_generator
         self._embedding_tasks: set[asyncio.Task[None]] = set()
+        # Stage 9: optional persona selector. The HTTP server's
+        # POST /api/v1/session endpoint calls
+        # self.select_persona(source_ip) which returns either a
+        # SelectionResult (selector wired + enabled) or None
+        # (selector absent or settings.persona.enabled=False) so
+        # SessionContext falls back to BridgeConfig.fake_* values.
+        self._persona_selector = persona_selector
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -250,6 +259,38 @@ class AIBridgeService:
         per session is retained.
         """
         self._latest_threat[session_id] = threat
+
+    async def select_persona(self, source_ip: str) -> SelectionResult | None:
+        """Pick a persona for ``source_ip`` via the configured selector.
+
+        Returns ``None`` when no selector is wired or persona support
+        is disabled via ``settings.persona.enabled=False``; callers
+        fall back to the BridgeConfig.fake_* defaults in that case
+        and SessionContext is constructed without a Persona object.
+
+        On the happy path, returns a :class:`SelectionResult` so the
+        caller can audit the selection_reason and pass the persona
+        through to SessionContext.
+        """
+        if not self._settings.persona.enabled or self._persona_selector is None:
+            return None
+        return await self._persona_selector.select(source_ip)
+
+    def record_persona_selected(
+        self,
+        *,
+        session_id: UUID,
+        source_ip: str,
+        result: SelectionResult,
+    ) -> None:
+        """Audit a persona pick. Called by the HTTP server post-select."""
+        self._audit_log.record(
+            "bridge.persona_selected",
+            session_id=str(session_id),
+            source_ip=source_ip,
+            persona=result.persona.name,
+            selection_reason=result.reason,
+        )
 
     def schedule_intent_extraction(
         self,
@@ -464,6 +505,7 @@ class AIBridgeService:
                     config=self._settings.bridge,
                     cwd=session.cwd,
                     history=session.history(),
+                    persona=session.persona,
                 )
                 result = await self._client.chat(messages, budget=budget)
                 # Defense layer (Stage 1): cap FIRST, then scan. Capping
@@ -624,6 +666,7 @@ class AIBridgeService:
                     config=self._settings.bridge,
                     cwd=session.cwd,
                     history=session.history(),
+                    persona=session.persona,
                 )
                 try:
                     async for chunk in self._client.stream_chat(messages, budget=budget):
