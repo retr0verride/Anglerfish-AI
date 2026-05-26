@@ -207,10 +207,7 @@ def _summarise_cluster_match(event: dict[str, Any]) -> str:
     top = _top_match_similarity(matches)
     threshold = event.get("threshold")
     if top is not None and isinstance(threshold, (int, float)):
-        return (
-            f"{count} similar session(s); top={top:.3f} "
-            f"(threshold={float(threshold):.2f})"
-        )
+        return f"{count} similar session(s); top={top:.3f} (threshold={float(threshold):.2f})"
     return f"{count} similar session(s)"
 
 

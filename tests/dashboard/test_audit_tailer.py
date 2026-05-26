@@ -768,9 +768,7 @@ def _embedding_event(
         vector=vector,
         dimension=dimension if dimension is not None else len(vector),
         model=model,
-        generated_at=(
-            generated_at or datetime(2026, 5, 26, 12, 30, tzinfo=UTC)
-        ).isoformat(),
+        generated_at=(generated_at or datetime(2026, 5, 26, 12, 30, tzinfo=UTC)).isoformat(),
     )
 
 
@@ -869,9 +867,13 @@ async def test_embedding_generated_skips_cluster_match_below_threshold(
     far_b = [0.0] * 63 + [1.0]
     _append(
         tailer.audit_path,
-        _audit_line("lure.session_opened", session_id=str(sid_first), source_ip="1.1.1.1", username="root"),
+        _audit_line(
+            "lure.session_opened", session_id=str(sid_first), source_ip="1.1.1.1", username="root"
+        ),
         _embedding_event(sid_first, vector=far_a),
-        _audit_line("lure.session_opened", session_id=str(sid_second), source_ip="1.1.1.2", username="root"),
+        _audit_line(
+            "lure.session_opened", session_id=str(sid_second), source_ip="1.1.1.2", username="root"
+        ),
         _embedding_event(sid_second, vector=far_b),
     )
     await tailer._poll_once()
@@ -893,7 +895,9 @@ async def test_embedding_generated_without_audit_log_skips_cluster_emission(
     vector = [0.01 * i for i in range(64)]
     _append(
         tailer.audit_path,
-        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        _audit_line(
+            "lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"
+        ),
         _embedding_event(sid, vector=vector),
     )
     await tailer._poll_once()
@@ -913,7 +917,9 @@ async def test_embedding_generated_with_malformed_vector_is_skipped(
     sid = uuid4()
     _append(
         tailer.audit_path,
-        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        _audit_line(
+            "lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"
+        ),
         # vector is missing.
         _audit_line(
             "bridge.embedding_generated",
@@ -940,7 +946,9 @@ async def test_embedding_generated_with_bad_generated_at_is_skipped(
     sid = uuid4()
     _append(
         tailer.audit_path,
-        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        _audit_line(
+            "lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"
+        ),
         _audit_line(
             "bridge.embedding_generated",
             session_id=str(sid),
@@ -984,7 +992,9 @@ async def test_dashboard_state_round_trips_embedding(
     tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
     _append(
         tailer.audit_path,
-        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        _audit_line(
+            "lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"
+        ),
     )
     await tailer._poll_once()
 

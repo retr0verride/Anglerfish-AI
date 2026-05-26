@@ -366,5 +366,3 @@ def test_audit_payload_round_trips_to_session_embedding() -> None:
     assert rebuilt.generated_at == original.generated_at
     for orig, back in zip(original.vector, rebuilt.vector, strict=True):
         assert abs(orig - back) < 1e-9
-
-
