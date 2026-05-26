@@ -57,6 +57,8 @@ class LureSessionContext:
         hostname: str,
         cwd: str,
         history_window: int = 200,
+        persona_name: str | None = None,
+        persona_overlay: dict[str, str] | None = None,
     ) -> None:
         if history_window < 1:
             raise ValueError(f"history_window must be >= 1, got {history_window}")
@@ -67,6 +69,14 @@ class LureSessionContext:
         self._cwd = normalise_path(cwd)
         self._history: deque[LureCommandRecord] = deque(maxlen=history_window)
         self._opened_at = datetime.now(tz=UTC)
+        # Stage 9: per-persona fakefs overlay. fakefs.read consults
+        # this dict before its static base table; fakefs.system_prompt
+        # _summary mentions the overlaid paths so the bridge's
+        # fs_context reflects what the lure actually serves to this
+        # attacker. Empty dict (the default) preserves pre-Stage-9
+        # behaviour.
+        self._persona_name = persona_name
+        self._persona_overlay = dict(persona_overlay) if persona_overlay else {}
 
     @property
     def session_id(self) -> UUID:
@@ -91,6 +101,16 @@ class LureSessionContext:
     @property
     def opened_at(self) -> datetime:
         return self._opened_at
+
+    @property
+    def persona_name(self) -> str | None:
+        """Name of the persona this session is serving, or None."""
+        return self._persona_name
+
+    @property
+    def persona_overlay(self) -> dict[str, str]:
+        """Per-persona fakefs overlay (path -> content); empty when disabled."""
+        return self._persona_overlay
 
     def update_cwd(self, new_cwd: str) -> None:
         """Normalise ``new_cwd`` and store it as the session's current directory."""

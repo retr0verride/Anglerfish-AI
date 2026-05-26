@@ -29,12 +29,36 @@ __all__ = [
     "BridgeClient",
     "BridgeStreamChunk",
     "BridgeUnavailableError",
+    "OpenSessionResult",
 ]
 
 
 PROTOCOL_VERSION_HEADER = "X-Anglerfish-Protocol"
 _LURE_PROTOCOL_VERSION = "3"
 _DEFAULT_USERNAME_MAX_LEN = 64
+
+
+@dataclass(frozen=True)
+class OpenSessionResult:
+    """Outcome of :meth:`BridgeClient.open_session`.
+
+    Carries everything the lure needs to construct a
+    :class:`LureSessionContext` without a second round-trip.
+    ``fake_*`` come from the bridge's chosen persona (Stage 9) or
+    its ``BridgeConfig.fake_*`` defaults when persona support is
+    disabled. ``persona_name`` is the registry key the bridge
+    picked (or ``None`` when persona is disabled);
+    ``persona_overlay`` is the persona's ``fakefs_overlay`` dict
+    (empty when persona is disabled or the persona has no
+    overlay paths).
+    """
+
+    session_id: UUID
+    fake_hostname: str
+    fake_username: str
+    fake_cwd: str
+    persona_name: str | None
+    persona_overlay: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -111,13 +135,22 @@ class BridgeClient:
             # set them up identically.
             self._http.headers.update(headers)
 
-    async def open_session(self, *, source_ip: str, username: str) -> UUID:
-        """Register a new session with the bridge. Returns the bridge's UUID.
+    async def open_session(
+        self,
+        *,
+        source_ip: str,
+        username: str,
+    ) -> OpenSessionResult:
+        """Register a new session with the bridge.
 
-        The bridge enforces ``username`` length <= 64 via Pydantic. The
-        lure trims here so attackers sending oversize usernames see the
-        session open (and get captured by CredentialStore) rather than
-        the bridge rejecting with 422.
+        Returns an :class:`OpenSessionResult` carrying the bridge's
+        UUID, the persona-resolved fake_* fields, and (Stage 9) the
+        persona name + fakefs_overlay so the lure can mirror them
+        on its side. The bridge enforces ``username`` length <= 64
+        via Pydantic; the lure trims here so attackers sending
+        oversize usernames see the session open (and get captured
+        by CredentialStore) rather than the bridge rejecting with
+        422.
         """
         if not source_ip:
             raise ValueError("source_ip cannot be empty")
@@ -136,11 +169,34 @@ class BridgeClient:
                 f"bridge open_session response missing session_id: {body!r}",
             )
         try:
-            return UUID(sid_raw)
+            session_id = UUID(sid_raw)
         except ValueError as exc:
             raise BridgeUnavailableError(
                 f"bridge open_session returned non-UUID session_id: {sid_raw!r}",
             ) from exc
+        fake_hostname = body.get("fake_hostname")
+        fake_username = body.get("fake_username")
+        fake_cwd = body.get("fake_cwd")
+        if (
+            not isinstance(fake_hostname, str)
+            or not isinstance(fake_username, str)
+            or not isinstance(fake_cwd, str)
+        ):
+            raise BridgeUnavailableError(
+                f"bridge open_session missing fake_* fields: {body!r}",
+            )
+        persona_name_raw = body.get("persona_name")
+        persona_name = persona_name_raw if isinstance(persona_name_raw, str) else None
+        overlay_raw = body.get("persona_overlay", {})
+        persona_overlay = _coerce_overlay(overlay_raw)
+        return OpenSessionResult(
+            session_id=session_id,
+            fake_hostname=fake_hostname,
+            fake_username=fake_username,
+            fake_cwd=fake_cwd,
+            persona_name=persona_name,
+            persona_overlay=persona_overlay,
+        )
 
     async def submit_command(
         self,
@@ -320,6 +376,20 @@ class BridgeClient:
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
+
+
+def _coerce_overlay(raw: Any) -> dict[str, str]:
+    """Coerce the persona_overlay field from open_session into a typed dict.
+
+    Returns an empty dict for any non-mapping payload or for
+    entries whose key/value is not a string. Tolerant by design:
+    the lure never crashes on a bridge-side schema regression;
+    a missing overlay just means the static fakefs base applies
+    everywhere (the pre-Stage-9 behaviour).
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 def _parse_stream_chunk(line: str, path: str) -> BridgeStreamChunk:

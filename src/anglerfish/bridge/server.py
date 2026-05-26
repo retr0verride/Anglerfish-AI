@@ -160,6 +160,15 @@ class SessionStartResponse(BaseModel):
     fake_hostname: str
     fake_username: str
     fake_cwd: str
+    # Stage 9: present when the bridge selected a persona for this
+    # session. The lure mirrors the persona on its side so its native
+    # fakefs handler consults the overlay before the static base, and
+    # so subsequent submit_command calls send the right fs_context.
+    # Absent (None / empty) when settings.persona.enabled=False or
+    # no selector is wired - the lure falls back to its
+    # container.config.hostname pre-Stage-9 behaviour.
+    persona_name: str | None = None
+    persona_overlay: dict[str, str] = Field(default_factory=dict)
 
 
 class CommandRequest(BaseModel):
@@ -316,6 +325,8 @@ def create_bridge_app(
             fake_hostname=ctx.fake_hostname,
             fake_username=ctx.fake_username,
             fake_cwd=ctx.cwd,
+            persona_name=persona.name if persona is not None else None,
+            persona_overlay=dict(persona.fakefs_overlay) if persona is not None else {},
         )
 
     @app.post("/api/v1/session/{session_id}/command", response_model=None)

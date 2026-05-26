@@ -619,7 +619,18 @@ def read(path: str, session: LureSessionContext) -> ReadResult:
       error in the shell.
     - ``not_in_fakefs``: path is unknown; the caller should route to
       the bridge.
+
+    Stage 9: the persona overlay on ``session.persona_overlay`` is
+    consulted FIRST. An overlaid path always returns ``content``
+    with the overlay value, even if the path would otherwise hit
+    a permission-denied entry or a static base entry. That lets a
+    persona override ``/etc/hostname``, ``/proc/version``, or any
+    other static file without churning the base table.
     """
+    overlay = session.persona_overlay
+    if path in overlay:
+        return ReadResult(status="content", content=overlay[path])
+
     if path in _PERMISSION_DENIED:
         return ReadResult(status="permission_denied")
 
@@ -682,8 +693,58 @@ def listdir(path: str, session: LureSessionContext) -> ListResult:
     return ListResult(status="not_in_fakefs")
 
 
-def system_prompt_summary() -> str:
-    """Return a compact summary of the static fs for the bridge prompt.
+_STATIC_SUMMARY = (
+    "The following paths on this system have deterministic content "
+    "that you must NOT contradict. If asked to cat or ls one of "
+    "these, the shell handles it directly; you will not be invoked. "
+    "Treat them as ground truth when inventing content for OTHER "
+    "paths.\n"
+    "\n"
+    "Files (cat returns the stored content):\n"
+    "- /etc/passwd: users root, daemon, bin, sys, mail, www-data, "
+    "nobody, sshd, plus the session user with uid 1000\n"
+    "- /etc/group: matching groups for the above\n"
+    "- /etc/hostname, /etc/issue, /etc/os-release, /etc/debian_version, "
+    "/etc/machine-id: standard Debian 12 (bookworm)\n"
+    "- /etc/hosts, /etc/resolv.conf, /etc/nsswitch.conf, /etc/fstab: "
+    "standard Debian config\n"
+    "- /etc/crontab: standard system entries (run-parts hourly, daily, "
+    "weekly, monthly)\n"
+    "- /etc/profile, /etc/bash.bashrc, /etc/motd: Debian defaults\n"
+    "- /etc/ssh/sshd_config, /etc/ssh/ssh_config: hardened Debian sshd\n"
+    "- /etc/apt/sources.list: bookworm main+contrib+non-free-firmware "
+    "+ security\n"
+    "- /etc/network/interfaces: lo only (systemd-networkd elsewhere)\n"
+    "- /proc/version: Debian 6.1.0-18-amd64 kernel\n"
+    "- /proc/cpuinfo: 4x Intel Xeon E5-2680 v4 @ 2.40GHz\n"
+    "- /proc/meminfo: 8 GiB total, ~6 GiB free\n"
+    "- /proc/mounts: vda1 / ext4, plus proc/sys/run/tmp\n"
+    "- /proc/loadavg, /proc/uptime: quiet, ~14 days uptime\n"
+    "- /home/<user>/.bashrc, /.profile, /.ssh/known_hosts, "
+    "/.ssh/authorized_keys: standard\n"
+    "- /home/<user>/.bash_history: empty file\n"
+    "- /root/.bashrc, /root/.bash_history: standard root shell\n"
+    "- /var/log/auth.log, /var/log/syslog, /var/log/dpkg.log: "
+    "recent plausible lines\n"
+    "\n"
+    "Permission-denied paths (any cat returns "
+    "'Permission denied'):\n"
+    "- /etc/shadow, /etc/sudoers, /var/log/btmp\n"
+    "\n"
+    "Top-level listings (/, /etc, /var, /proc, /home, /root, "
+    "/var/log) return standard Debian content."
+)
+
+
+# Hard cap on the rendered summary so we never blow CommandRequest
+# .fs_context's 4096-char Pydantic bound. The static block above is
+# ~2 KB; the overlay block has its own internal cap.
+_FS_CONTEXT_CAP = 4096
+_OVERLAY_BLOCK_RESERVE = 1024
+
+
+def system_prompt_summary(session: LureSessionContext | None = None) -> str:
+    """Return a compact summary of the static fs + persona overlay.
 
     The lure passes this to the bridge in every ``submit_command``
     call (via the protocol v2 ``fs_context`` field). The bridge's
@@ -691,47 +752,47 @@ def system_prompt_summary() -> str:
     which paths are ground truth and which paths it is free to
     invent.
 
-    Kept below 4096 chars to fit ``CommandRequest.fs_context``'s
-    pydantic cap.
+    When ``session`` carries a non-empty
+    :attr:`LureSessionContext.persona_overlay`, the rendered text
+    appends a per-persona override block listing the overlaid
+    paths (without their content, which the lure serves directly)
+    so the LLM does not invent contradicting content for the same
+    paths. Kept below 4096 chars to fit
+    ``CommandRequest.fs_context``'s pydantic cap; the overlay
+    block is truncated path-by-path if it would overflow.
     """
-    return (
-        "The following paths on this system have deterministic content "
-        "that you must NOT contradict. If asked to cat or ls one of "
-        "these, the shell handles it directly; you will not be invoked. "
-        "Treat them as ground truth when inventing content for OTHER "
-        "paths.\n"
-        "\n"
-        "Files (cat returns the stored content):\n"
-        "- /etc/passwd: users root, daemon, bin, sys, mail, www-data, "
-        "nobody, sshd, plus the session user with uid 1000\n"
-        "- /etc/group: matching groups for the above\n"
-        "- /etc/hostname, /etc/issue, /etc/os-release, /etc/debian_version, "
-        "/etc/machine-id: standard Debian 12 (bookworm)\n"
-        "- /etc/hosts, /etc/resolv.conf, /etc/nsswitch.conf, /etc/fstab: "
-        "standard Debian config\n"
-        "- /etc/crontab: standard system entries (run-parts hourly, daily, "
-        "weekly, monthly)\n"
-        "- /etc/profile, /etc/bash.bashrc, /etc/motd: Debian defaults\n"
-        "- /etc/ssh/sshd_config, /etc/ssh/ssh_config: hardened Debian sshd\n"
-        "- /etc/apt/sources.list: bookworm main+contrib+non-free-firmware "
-        "+ security\n"
-        "- /etc/network/interfaces: lo only (systemd-networkd elsewhere)\n"
-        "- /proc/version: Debian 6.1.0-18-amd64 kernel\n"
-        "- /proc/cpuinfo: 4x Intel Xeon E5-2680 v4 @ 2.40GHz\n"
-        "- /proc/meminfo: 8 GiB total, ~6 GiB free\n"
-        "- /proc/mounts: vda1 / ext4, plus proc/sys/run/tmp\n"
-        "- /proc/loadavg, /proc/uptime: quiet, ~14 days uptime\n"
-        "- /home/<user>/.bashrc, /.profile, /.ssh/known_hosts, "
-        "/.ssh/authorized_keys: standard\n"
-        "- /home/<user>/.bash_history: empty file\n"
-        "- /root/.bashrc, /root/.bash_history: standard root shell\n"
-        "- /var/log/auth.log, /var/log/syslog, /var/log/dpkg.log: "
-        "recent plausible lines\n"
-        "\n"
-        "Permission-denied paths (any cat returns "
-        "'Permission denied'):\n"
-        "- /etc/shadow, /etc/sudoers, /var/log/btmp\n"
-        "\n"
-        "Top-level listings (/, /etc, /var, /proc, /home, /root, "
-        "/var/log) return standard Debian content."
+    if session is None or not session.persona_overlay:
+        return _STATIC_SUMMARY
+    overlay_block = _render_overlay_block(
+        session.persona_overlay,
+        cap=_OVERLAY_BLOCK_RESERVE,
     )
+    if not overlay_block:
+        return _STATIC_SUMMARY
+    rendered = _STATIC_SUMMARY + "\n\n" + overlay_block
+    return rendered[:_FS_CONTEXT_CAP]
+
+
+def _render_overlay_block(overlay: dict[str, str], *, cap: int) -> str:
+    """Render the per-persona override block, truncated to ``cap`` chars.
+
+    Sorts the overlay keys so the rendering is deterministic across
+    runs (operators grepping the bridge prompt log see stable output).
+    Drops trailing entries if adding one would cross the cap; the
+    cap is the per-block budget, not the per-line budget.
+    """
+    header = (
+        "Persona overlay (the shell ALSO serves these paths directly; "
+        "their content is operator-fixed, NOT yours to invent):\n"
+    )
+    lines: list[str] = []
+    running = len(header)
+    for path in sorted(overlay):
+        line = f"- {path}\n"
+        if running + len(line) > cap:
+            break
+        lines.append(line)
+        running += len(line)
+    if not lines:
+        return ""
+    return header + "".join(lines).rstrip("\n")

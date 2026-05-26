@@ -269,3 +269,117 @@ def test_system_prompt_summary_is_deterministic() -> None:
 )
 def test_required_paths_all_present(path: str) -> None:
     assert read(path, _session()).status == "content"
+
+
+# ---------------------------------------------------------------------------
+# Stage 9: persona overlay
+# ---------------------------------------------------------------------------
+
+
+def _persona_session(
+    overlay: dict[str, str] | None = None,
+    *,
+    persona_name: str | None = "gpu-rig",
+) -> LureSessionContext:
+    return LureSessionContext(
+        uuid4(),
+        source_ip="203.0.113.7",
+        username="ml",
+        hostname="gpu-rig-04",
+        cwd="/home/ml",
+        persona_name=persona_name,
+        persona_overlay=overlay or {},
+    )
+
+
+def test_overlay_overrides_static_etc_hostname() -> None:
+    session = _persona_session({"/etc/hostname": "gpu-rig-04\n"})
+    result = read("/etc/hostname", session)
+    assert result.status == "content"
+    assert result.content == "gpu-rig-04\n"
+
+
+def test_overlay_overrides_permission_denied_path() -> None:
+    """An operator-defined overlay can serve a path that would normally 403."""
+    session = _persona_session({"/etc/shadow": "operator-defined\n"})
+    result = read("/etc/shadow", session)
+    assert result.status == "content"
+    assert result.content == "operator-defined\n"
+
+
+def test_overlay_adds_path_not_in_static_base() -> None:
+    """A persona can introduce a path that the static fakefs does not know."""
+    session = _persona_session(
+        {"/opt/gpu-rig/config.toml": '[gpu]\nmodel = "rtx-4090"\n'},
+    )
+    result = read("/opt/gpu-rig/config.toml", session)
+    assert result.status == "content"
+    assert "rtx-4090" in result.content
+
+
+def test_no_overlay_means_static_base_serves_etc_hostname() -> None:
+    """A session with empty overlay still hits the static /etc/hostname."""
+    session = _persona_session({})
+    result = read("/etc/hostname", session)
+    assert result.status == "content"
+    # The static base renders from session.hostname.
+    assert "gpu-rig-04" in result.content
+
+
+def test_unrelated_path_falls_through_to_static_base() -> None:
+    """Overlay only affects overlaid paths; everything else hits static."""
+    session = _persona_session({"/etc/hostname": "x"})
+    result = read("/etc/passwd", session)
+    assert result.status == "content"
+    assert "root:x:0:0:" in result.content
+
+
+# ---------------------------------------------------------------------------
+# system_prompt_summary: session-aware overlay block
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_summary_without_session_returns_static() -> None:
+    text = system_prompt_summary()
+    assert "Persona overlay" not in text
+
+
+def test_system_prompt_summary_with_empty_overlay_returns_static() -> None:
+    text = system_prompt_summary(_persona_session({}))
+    assert "Persona overlay" not in text
+
+
+def test_system_prompt_summary_appends_overlay_block() -> None:
+    session = _persona_session(
+        {
+            "/etc/hostname": "gpu-rig-04\n",
+            "/proc/version": "Linux ...\n",
+        },
+    )
+    text = system_prompt_summary(session)
+    assert "Persona overlay" in text
+    assert "/etc/hostname" in text
+    assert "/proc/version" in text
+
+
+def test_system_prompt_summary_stays_under_4096_chars() -> None:
+    """A persona with 64 paths and long values still fits the fs_context cap."""
+    overlay = {f"/path/{i:03d}": "x" * 256 for i in range(64)}
+    text = system_prompt_summary(_persona_session(overlay))
+    assert len(text) <= 4096
+
+
+def test_system_prompt_summary_sorts_overlay_keys() -> None:
+    """Deterministic ordering so grepping the bridge prompt log is stable."""
+    session = _persona_session(
+        {
+            "/zzz-last": "z",
+            "/aaa-first": "a",
+            "/mmm-middle": "m",
+        },
+    )
+    text = system_prompt_summary(session)
+    a_pos = text.index("/aaa-first")
+    m_pos = text.index("/mmm-middle")
+    z_pos = text.index("/zzz-last")
+    assert a_pos < m_pos < z_pos

@@ -13,7 +13,31 @@ from anglerfish.lure.bridge_client import (
     PROTOCOL_VERSION_HEADER,
     BridgeClient,
     BridgeUnavailableError,
+    OpenSessionResult,
 )
+
+
+def _session_body(
+    session_id: str,
+    *,
+    fake_hostname: str = "srv-prod-01",
+    fake_username: str = "root",
+    fake_cwd: str = "/root",
+    persona_name: str | None = None,
+    persona_overlay: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Build the JSON body the bridge POST /api/v1/session returns."""
+    body: dict[str, object] = {
+        "session_id": session_id,
+        "fake_hostname": fake_hostname,
+        "fake_username": fake_username,
+        "fake_cwd": fake_cwd,
+    }
+    if persona_name is not None:
+        body["persona_name"] = persona_name
+    body["persona_overlay"] = persona_overlay or {}
+    return body
+
 
 _TEST_SECRET = "test-secret"
 
@@ -42,21 +66,86 @@ def _client_with(
 # ---------------------------------------------------------------------------
 
 
-async def test_open_session_returns_uuid() -> None:
+async def test_open_session_returns_result_with_fake_fields() -> None:
     expected = uuid4()
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/session"
         assert request.headers[PROTOCOL_VERSION_HEADER] == "3"
         assert request.headers["Authorization"] == "Bearer test-secret"
-        return httpx.Response(200, json={"session_id": str(expected)})
+        return httpx.Response(200, json=_session_body(str(expected)))
 
     client = _client_with(handler)
     try:
-        sid = await client.open_session(source_ip="203.0.113.7", username="root")
+        result = await client.open_session(source_ip="203.0.113.7", username="root")
     finally:
         await client.aclose()
-    assert sid == expected
+    assert isinstance(result, OpenSessionResult)
+    assert result.session_id == expected
+    assert result.fake_hostname == "srv-prod-01"
+    assert result.persona_name is None
+    assert result.persona_overlay == {}
+
+
+async def test_open_session_propagates_persona_fields() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_session_body(
+                str(uuid4()),
+                fake_hostname="gpu-rig-04",
+                fake_cwd="/home/ml",
+                persona_name="gpu-rig",
+                persona_overlay={"/etc/hostname": "gpu-rig-04\n"},
+            ),
+        )
+
+    client = _client_with(handler)
+    try:
+        result = await client.open_session(source_ip="203.0.113.7", username="root")
+    finally:
+        await client.aclose()
+    assert result.persona_name == "gpu-rig"
+    assert result.fake_hostname == "gpu-rig-04"
+    assert result.persona_overlay == {"/etc/hostname": "gpu-rig-04\n"}
+
+
+async def test_open_session_coerces_malformed_persona_overlay() -> None:
+    """Non-string overlay entries are dropped, not propagated."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                **_session_body(str(uuid4()), persona_name="x"),
+                "persona_overlay": {
+                    "/good": "value",
+                    "/bad-value": 42,
+                    "non-str-key": True,
+                },
+            },
+        )
+
+    client = _client_with(handler)
+    try:
+        result = await client.open_session(source_ip="1.1.1.1", username="root")
+    finally:
+        await client.aclose()
+    assert result.persona_overlay == {"/good": "value"}
+
+
+async def test_open_session_missing_fake_fields_raises() -> None:
+    """Pre-Stage-9 bridge that does not include fake_* is a hard failure."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"session_id": str(uuid4())})
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(BridgeUnavailableError, match="fake_"):
+            await client.open_session(source_ip="1.1.1.1", username="root")
+    finally:
+        await client.aclose()
 
 
 async def test_open_session_trims_oversize_username() -> None:
@@ -66,7 +155,7 @@ async def test_open_session_trims_oversize_username() -> None:
         import json
 
         captured.append(json.loads(request.read()))
-        return httpx.Response(200, json={"session_id": str(uuid4())})
+        return httpx.Response(200, json=_session_body(str(uuid4())))
 
     client = _client_with(handler)
     try:
@@ -83,7 +172,7 @@ async def test_open_session_defaults_empty_username_to_root() -> None:
         import json
 
         captured.append(json.loads(request.read()))
-        return httpx.Response(200, json={"session_id": str(uuid4())})
+        return httpx.Response(200, json=_session_body(str(uuid4())))
 
     client = _client_with(handler)
     try:
@@ -294,12 +383,13 @@ async def test_protocol_header_present_on_every_request() -> None:
         seen_versions.append(request.headers.get(PROTOCOL_VERSION_HEADER))
         return httpx.Response(
             200,
-            json={"session_id": str(uuid4()), "text": "x"},
+            json={**_session_body(str(uuid4())), "text": "x"},
         )
 
     client = _client_with(handler)
     try:
-        sid = await client.open_session(source_ip="1.1.1.1", username="root")
+        result = await client.open_session(source_ip="1.1.1.1", username="root")
+        sid = result.session_id
         await client.submit_command(sid, "ls")
         await client.close_session(sid)
     finally:
@@ -312,7 +402,7 @@ async def test_authorization_header_set_when_secret_provided() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers.get("Authorization", ""))
-        return httpx.Response(200, json={"session_id": str(uuid4())})
+        return httpx.Response(200, json=_session_body(str(uuid4())))
 
     client = _client_with(handler, secret="hunter2")
     try:
@@ -327,7 +417,7 @@ async def test_authorization_header_omitted_when_no_secret() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers.get("Authorization"))
-        return httpx.Response(200, json={"session_id": str(uuid4())})
+        return httpx.Response(200, json=_session_body(str(uuid4())))
 
     client = _client_with(handler, secret=None)
     try:
@@ -384,18 +474,20 @@ def test_protocol_version_constant_is_three() -> None:
 
 
 def test_uuid_returned_is_uuid_type() -> None:
-    # Type check via mock: open_session must return UUID, not str.
+    # Type check via mock: open_session must return an OpenSessionResult
+    # whose session_id is a UUID, not str.
     expected = uuid4()
 
     def handler(_r: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"session_id": str(expected)})
+        return httpx.Response(200, json=_session_body(str(expected)))
 
     import anyio
 
     async def _run() -> UUID:
         client = _client_with(handler)
         try:
-            return await client.open_session(source_ip="1.1.1.1", username="root")
+            result = await client.open_session(source_ip="1.1.1.1", username="root")
+            return result.session_id
         finally:
             await client.aclose()
 

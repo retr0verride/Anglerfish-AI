@@ -476,11 +476,20 @@ async def _process_handler(
     # dispatch + scripted fallback (the design wants captures
     # whether or not the LLM side is up).
     bridge_uuid: UUID | None = None
+    bridge_hostname: str | None = None
+    bridge_cwd: str | None = None
+    persona_name: str | None = None
+    persona_overlay: dict[str, str] = {}
     try:
-        bridge_uuid = await container.bridge_client.open_session(
+        result = await container.bridge_client.open_session(
             source_ip=state.source_ip,
             username=state.username,
         )
+        bridge_uuid = result.session_id
+        bridge_hostname = result.fake_hostname
+        bridge_cwd = result.fake_cwd
+        persona_name = result.persona_name
+        persona_overlay = result.persona_overlay
         state.bridge_uuid = bridge_uuid
     except BridgeUnavailableError as exc:
         container.audit.record(
@@ -490,13 +499,25 @@ async def _process_handler(
             error_type=type(exc).__name__,
         )
 
+    # Stage 9: when the bridge returned a persona-driven identity,
+    # use it; otherwise fall back to the lure's static config hostname
+    # and the legacy /home/<user> derivation. This keeps the bridge-
+    # unreachable path identical to the pre-Stage-9 behaviour.
+    hostname = bridge_hostname if bridge_hostname is not None else container.config.hostname
+    cwd = (
+        bridge_cwd
+        if bridge_cwd is not None
+        else (f"/home/{state.username}" if state.username != "root" else "/root")
+    )
     lure_session = LureSessionContext(
         bridge_uuid if bridge_uuid is not None else container.placeholder_session_id(),
         source_ip=state.source_ip,
         username=state.username,
-        hostname=container.config.hostname,
-        cwd=f"/home/{state.username}" if state.username != "root" else "/root",
+        hostname=hostname,
+        cwd=cwd,
         history_window=container.config.history_window,
+        persona_name=persona_name,
+        persona_overlay=persona_overlay,
     )
     state.lure_session = lure_session
     if not state.open_audited:
@@ -620,7 +641,7 @@ async def _handle_bridge_stream(
         async for chunk in container.bridge_client.command_stream(
             bridge_uuid,
             sanitised,
-            fs_context=system_prompt_summary(),
+            fs_context=system_prompt_summary(session),
         ):
             if chunk.delta:
                 write(chunk.delta)
@@ -670,7 +691,7 @@ async def _handle_bridge_buffered(
         response = await container.bridge_client.submit_command(
             bridge_uuid,
             sanitised,
-            fs_context=system_prompt_summary(),
+            fs_context=system_prompt_summary(session),
         )
         latency_ms = (time.monotonic() - start) * 1000.0
         container.commands.record_bridge_latency(latency_ms)
