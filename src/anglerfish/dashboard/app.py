@@ -114,6 +114,8 @@ def create_app(
             audit_path=settings.audit.log_path,
             dashboard_state=state_instance,
             offset_cache_path=settings.data_dir / "audit_tailer.json",
+            audit_log=audit_log,
+            cluster_similarity_threshold=settings.bridge.cluster_similarity_threshold,
         )
     )
 

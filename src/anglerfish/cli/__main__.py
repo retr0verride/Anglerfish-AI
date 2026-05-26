@@ -128,7 +128,7 @@ def bridge_serve(
     from anglerfish.bridge import AIBridgeService, OllamaClient, create_bridge_app
     from anglerfish.bridge.defense import ModelIntegrityError, verify_all_roles
     from anglerfish.bridge.overrides_reader import BridgeOverridesReader
-    from anglerfish.intel import IntentExtractor
+    from anglerfish.intel import EmbeddingGenerator, IntentExtractor
     from anglerfish.llm import WarmPool
 
     try:
@@ -188,12 +188,14 @@ def bridge_serve(
         audit_log=audit_log,
     )
     intent_extractor = IntentExtractor(ai_client)
+    embedding_generator = EmbeddingGenerator(ai_client)
     service = AIBridgeService(
         settings,
         client=ai_client,
         audit_log=audit_log,
         overrides_reader=overrides_reader,
         intent_extractor=intent_extractor,
+        embedding_generator=embedding_generator,
     )
     warm_pool = WarmPool(
         client=ai_client,

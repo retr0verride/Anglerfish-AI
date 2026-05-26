@@ -33,6 +33,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import CommandTurn, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
@@ -234,6 +235,33 @@ class DashboardState:
         end: datetime,
     ) -> list[IntentSummary]:
         return await self._store.get_intents_in_range(start=start, end=end)
+
+    async def upsert_embedding(self, embedding: SessionEmbedding) -> None:
+        """Persist a Stage 8 :class:`SessionEmbedding`.
+
+        No pub/sub publish: the raw vector is not a user-facing event.
+        Operators see clustering surface through the ``cluster_match``
+        audit event (emitted by the tailer when ``find_similar``
+        returns neighbours above the threshold) which Stage 8 slice 5
+        will fan out to the alerts panel.
+        """
+        await self._store.upsert_embedding(embedding)
+
+    async def get_embedding(self, session_id: UUID) -> SessionEmbedding | None:
+        return await self._store.get_embedding(session_id)
+
+    async def find_similar(
+        self,
+        session_id: UUID,
+        *,
+        k: int = 5,
+        min_similarity: float = 0.85,
+    ) -> list[tuple[SessionEmbedding, float]]:
+        return await self._store.find_similar(
+            session_id,
+            k=k,
+            min_similarity=min_similarity,
+        )
 
     # ------------------------------------------------------------------
     # Queries - called by REST routes.

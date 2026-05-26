@@ -459,6 +459,40 @@ class BridgeConfig(BaseModel):
             "the deep model is consistently fast."
         ),
     )
+    embedding_enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, the bridge spawns a Stage 8 behavioural-embedding "
+            "task on each DELETE /api/v1/session/{id} call alongside the "
+            "intent extraction. Fire-and-forget with a wall-clock timeout; "
+            "the DELETE endpoint returns 204 immediately. Set False to "
+            "suppress the embed-tier LLM call without disabling intent."
+        ),
+    )
+    embedding_timeout_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=300.0,
+        description=(
+            "Wall-clock cap on a single embedding-generation task. Embed "
+            "calls are typically sub-second on a warmed model; the "
+            "default 30s catches a stuck model or a network blip without "
+            "blocking the session-close path."
+        ),
+    )
+    cluster_similarity_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Cosine-similarity threshold above which the dashboard's "
+            "audit-tailer emits a bridge.cluster_match event when a "
+            "freshly-persisted embedding finds neighbours. Default 0.85 "
+            "means 'very likely same script / botnet / human operator'. "
+            "Lower to surface looser overlap; raise for stricter "
+            "matches. Read by the tailer at request time."
+        ),
+    )
 
     @field_validator("fake_hostname")
     @classmethod

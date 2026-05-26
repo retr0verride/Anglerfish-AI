@@ -329,13 +329,16 @@ def create_bridge_app(
     async def end_session(session_id: UUID) -> None:
         async with lock:
             ctx = sessions.pop(session_id, None)
-        # Stage 7: snapshot before per-session state drops + spawn the
-        # fire-and-forget intent-extraction task. The task runs with a
-        # wall-clock timeout configured via
-        # settings.bridge.intent_extraction_timeout_s; this endpoint
-        # returns 204 immediately regardless of extraction outcome.
+        # Stage 7 + 8: snapshot before per-session state drops + spawn
+        # both the intent-extraction and embedding-generation tasks.
+        # Both run fire-and-forget with their own wall-clock timeouts;
+        # this endpoint returns 204 immediately regardless of either
+        # outcome. Stage 7 intent goes through the deep tier; Stage 8
+        # embedding goes through the embed tier - independent budgets.
         if ctx is not None:
-            service.schedule_intent_extraction(ctx.snapshot())
+            snapshot = ctx.snapshot()
+            service.schedule_intent_extraction(snapshot)
+            service.schedule_embedding_generation(snapshot)
         service.end_session_budget(session_id)
         logger.info("bridge.session_ended id=%s", session_id)
 

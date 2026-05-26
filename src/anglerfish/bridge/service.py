@@ -55,10 +55,11 @@ from anglerfish.bridge.strategies import (
     get_strategy,
 )
 from anglerfish.config.settings import AnglerfishSettings
-from anglerfish.intel import IntentExtractor
+from anglerfish.intel import EmbeddingGenerator, IntentExtractor
 from anglerfish.llm import LLMClient, TokenBudget
 from anglerfish.llm.budget import BudgetExhaustedError
 from anglerfish.llm.errors import LLMError
+from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import (
     BridgeChunk,
@@ -88,6 +89,7 @@ class AIBridgeService:
         injection_scorer: InjectionScorer | None = None,
         overrides_reader: BridgeOverridesReader | None = None,
         intent_extractor: IntentExtractor | None = None,
+        embedding_generator: EmbeddingGenerator | None = None,
         sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
@@ -142,6 +144,12 @@ class AIBridgeService:
         # asyncio loop does not cancel them on garbage collection.
         # Tasks self-remove via discard in their done-callback.
         self._intent_tasks: set[asyncio.Task[None]] = set()
+        # Stage 8: optional end-of-session embedding generator. Same
+        # lifecycle pattern as the intent extractor; spawned via
+        # schedule_embedding_generation() on the bridge HTTP DELETE
+        # endpoint alongside the intent task.
+        self._embedding_generator = embedding_generator
+        self._embedding_tasks: set[asyncio.Task[None]] = set()
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -304,6 +312,67 @@ class AIBridgeService:
             )
             return
         self._record_intent_extracted(summary)
+
+    def schedule_embedding_generation(
+        self,
+        snapshot: SessionSnapshot,
+    ) -> asyncio.Task[None] | None:
+        """Spawn a fire-and-forget embedding-generation task for ``snapshot``.
+
+        Returns the spawned :class:`asyncio.Task` (None when embedding
+        is disabled or no generator was wired). The task runs the
+        generator under ``settings.bridge.embedding_timeout_s`` and
+        audits the result (``bridge.embedding_generated`` on success,
+        ``bridge.embedding_failed`` on every failure shape). The
+        caller does not await the task; the DELETE endpoint returns
+        204 immediately. Sessions below the generator's min-commands
+        threshold produce a ``None`` embedding and emit
+        ``bridge.embedding_skipped`` so the operator can see why no
+        cluster_match could fire.
+        """
+        if not self._settings.bridge.embedding_enabled or self._embedding_generator is None:
+            return None
+        task = asyncio.create_task(
+            self._run_embedding_generation(snapshot),
+            name=f"embed-{snapshot.session_id}",
+        )
+        self._embedding_tasks.add(task)
+        task.add_done_callback(self._embedding_tasks.discard)
+        return task
+
+    async def _run_embedding_generation(self, snapshot: SessionSnapshot) -> None:
+        """Run the generator under timeout + audit the outcome.
+
+        Never raises - every failure path lands in
+        bridge.embedding_failed. The DELETE HTTP response has already
+        returned 204 by the time this runs.
+        """
+        if self._embedding_generator is None:  # pragma: no cover - guarded above
+            return
+        timeout_s = self._settings.bridge.embedding_timeout_s
+        try:
+            embedding = await asyncio.wait_for(
+                self._embedding_generator.generate(snapshot),
+                timeout=timeout_s,
+            )
+        except TimeoutError:
+            self._record_embedding_failed(
+                snapshot=snapshot,
+                error_type="TimeoutError",
+                error=f"embedding generation exceeded {timeout_s}s",
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - audit + swallow on background task
+            self._record_embedding_failed(
+                snapshot=snapshot,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return
+        if embedding is None:
+            self._record_embedding_skipped(snapshot)
+            return
+        self._record_embedding_generated(embedding)
 
     def wasting_stats(self) -> dict[str, int]:
         """Return a snapshot of per-process wasting counters.
@@ -693,6 +762,47 @@ class AIBridgeService:
             attacker_ip=snapshot.source_ip,
             error_type=error_type,
             error=error,
+        )
+
+    def _record_embedding_generated(self, embedding: SessionEmbedding) -> None:
+        """Audit a successful Stage 8 embedding generation.
+
+        The full vector rides as a tuple of floats so the dashboard
+        tailer can reconstruct + persist without a separate read.
+        ~2 KB per 768-dim vector at JSON-serialised float precision.
+        """
+        self._audit_log.record(
+            "bridge.embedding_generated",
+            session_id=str(embedding.session_id),
+            dimension=embedding.dimension,
+            model=embedding.model,
+            vector=list(embedding.vector),
+            generated_at=embedding.generated_at.isoformat(),
+        )
+
+    def _record_embedding_failed(
+        self,
+        *,
+        snapshot: SessionSnapshot,
+        error_type: str,
+        error: str,
+    ) -> None:
+        """Audit a failed embedding-generation attempt."""
+        self._audit_log.record(
+            "bridge.embedding_failed",
+            session_id=str(snapshot.session_id),
+            attacker_ip=snapshot.source_ip,
+            error_type=error_type,
+            error=error,
+        )
+
+    def _record_embedding_skipped(self, snapshot: SessionSnapshot) -> None:
+        """Audit a below-min-commands skip (generator returned None)."""
+        self._audit_log.record(
+            "bridge.embedding_skipped",
+            session_id=str(snapshot.session_id),
+            attacker_ip=snapshot.source_ip,
+            reason="below_min_commands",
         )
 
     def _accumulate_wasted_ms(

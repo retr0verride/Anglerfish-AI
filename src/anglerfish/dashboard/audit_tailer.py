@@ -50,6 +50,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
+from anglerfish.audit import AuditLog
+from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 
@@ -111,13 +113,27 @@ class AuditTailer:
         dashboard_state: DashboardState,
         offset_cache_path: Path,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        audit_log: AuditLog | None = None,
+        cluster_similarity_threshold: float = 0.85,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
+        if not 0.0 <= cluster_similarity_threshold <= 1.0:
+            raise ValueError(
+                "cluster_similarity_threshold must be in [0, 1]",
+            )
         self._audit_path = audit_path
         self._state = dashboard_state
         self._cache_path = offset_cache_path
         self._poll_interval = poll_interval_seconds
+        # Stage 8: the tailer writes a bridge.cluster_match audit event
+        # right after persisting an embedding when find_similar
+        # returns one or more neighbours above the threshold. The
+        # audit log handle is optional so existing test fixtures that
+        # construct the tailer without it keep working; cluster_match
+        # emission is silently skipped in that case.
+        self._audit_log = audit_log
+        self._cluster_threshold = cluster_similarity_threshold
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
@@ -307,6 +323,8 @@ class AuditTailer:
             await self._handle_closed(session_id, event)
         elif event_type == "bridge.intent_extracted":
             await self._handle_intent_extracted(session_id, event)
+        elif event_type == "bridge.embedding_generated":
+            await self._handle_embedding_generated(session_id, event)
         # Everything else: silently ignored. Future stages add types
         # without churning the tailer.
 
@@ -407,6 +425,46 @@ class AuditTailer:
         if summary is None:
             return
         await self._state.upsert_intent(summary)
+
+    async def _handle_embedding_generated(
+        self,
+        session_id: UUID,
+        event: dict[str, Any],
+    ) -> None:
+        """Persist a Stage 8 :class:`SessionEmbedding` + emit cluster_match.
+
+        After upserting, runs find_similar against the freshly
+        persisted vector; if any neighbours cross the configured
+        threshold, emits ``bridge.cluster_match`` via the optional
+        audit-log handle. Cluster-match emission is skipped (silently)
+        when no audit_log was wired into the tailer.
+        """
+        embedding = _parse_embedding_event(session_id, event)
+        if embedding is None:
+            return
+        await self._state.upsert_embedding(embedding)
+        if self._audit_log is None:
+            return
+        neighbours = await self._state.find_similar(
+            session_id,
+            k=5,
+            min_similarity=self._cluster_threshold,
+        )
+        if not neighbours:
+            return
+        self._audit_log.record(
+            "bridge.cluster_match",
+            session_id=str(session_id),
+            model=embedding.model,
+            threshold=self._cluster_threshold,
+            matches=[
+                {
+                    "session_id": str(neighbour.session_id),
+                    "similarity": round(similarity, 6),
+                }
+                for neighbour, similarity in neighbours
+            ],
+        )
 
     # ------------------------------------------------------------------
     # Offset cache
@@ -568,6 +626,71 @@ def _parse_intent_event(
         # data corruption; log + drop.
         _logger.warning(
             "audit_tailer: bridge.intent_extracted failed schema validation for session_id=%s: %s",
+            session_id,
+            exc,
+        )
+        return None
+
+
+def _parse_embedding_event(
+    session_id: UUID,
+    event: dict[str, Any],
+) -> SessionEmbedding | None:
+    """Reconstruct a :class:`SessionEmbedding` from a bridge.embedding_generated event.
+
+    Mirrors :func:`_parse_intent_event`: missing or type-mismatched
+    fields produce a warning and a None return so the tailer skips
+    the event without crashing. The bridge serialises ``vector``
+    as a JSON list of floats; we coerce it back into the immutable
+    tuple shape :class:`SessionEmbedding` expects.
+    """
+    vector_raw = event.get("vector")
+    dimension = event.get("dimension")
+    model = event.get("model")
+    generated_at_raw = event.get("generated_at")
+    if (
+        not isinstance(vector_raw, list)
+        or not isinstance(dimension, int)
+        or not isinstance(model, str)
+        or not isinstance(generated_at_raw, str)
+    ):
+        _logger.warning(
+            "audit_tailer: bridge.embedding_generated event missing or "
+            "malformed required fields for session_id=%s",
+            session_id,
+        )
+        return None
+    if not all(isinstance(v, (int, float)) for v in vector_raw):
+        _logger.warning(
+            "audit_tailer: bridge.embedding_generated vector for session_id=%s "
+            "contains non-numeric entries; dropping",
+            session_id,
+        )
+        return None
+    try:
+        generated_at = datetime.fromisoformat(generated_at_raw)
+    except ValueError:
+        _logger.warning(
+            "audit_tailer: bridge.embedding_generated has malformed "
+            "generated_at=%r for session_id=%s",
+            generated_at_raw,
+            session_id,
+        )
+        return None
+    try:
+        return SessionEmbedding(
+            session_id=session_id,
+            vector=tuple(float(v) for v in vector_raw),
+            dimension=dimension,
+            model=model,
+            generated_at=generated_at,
+        )
+    except ValueError as exc:
+        # Pydantic min/max-length on vector + dimension cross-check
+        # land here. Treat as audit-side corruption; log + drop.
+        _logger.warning(
+            "audit_tailer: bridge.embedding_generated failed schema "
+            "validation for session_id=%s: %s",
             session_id,
             exc,
         )

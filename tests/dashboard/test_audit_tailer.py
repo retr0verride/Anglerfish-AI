@@ -18,6 +18,7 @@ import pytest
 
 from anglerfish.dashboard.audit_tailer import AuditTailer
 from anglerfish.dashboard.state import DashboardEventKind, DashboardState
+from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.session import ResponseSource
 
 
@@ -719,3 +720,284 @@ async def test_intent_extracted_with_malformed_extracted_at_is_skipped(
     )
     await tailer._poll_once()
     assert await dashboard_state.get_intent(sid) is None
+
+
+# ---------------------------------------------------------------------------
+# Stage 8 slice 4: bridge.embedding_generated dispatch + cluster_match
+# ---------------------------------------------------------------------------
+
+
+class _CaptureAudit:
+    """Drop-in for AuditLog that captures records emitted by the tailer."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record(self, event_type: str, **fields: object) -> None:
+        self.events.append((event_type, fields))
+
+
+def _make_tailer_with_audit(
+    *,
+    tmp_path: Path,
+    dashboard_state: DashboardState,
+    audit_log: _CaptureAudit,
+    threshold: float = 0.85,
+) -> AuditTailer:
+    return AuditTailer(
+        audit_path=tmp_path / "audit.jsonl",
+        dashboard_state=dashboard_state,
+        offset_cache_path=tmp_path / "audit_tailer.json",
+        poll_interval_seconds=0.05,
+        audit_log=audit_log,  # type: ignore[arg-type]
+        cluster_similarity_threshold=threshold,
+    )
+
+
+def _embedding_event(
+    sid: UUID,
+    *,
+    vector: list[float],
+    model: str = "embed-test",
+    dimension: int | None = None,
+    generated_at: datetime | None = None,
+) -> str:
+    return _audit_line(
+        "bridge.embedding_generated",
+        session_id=str(sid),
+        vector=vector,
+        dimension=dimension if dimension is not None else len(vector),
+        model=model,
+        generated_at=(
+            generated_at or datetime(2026, 5, 26, 12, 30, tzinfo=UTC)
+        ).isoformat(),
+    )
+
+
+async def test_embedding_generated_persists_to_store(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_audit(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+    )
+    sid = uuid4()
+    vector = [0.01 * i for i in range(64)]
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "lure.session_opened",
+            session_id=str(sid),
+            source_ip="203.0.113.7",
+            username="root",
+        ),
+        _embedding_event(sid, vector=vector),
+    )
+    await tailer._poll_once()
+    loaded = await dashboard_state.get_embedding(sid)
+    assert loaded is not None
+    assert loaded.session_id == sid
+    assert loaded.dimension == 64
+    assert loaded.model == "embed-test"
+    # No neighbours to match against -> no cluster_match emitted.
+    cluster_events = [e for e in audit.events if e[0] == "bridge.cluster_match"]
+    assert cluster_events == []
+
+
+async def test_embedding_generated_emits_cluster_match_when_neighbour_passes_threshold(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_audit(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+        threshold=0.5,
+    )
+    sid_first = uuid4()
+    sid_second = uuid4()
+    vector = [1.0] + [0.0] * 63
+    _append(
+        tailer.audit_path,
+        _audit_line(
+            "lure.session_opened",
+            session_id=str(sid_first),
+            source_ip="203.0.113.7",
+            username="root",
+        ),
+        _embedding_event(sid_first, vector=vector),
+        _audit_line(
+            "lure.session_opened",
+            session_id=str(sid_second),
+            source_ip="203.0.113.8",
+            username="root",
+        ),
+        _embedding_event(sid_second, vector=vector),
+    )
+    await tailer._poll_once()
+
+    cluster_events = [e for e in audit.events if e[0] == "bridge.cluster_match"]
+    assert len(cluster_events) == 1
+    _, fields = cluster_events[0]
+    assert fields["session_id"] == str(sid_second)
+    assert fields["model"] == "embed-test"
+    matches = fields["matches"]
+    assert isinstance(matches, list)
+    assert len(matches) == 1
+    assert matches[0]["session_id"] == str(sid_first)
+    assert matches[0]["similarity"] >= 0.5
+
+
+async def test_embedding_generated_skips_cluster_match_below_threshold(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_audit(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+        threshold=0.99,
+    )
+    sid_first = uuid4()
+    sid_second = uuid4()
+    far_a = [1.0] + [0.0] * 63
+    far_b = [0.0] * 63 + [1.0]
+    _append(
+        tailer.audit_path,
+        _audit_line("lure.session_opened", session_id=str(sid_first), source_ip="1.1.1.1", username="root"),
+        _embedding_event(sid_first, vector=far_a),
+        _audit_line("lure.session_opened", session_id=str(sid_second), source_ip="1.1.1.2", username="root"),
+        _embedding_event(sid_second, vector=far_b),
+    )
+    await tailer._poll_once()
+    assert [e for e in audit.events if e[0] == "bridge.cluster_match"] == []
+
+
+async def test_embedding_generated_without_audit_log_skips_cluster_emission(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """Tailer constructed without audit_log persists but never emits cluster_match."""
+    tailer = AuditTailer(
+        audit_path=tmp_path / "audit.jsonl",
+        dashboard_state=dashboard_state,
+        offset_cache_path=tmp_path / "audit_tailer.json",
+        poll_interval_seconds=0.05,
+    )
+    sid = uuid4()
+    vector = [0.01 * i for i in range(64)]
+    _append(
+        tailer.audit_path,
+        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        _embedding_event(sid, vector=vector),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_embedding(sid) is not None  # persisted
+
+
+async def test_embedding_generated_with_malformed_vector_is_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_audit(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+    )
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        # vector is missing.
+        _audit_line(
+            "bridge.embedding_generated",
+            session_id=str(sid),
+            dimension=64,
+            model="embed-test",
+            generated_at=datetime(2026, 5, 26, 12, 30, tzinfo=UTC).isoformat(),
+        ),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_embedding(sid) is None
+
+
+async def test_embedding_generated_with_bad_generated_at_is_skipped(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    audit = _CaptureAudit()
+    tailer = _make_tailer_with_audit(
+        tmp_path=tmp_path,
+        dashboard_state=dashboard_state,
+        audit_log=audit,
+    )
+    sid = uuid4()
+    _append(
+        tailer.audit_path,
+        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+        _audit_line(
+            "bridge.embedding_generated",
+            session_id=str(sid),
+            vector=[0.01 * i for i in range(64)],
+            dimension=64,
+            model="embed-test",
+            generated_at="definitely-not-iso",
+        ),
+    )
+    await tailer._poll_once()
+    assert await dashboard_state.get_embedding(sid) is None
+
+
+def test_construction_rejects_threshold_outside_unit_interval(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError):
+        AuditTailer(
+            audit_path=tmp_path / "audit.jsonl",
+            dashboard_state=dashboard_state,
+            offset_cache_path=tmp_path / "audit_tailer.json",
+            cluster_similarity_threshold=1.5,
+        )
+    with pytest.raises(ValueError):
+        AuditTailer(
+            audit_path=tmp_path / "audit.jsonl",
+            dashboard_state=dashboard_state,
+            offset_cache_path=tmp_path / "audit_tailer.json",
+            cluster_similarity_threshold=-0.1,
+        )
+
+
+async def test_dashboard_state_round_trips_embedding(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """DashboardState.upsert_embedding -> get_embedding is a no-publish pass-through."""
+    sid = uuid4()
+    # Need a session row for the FK; reuse the tailer-driven path.
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    _append(
+        tailer.audit_path,
+        _audit_line("lure.session_opened", session_id=str(sid), source_ip="1.1.1.1", username="root"),
+    )
+    await tailer._poll_once()
+
+    embedding = SessionEmbedding(
+        session_id=sid,
+        vector=tuple(0.01 * i for i in range(64)),
+        dimension=64,
+        model="embed-test",
+        generated_at=datetime(2026, 5, 26, 12, 30, tzinfo=UTC),
+    )
+    await dashboard_state.upsert_embedding(embedding)
+    loaded = await dashboard_state.get_embedding(sid)
+    assert loaded is not None
+    assert loaded.dimension == 64
+    # find_similar passes through to the store.
+    assert await dashboard_state.find_similar(sid) == []
