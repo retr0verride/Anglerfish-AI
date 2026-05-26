@@ -1,8 +1,12 @@
 """LLM-driven intelligence layer on top of captured sessions.
 
-Stage 7 ships :class:`IntentExtractor`, the end-of-session
-structured-summary producer. Stage 8 will land
-``embeddings.py`` here for behavioural clustering.
+Two end-of-session producers live here:
+
+* :class:`IntentExtractor` (Stage 7) - structured natural-language
+  intent summary via :meth:`LLMClient.structured_chat`.
+* :class:`EmbeddingGenerator` (Stage 8) - per-session behavioural
+  embedding vector via :meth:`LLMClient.embed` for the clustering
+  + re-identification surface.
 
 Public surface:
 
@@ -12,20 +16,35 @@ Public surface:
   rule-based :class:`anglerfish.models.ThreatAssessment` for
   context) and returns a populated
   :class:`anglerfish.models.IntentSummary`.
+* :class:`EmbeddingGenerator` - construct from an
+  :class:`anglerfish.llm.LLMClient`; ``generate()`` consumes a
+  :class:`anglerfish.models.SessionSnapshot` and returns either a
+  populated :class:`anglerfish.models.SessionEmbedding` or
+  :data:`None` when the session is below the configured
+  min-commands threshold.
 
 Errors:
 
-* :class:`IntentExtractionError` - base class. Slice 7.1 raises
-  on no underlying LLM failure path - those propagate through
-  unchanged. Subclasses arrive when there are real semantic
-  failure modes to distinguish (Stage 7.2 + later).
+* :class:`IntentExtractionError` - base class for intent-side
+  failures. Underlying LLM-layer failures propagate unchanged.
+* :class:`EmbeddingExtractionError` - base class for embedding-
+  side failures with the same propagation contract.
 """
 
 from __future__ import annotations
 
+from anglerfish.intel.embeddings import (
+    EmbeddingExtractionError,
+    EmbeddingGenerator,
+)
 from anglerfish.intel.intent import (
     IntentExtractionError,
     IntentExtractor,
 )
 
-__all__ = ["IntentExtractionError", "IntentExtractor"]
+__all__ = [
+    "EmbeddingExtractionError",
+    "EmbeddingGenerator",
+    "IntentExtractionError",
+    "IntentExtractor",
+]

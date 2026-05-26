@@ -10,6 +10,7 @@ and the credential store consume.
 from __future__ import annotations
 
 from anglerfish.models.credentials import CredentialRecord, CredentialStats
+from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.fingerprint import SessionFingerprint, SshBannerInfo
 from anglerfish.models.geo import GeoRecord
 from anglerfish.models.intent import IntentSummary
@@ -31,6 +32,7 @@ __all__ = [
     "GeoRecord",
     "IntentSummary",
     "ResponseSource",
+    "SessionEmbedding",
     "SessionFingerprint",
     "SessionSnapshot",
     "SshBannerInfo",
