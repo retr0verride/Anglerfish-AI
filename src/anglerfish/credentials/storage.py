@@ -323,7 +323,17 @@ class CredentialStore:
         if row is None or row[0] is None:
             return 0
         value = row[0]
-        return int(value) if isinstance(value, (int, float)) else 0
+        if not isinstance(value, (int, float)):
+            # Closed in pre-deploy sweep (TODO-6): the previous
+            # ``else 0`` silently coerced non-numeric values, masking
+            # schema corruption or a query that gained a non-numeric
+            # column without updating the caller. The helper is only
+            # used internally for COUNT/SUM scalars; a non-numeric
+            # result is always a programming error.
+            raise TypeError(
+                f"_scalar expected numeric result, got {type(value).__name__} from SQL: {sql!r}",
+            )
+        return int(value)
 
     async def aclose(self) -> None:
         async with self._lock:

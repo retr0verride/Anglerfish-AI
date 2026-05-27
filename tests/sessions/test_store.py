@@ -370,6 +370,20 @@ async def test_get_stats_counts(session_store: SessionStore) -> None:
     assert stats.persistence_attempt_count == 1
 
 
+def test_scalar_helper_raises_typeerror_on_non_numeric_result(
+    session_store: SessionStore,
+) -> None:
+    """Pre-deploy sweep TODO-6: the ``_scalar`` helper now raises
+    ``TypeError`` on a non-numeric result instead of silently
+    coercing to 0, so schema corruption + caller drift surface
+    loudly. Crosses the private boundary on purpose because the
+    defensive branch is only reachable via a deliberately
+    non-numeric query.
+    """
+    with pytest.raises(TypeError, match="expected numeric result"):
+        session_store._scalar("SELECT 'not-a-number'")  # type: ignore[attr-defined]
+
+
 # ---------------------------------------------------------------------------
 # Concurrency
 # ---------------------------------------------------------------------------

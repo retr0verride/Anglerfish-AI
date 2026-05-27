@@ -130,28 +130,22 @@ commit pin the documented behaviour:
 
 Test-only addition; no production code touched.
 
-## TODO-6: `_scalar` helpers silently coerce non-numeric to 0
+## TODO-6: `_scalar` helpers silently coerce non-numeric to 0 (closed in pre-deploy sweep)
 
-`src/anglerfish/sessions/store.py::SessionStore._scalar` (line ~507)
-and `src/anglerfish/credentials/storage.py::CredentialStore._scalar`
-(line ~321) both run SQL ``COUNT(*)`` / ``SUM(...)`` style queries
-and return ``int(value) if isinstance(value, (int, float)) else 0``.
+The two ``_scalar`` helpers
+(``SessionStore._scalar`` + ``CredentialStore._scalar``) now raise
+``TypeError("_scalar expected numeric result, got <type> from SQL: <sql>")``
+on the non-numeric path instead of returning 0 silently. Schema
+corruption or a caller that gained a non-numeric column without
+updating its callsite surfaces loudly. The ``row is None`` +
+``row[0] is None`` paths still return 0 (legitimate empty-result
+handling for ``SUM`` over an empty table and the like).
 
-The ``else 0`` clause cannot fire today: COUNT and SUM return
-numeric types on every backend SQLite supports. The defensive
-fallback masks a class of bug that would otherwise indicate schema
-corruption or a query that was changed to return a non-numeric
-column without updating the caller.
-
-AUDIT.md "Parser-Validator -> Validation" calls out "no silent
-truncation, no bare except". A correct fix raises a typed exception
-(``TypeError(f"expected numeric scalar, got {type(value).__name__}")``)
-on the non-numeric path. Risk: any caller relying on the silent-zero
-behaviour for schema-changed columns breaks. Audit pass declined to
-make the behaviour change inline; logged here for a follow-up.
-
-Owner: TBD. Surfaced during the Stage 5 retroactive audit sweep of
-the sessions + credentials subsystems.
+Both stores grew a focused regression test (``test_scalar_helper_
+raises_typeerror_on_non_numeric_result``) that crosses the private
+boundary deliberately - the defensive branch is otherwise only
+reachable via a deliberately-non-numeric query, which no production
+caller emits.
 
 ## TODO-7: `WizardAnswers` secret fields stored as bare `str`
 
@@ -255,35 +249,8 @@ Fixes to consider:
 
 Surfaced during the Stage 5 retroactive audit sweep. Owner: TBD.
 
-## Deferred until the pre-deploy sweep
+## Pre-deploy sweep
 
-TODO-2, TODO-3, TODO-6, TODO-7, TODO-8, TODO-9 are explicitly
-deferred to a dedicated sweep that runs before the first
-production deployment (Stage 10/11 timeframe at earliest). The
-audit(stage9) sweep closed TODO-4 + TODO-5 only.
-
-Rationale per category:
-
-- **Deploy blockers (TODO-2, TODO-3)**: the systemd unit work
-  wants validation against a real deployment so we do not do it
-  twice. The dashboard unit factory wrapper (TODO-2) is trivial
-  in isolation; the lure systemd unit (TODO-3) needs ISO-hook
-  plumbing + bait-NIC env wiring that is easier to get right
-  when there is a live target to test against.
-
-- **Behavior changes (TODO-6, TODO-7)**: the `_scalar` typed-
-  exception swap and the `WizardAnswers` SecretStr upgrade
-  both have non-trivial regression surface for small benefit.
-  They deserve their own focused commit when an operator hits
-  the specific failure mode they would prevent (silent
-  schema-changed COUNT(*) returning 0; an audit log surfacing
-  a wizard.json password hash in a traceback).
-
-- **Robustness (TODO-8, TODO-9)**: bridge session/budget leaks
-  on missed DELETE + per-chunk size cap on streaming. Both are
-  scale problems for a pre-traffic tool. The rate-limiter +
-  lure keepalive bound the leak in the hot path today; the
-  defense layer's overall-response cap bounds the chunk
-  oversize in the buffered path. Address when production
-  traffic shape forces the issue or when the deploy-readiness
-  sweep audits the failure-mode surface end-to-end.
+The pre-deploy sweep (kicked off 2026-05-26 after Stage 11
+shipped) closes TODO-2, TODO-3, TODO-6, TODO-7, TODO-8, TODO-9.
+TODO-6 closed first; the rest land sequentially.

@@ -271,6 +271,22 @@ async def test_stats_empty_db(tmp_path: Path) -> None:
     assert stats.unique_combinations == 0
 
 
+async def test_scalar_helper_raises_typeerror_on_non_numeric_result(
+    tmp_path: Path,
+) -> None:
+    """Pre-deploy sweep TODO-6: the ``_scalar`` helper now raises
+    ``TypeError`` on a non-numeric result instead of silently
+    coercing to 0, so schema corruption + caller drift surface
+    loudly. Crosses the private boundary on purpose because the
+    defensive branch is only reachable via a deliberately
+    non-numeric query.
+    """
+    db = tmp_path / "creds.db"
+    async with CredentialStore(_config(db)) as store:
+        with pytest.raises(TypeError, match="expected numeric result"):
+            store._scalar("SELECT 'not-a-number'")  # type: ignore[attr-defined]
+
+
 async def test_methods_require_open(tmp_path: Path) -> None:
     db = tmp_path / "creds.db"
     store = CredentialStore(_config(db))
