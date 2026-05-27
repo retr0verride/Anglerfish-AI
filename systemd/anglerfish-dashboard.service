@@ -9,11 +9,15 @@ Type=exec
 User=anglerfish
 Group=anglerfish
 EnvironmentFile=/etc/anglerfish/anglerfish.env
-ExecStart=/opt/anglerfish/venv/bin/uvicorn \
-    --factory anglerfish.dashboard.app:create_app \
-    --host ${ANGLERFISH_DASHBOARD__HOST} \
-    --port ${ANGLERFISH_DASHBOARD__PORT} \
-    --proxy-headers
+# Closes pre-deploy sweep TODO-2: the previous "uvicorn --factory"
+# invocation passed no args to create_app(settings) and so failed at
+# startup on every clean install since Stage 4. The "anglerfish
+# dashboard serve" subcommand owns its own uvicorn instance, loads
+# settings explicitly, surfaces ValidationError as a clean exit 2,
+# and mirrors the "bridge serve" + "lure serve" shape one-for-one.
+# Host + port come from settings.dashboard.host/.port which the env
+# file populates via ANGLERFISH_DASHBOARD__HOST/PORT.
+ExecStart=/opt/anglerfish/venv/bin/anglerfish dashboard serve
 Restart=on-failure
 RestartSec=3s
 

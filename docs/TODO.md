@@ -32,29 +32,39 @@ The full design lives in a future stage; sketch only:
 
 Owner: TBD. Not on the active roadmap yet.
 
-## TODO-2: systemd unit invokes `create_app` via uvicorn `--factory`
+## TODO-2: systemd unit invokes `create_app` via uvicorn `--factory` (closed in pre-deploy sweep)
 
-`systemd/anglerfish-dashboard.service` (or the equivalent invocation
-of `uvicorn anglerfish.dashboard:create_app --factory`) cannot work
-as written: `create_app` requires a positional `settings` argument
-and uvicorn's `--factory` mode calls the factory with no arguments.
-Production dashboard startup is broken on a clean install.
+The pre-deploy sweep took the second option: dropped the
+``uvicorn --factory`` invocation and added a first-class
+``anglerfish dashboard serve`` subcommand that owns its own
+uvicorn instance. This parallels the Stage 2 lure pattern (and
+the just-shipped Stage 11 ``anglerfish callback serve`` pattern):
+all three long-running units now follow the same shape -
+``anglerfish <service> serve`` from the systemd ExecStart, settings
+loaded explicitly, ValidationError surfaced as a structured
+Console panel + ``typer.Exit(2)``.
 
-Two viable fixes:
+Changes:
 
-- Add a zero-arg wrapper, e.g. `anglerfish.dashboard.uvicorn_factory`,
-  that calls `load_settings()` then `create_app(settings)`. Update
-  the systemd unit to point at the wrapper.
-- Drop `--factory` and have the systemd unit run a small
-  `anglerfish dashboard serve` subcommand that owns its own uvicorn
-  instance (parallels how the lure already runs via
-  `anglerfish lure serve`).
-
-The second option is more consistent with the Stage 2 lure pattern
-and surfaces config errors earlier. Pre-existing as of Stage 4; flagged
-during the Stage 4 scoped re-review.
-
-Owner: TBD. Verify the actual systemd unit text before picking a fix.
+- ``src/anglerfish/cli/__main__.py``: new ``dashboard_app`` typer
+  subgroup; ``dashboard serve`` command with optional
+  ``--host`` / ``--port`` overrides (default to
+  ``settings.dashboard.host`` / ``.port``); explicit settings
+  load with the same error-handling shape as ``bridge serve``.
+  ``proxy_headers=True`` preserved from the previous uvicorn
+  invocation.
+- ``systemd/anglerfish-dashboard.service``: ExecStart now points
+  at ``/opt/anglerfish/venv/bin/anglerfish dashboard serve``;
+  ``--host`` / ``--port`` flags drop out (the subcommand reads
+  them from settings); ``--proxy-headers`` likewise (set inside
+  the subcommand). Sandboxing primitives unchanged.
+- ``tests/cli/test_dashboard_subcommand.py`` (new, 4 cases):
+  the subgroup is registered + visible from ``--help``; the
+  ``serve`` subcommand exposes ``--host`` + ``--port`` options;
+  bad config (out-of-range port) surfaces as ``exit 2`` with
+  the "Configuration error" panel (the regression test for the
+  previously-broken ``--factory`` path which would have raised
+  TypeError inside the worker).
 
 ## TODO-3: first-class `anglerfish-lure.service` systemd unit (closed in pre-deploy sweep)
 

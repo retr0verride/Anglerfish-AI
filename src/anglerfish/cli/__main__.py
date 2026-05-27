@@ -59,12 +59,18 @@ callback_app = typer.Typer(
     help="Stage 11 honeytoken callback receiver.",
     no_args_is_help=True,
 )
+dashboard_app = typer.Typer(
+    name="dashboard",
+    help="Dashboard service commands.",
+    no_args_is_help=True,
+)
 app.add_typer(config_app)
 app.add_typer(bridge_app)
 app.add_typer(credentials_app)
 app.add_typer(geo_app)
 app.add_typer(lure_app)
 app.add_typer(callback_app)
+app.add_typer(dashboard_app)
 
 
 def _version_callback(value: bool) -> None:
@@ -490,6 +496,64 @@ def callback_serve(
         application,
         host=host,
         port=port,
+        log_level=settings.log_level.value.lower(),
+    )
+
+
+@dashboard_app.command("serve")
+def dashboard_serve(
+    host: Annotated[
+        str | None,
+        typer.Option(
+            "--host",
+            help=(
+                "Interface to bind the dashboard HTTP server to. Defaults to "
+                "settings.dashboard.host (set via ANGLERFISH_DASHBOARD__HOST "
+                "in the env file)."
+            ),
+        ),
+    ] = None,
+    port: Annotated[
+        int | None,
+        typer.Option(
+            "--port",
+            help=("TCP port for the dashboard HTTP server. Defaults to settings.dashboard.port."),
+        ),
+    ] = None,
+) -> None:  # pragma: no cover - exercised in integration
+    """Run the dashboard FastAPI + WebSocket server.
+
+    Closes pre-deploy sweep TODO-2: the previous deployment ran
+    ``uvicorn --factory anglerfish.dashboard.app:create_app`` from
+    the systemd unit, but uvicorn's --factory mode calls the
+    factory with no arguments while ``create_app`` requires a
+    positional ``settings`` argument - production startup was
+    broken on every clean install since Stage 4. This subcommand
+    owns its own uvicorn instance, loads settings explicitly, and
+    surfaces ValidationError as a structured Console panel +
+    typer.Exit(2) the same way ``bridge serve`` does (parallels
+    the Stage 2 lure pattern).
+    """
+    import uvicorn
+
+    from anglerfish.dashboard import create_app
+
+    console = Console()
+    try:
+        settings = load_settings()
+    except ValidationError as exc:
+        console.print(Panel(str(exc), title="[red]Configuration error[/red]"))
+        raise typer.Exit(code=2) from exc
+
+    bind_host = host if host is not None else settings.dashboard.host
+    bind_port = port if port is not None else settings.dashboard.port
+
+    application = create_app(settings)
+    uvicorn.run(
+        application,
+        host=bind_host,
+        port=bind_port,
+        proxy_headers=True,
         log_level=settings.log_level.value.lower(),
     )
 
