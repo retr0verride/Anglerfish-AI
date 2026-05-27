@@ -930,6 +930,47 @@ async def test_handle_command_stream_mid_stream_error_closes_with_partial(
     assert session.history()[-1].response == "hel"
 
 
+async def test_handle_command_stream_accumulator_aborts_past_response_cap(
+    settings: AnglerfishSettings,
+) -> None:
+    """Pre-deploy sweep TODO-9: a flood of small chunks whose sum
+    exceeds ``ollama.max_response_chars`` aborts mid-stream so the
+    accumulator cannot grow past the documented whole-stream cap.
+
+    Per-chunk cap (client-level) is left at the default so this
+    test isolates the accumulator path; client-level cap has its
+    own test in :mod:`tests.llm.test_streaming`.
+    """
+    capped = settings.model_copy(
+        update={
+            "ollama": settings.ollama.model_copy(
+                update={"max_response_chars": 8, "max_chunk_chars": 4},
+            ),
+        },
+    )
+    handler = _ndjson_handler(
+        [
+            {"message": {"content": "AAAA"}, "done": False},  # 4 chars
+            {"message": {"content": "BBBB"}, "done": False},  # 8 chars total - at cap
+            {"message": {"content": "CCCC"}, "done": False},  # 12 - over, abort
+            {"done": True, "prompt_eval_count": 1, "eval_count": 2},
+        ],
+    )
+    service = AIBridgeService(capped, client=_mock_ollama_client(handler))
+    session = _make_session()
+    try:
+        chunks = [c async for c in service.handle_command_stream(session, "ls")]
+    finally:
+        await service.aclose()
+    # First two chunks shipped (8 chars at the boundary); the third
+    # would have pushed past 8 so the loop broke before yielding it.
+    deltas = [c.delta for c in chunks if not c.done]
+    assert deltas == ["AAAA", "BBBB"]
+    assert chunks[-1].done is True
+    # The session record captures only the shipped accumulated text.
+    assert "CCCC" not in session.history()[-1].response
+
+
 async def test_handle_command_stream_output_filter_fires_post_hoc(
     settings: AnglerfishSettings,
 ) -> None:

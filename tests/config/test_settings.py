@@ -137,8 +137,45 @@ def test_scan_cap_above_both_caps_accepted(
     s = AnglerfishSettings(
         dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
         credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
-        ollama=OllamaConfig(max_response_chars=2048),
+        # Drop max_chunk_chars alongside max_response_chars so the
+        # pre-deploy sweep TODO-9 invariant
+        # (chunk_chars <= response_chars) stays satisfied.
+        ollama=OllamaConfig(max_response_chars=2048, max_chunk_chars=2048),
         bridge=BridgeConfig(max_input_chars=2048),
         defense=DefenseConfig(scan_max_chars=8192),
     )
     assert s.defense.scan_max_chars == 8192
+
+
+# ---------------------------------------------------------------------------
+# Pre-deploy sweep TODO-9: ollama.max_chunk_chars must be <=
+# ollama.max_response_chars. A per-chunk cap above the whole-stream
+# cap would let one chunk smuggle more bytes than the stream contract.
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_cap_above_response_cap_is_rejected(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    with pytest.raises(
+        ValidationError,
+        match=r"max_chunk_chars.*max_response_chars",
+    ):
+        AnglerfishSettings(
+            dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+            credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+            ollama=OllamaConfig(max_response_chars=2048, max_chunk_chars=4096),
+        )
+
+
+def test_chunk_cap_equal_to_response_cap_accepted(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    s = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        ollama=OllamaConfig(max_response_chars=4096, max_chunk_chars=4096),
+    )
+    assert s.ollama.max_chunk_chars == 4096

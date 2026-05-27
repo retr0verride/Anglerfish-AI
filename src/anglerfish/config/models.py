@@ -144,6 +144,29 @@ class OllamaConfig(BaseModel):
     connect_timeout_s: float = Field(default=5.0, gt=0.0, le=60.0)
     max_response_tokens: int = Field(default=512, gt=0, le=4096)
     max_response_chars: int = Field(default=8192, gt=0, le=65536)
+    max_chunk_chars: int = Field(
+        default=4096,
+        gt=0,
+        le=65536,
+        description=(
+            "Per-NDJSON-chunk hard cap on the bridge streaming path. "
+            "Closed via pre-deploy sweep TODO-9: the post-stream "
+            "max_response_chars cap only runs AFTER the whole stream "
+            "completes, so without this knob a single pathological "
+            "chunk (compromised model, attacker steering toward "
+            "megabyte single-token responses) could reflect straight "
+            "to the attacker terminal + push lure memory before the "
+            "assembly cap runs. The LLMClient stream parser raises "
+            "OllamaUnavailableError on a chunk that exceeds this cap, "
+            "which aborts the stream cleanly. Default 4096 is well "
+            "above any realistic per-token chunk size; raise only if "
+            "operator-instrumented Ollama is configured for "
+            "deliberately long emit chunks. Must be <= "
+            "max_response_chars (a per-chunk cap above the whole-"
+            "stream cap is operator-confusing); AnglerfishSettings "
+            "enforces at validation time."
+        ),
+    )
     temperature: float = Field(default=0.4, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
     warmup_refresh_seconds: float = Field(

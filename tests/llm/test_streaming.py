@@ -217,3 +217,64 @@ def test_chat_chunk_is_frozen() -> None:
     chunk = ChatChunk(delta="hi", done=False)
     with pytest.raises(ValidationError):
         chunk.delta = "other"  # type: ignore[misc]
+
+
+async def test_stream_chat_oversized_chunk_aborts_with_unavailable() -> None:
+    """Pre-deploy sweep TODO-9: a single chunk exceeding
+    OllamaConfig.max_chunk_chars raises OllamaUnavailableError mid-
+    stream so the chunk never reflects to the caller (lure terminal).
+    """
+    cap = 32
+    handler = _ndjson_handler(
+        [
+            {"message": {"role": "assistant", "content": "ok"}, "done": False},
+            # 100-char delta blows the cap.
+            {"message": {"role": "assistant", "content": "x" * 100}, "done": False},
+            {"done": True, "prompt_eval_count": 0, "eval_count": 0},
+        ],
+    )
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:11434")
+    client = LLMClient(
+        OllamaConfig(
+            fast_model="fast:7b",
+            deep_model="deep:14b",
+            max_chunk_chars=cap,
+        ),
+        http_client=http_client,
+    )
+    try:
+        with pytest.raises(OllamaUnavailableError, match="max_chunk_chars"):
+            await _collect(client.stream_chat([ChatMessage(role="user", content="hi")]))
+    finally:
+        await client.aclose()
+
+
+async def test_stream_chat_chunk_at_exact_cap_passes_through() -> None:
+    """Cap is inclusive of the equal-length boundary; a delta at
+    exactly the cap MUST NOT raise (the abort fires on strictly
+    greater)."""
+    cap = 16
+    handler = _ndjson_handler(
+        [
+            {"message": {"role": "assistant", "content": "y" * cap}, "done": False},
+            {"done": True, "prompt_eval_count": 0, "eval_count": 0},
+        ],
+    )
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:11434")
+    client = LLMClient(
+        OllamaConfig(
+            fast_model="fast:7b",
+            deep_model="deep:14b",
+            max_chunk_chars=cap,
+        ),
+        http_client=http_client,
+    )
+    try:
+        chunks = await _collect(
+            client.stream_chat([ChatMessage(role="user", content="hi")]),
+        )
+    finally:
+        await client.aclose()
+    assert chunks[0].delta == "y" * cap

@@ -107,6 +107,18 @@ class AnglerfishSettings(BaseSettings):
                 "input and injections in the tail pass undetected. Either raise "
                 "scan_max_chars or lower max_input_chars.",
             )
+        # Pre-deploy sweep TODO-9: per-chunk cap MUST NOT exceed the
+        # whole-stream cap; otherwise a single chunk could legally
+        # carry more bytes than the assembled stream is allowed to,
+        # which is operator-confusing and silently shifts the
+        # truncation boundary.
+        if self.ollama.max_chunk_chars > self.ollama.max_response_chars:
+            raise ValueError(
+                f"ollama.max_chunk_chars ({self.ollama.max_chunk_chars}) must be <= "
+                f"ollama.max_response_chars ({self.ollama.max_response_chars}). "
+                "A per-chunk cap above the whole-stream cap is operator-confusing "
+                "and lets one chunk smuggle more bytes than the stream allows.",
+            )
         return self
 
 

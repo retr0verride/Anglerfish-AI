@@ -921,10 +921,29 @@ class AIBridgeService:
                     persona=session.persona,
                     persistence_events=session.persistence_events,
                 )
+                # Pre-deploy sweep TODO-9: bound the accumulator so a
+                # flood of small chunks cannot push lure memory past
+                # the documented whole-stream cap. The per-chunk cap
+                # in LLMClient catches one pathological chunk; this
+                # catches N small ones whose sum exceeds the
+                # max_response_chars contract. The projected total
+                # is checked BEFORE append/yield so the over-cap
+                # chunk never reflects to the lure and the session
+                # record matches what shipped.
+                response_cap = self._settings.ollama.max_response_chars
+                accumulated_chars = 0
                 try:
                     async for chunk in self._client.stream_chat(messages, budget=budget):
                         if chunk.delta:
+                            if accumulated_chars + len(chunk.delta) > response_cap:
+                                error = OllamaUnavailableError(
+                                    f"Ollama stream exceeded max_response_chars cap "
+                                    f"({accumulated_chars + len(chunk.delta)} > "
+                                    f"{response_cap}); aborting",
+                                )
+                                break
                             accumulated.append(chunk.delta)
+                            accumulated_chars += len(chunk.delta)
                             bridge_chunk = BridgeChunk(
                                 delta=chunk.delta,
                                 source=ResponseSource.AI,

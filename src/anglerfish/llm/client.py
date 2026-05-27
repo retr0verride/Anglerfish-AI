@@ -278,9 +278,19 @@ class LLMClient:
                 f"Ollama stream failed: {type(exc).__name__}: {exc}",
             ) from exc
 
-    @staticmethod
-    async def _iter_stream_lines(response: httpx.Response) -> AsyncIterator[ChatChunk]:
-        """Parse Ollama's NDJSON stream into :class:`ChatChunk` objects."""
+    async def _iter_stream_lines(self, response: httpx.Response) -> AsyncIterator[ChatChunk]:
+        """Parse Ollama's NDJSON stream into :class:`ChatChunk` objects.
+
+        Pre-deploy sweep TODO-9: each chunk's ``delta`` is bounded
+        by ``settings.ollama.max_chunk_chars``; an oversized chunk
+        raises :class:`OllamaUnavailableError` which aborts the
+        stream cleanly. The post-stream ``max_response_chars`` cap
+        only runs AFTER assembly, so without this gate a single
+        pathological chunk would reflect straight to the attacker
+        terminal + spike lure memory before the assembly cap
+        could fire.
+        """
+        chunk_cap = self._config.max_chunk_chars
         async for raw_line in response.aiter_lines():
             line = raw_line.strip()
             if not line:
@@ -301,6 +311,11 @@ class LLMClient:
                 content = message.get("content")
                 if isinstance(content, str):
                     delta = content
+            if len(delta) > chunk_cap:
+                raise OllamaUnavailableError(
+                    f"Ollama stream chunk delta exceeded max_chunk_chars cap: "
+                    f"got {len(delta)} chars, cap {chunk_cap}",
+                )
             done = bool(payload.get("done", False))
             usage: TokenUsage | None = _parse_usage(payload) if done else None
             yield ChatChunk(delta=delta, done=done, usage=usage)

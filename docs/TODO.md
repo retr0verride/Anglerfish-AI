@@ -219,35 +219,39 @@ The pre-existing ``sessions`` leak predates Stage 5 (Stage 1A);
 Stage 5 slice 5 added the symmetric ``_budgets`` leak. Surfaced
 during the Stage 5 retroactive audit. Owner: TBD.
 
-## TODO-9: per-chunk size cap on the bridge streaming response
+## TODO-9: per-chunk size cap on the bridge streaming response (closed in pre-deploy sweep)
 
-`LLMClient.stream_chat` and `BridgeClient.command_stream` both
-iterate NDJSON lines from the upstream without per-line size
-enforcement. Ollama controls chunk size on the bridge side; the
-lure trusts the bridge (and the bridge enforces overall
-``ollama.max_response_chars`` only on the buffered path).
+Two enforcement layers landed in the pre-deploy sweep:
 
-In the streaming path:
+1. **Per-chunk cap** (``ollama.max_chunk_chars``, default 4096,
+   max 65536). ``LLMClient._iter_stream_lines`` raises
+   ``OllamaUnavailableError`` on any NDJSON chunk whose ``delta``
+   exceeds the cap; the stream aborts cleanly before the chunk
+   reflects to the lure terminal. The cap MUST be <=
+   ``ollama.max_response_chars`` (a per-chunk cap above the
+   whole-stream cap would let one chunk smuggle more bytes than
+   the stream allows); ``AnglerfishSettings._validate_*`` enforces
+   the invariant at config-load time.
 
-- `defense.scan_max_chars` is only applied to the assembled string
-  after the stream completes; an oversized chunk could be
-  reflected straight to the attacker terminal before the assembly
-  pass runs.
-- A pathological Ollama (compromised model output, attacker
-  steering toward megabyte responses) could push the lure to
-  buffer arbitrary memory inside a single chunk while
-  ``aiter_lines`` waits for the next newline.
+2. **Accumulator bound** in ``AIBridgeService.handle_command_stream``:
+   tracks the running character total and aborts the stream the
+   first time the projected total exceeds
+   ``ollama.max_response_chars``. The over-cap chunk is NEVER
+   appended to the accumulator and NEVER yielded to the lure -
+   the session record matches what shipped. Catches the N-small-
+   chunks-summing-over-cap variant the per-chunk cap cannot see.
 
-Fixes to consider:
+Tests:
 
-- Add a `max_chunk_chars` config knob (mirrors `max_response_chars`)
-  enforced inside ``_iter_stream_lines`` and ``_parse_stream_chunk``;
-  raising on oversized chunks aborts the stream cleanly.
-- Bound the assembled-text accumulator in `handle_command_stream`
-  so a flood of small chunks cannot grow it past
-  ``ollama.max_response_chars``.
-
-Surfaced during the Stage 5 retroactive audit sweep. Owner: TBD.
+- ``tests/llm/test_streaming.py``: oversized chunk raises with
+  matching message; chunk at exactly the cap passes through
+  (the abort is strictly greater).
+- ``tests/config/test_settings.py``: chunk cap above response cap
+  rejected at validation; chunk cap equal to response cap
+  accepted.
+- ``tests/bridge/test_service.py``: accumulator aborts after the
+  projected total exceeds the cap, the over-cap chunk does NOT
+  appear in the session record.
 
 ## Pre-deploy sweep
 
