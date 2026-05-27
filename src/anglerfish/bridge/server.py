@@ -322,6 +322,11 @@ def create_bridge_app(
         # record_threat_assessment honeytoken-placement hook to
         # look up.
         service.record_session_source_ip(ctx.session_id, req.source_ip)
+        # Pre-deploy sweep TODO-8: seed the activity timestamp so
+        # idle-eviction sees the session as live from its opening
+        # moment (a session whose first command never lands still
+        # gets pruned after the cutoff).
+        service.record_session_activity(ctx.session_id)
         if selection is not None:
             service.record_persona_selected(
                 session_id=ctx.session_id,
@@ -366,10 +371,21 @@ def create_bridge_app(
         ``latency_ms`` and ``cwd``. Without the flag, returns a single
         :class:`CommandResponse` body (protocol v2 behaviour).
         """
+        # Pre-deploy sweep TODO-8: sweep idle sessions before the
+        # lookup. Eviction is amortised across every per-session
+        # command request (no background task). Drop any evicted
+        # SessionContext entries the service no longer tracks so
+        # the server-side dict stays in lock-step with the service.
+        evicted = service.evict_idle_sessions()
+        if evicted:
+            async with lock:
+                for sid in evicted:
+                    sessions.pop(sid, None)
         async with lock:
             ctx = sessions.get(session_id)
         if ctx is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        service.record_session_activity(session_id)
         # Stage 10: classify pre-LLM so the current command's prompt
         # build sees the new install in its persistence_events block.
         # Classifier errors are swallowed inside classify_command +

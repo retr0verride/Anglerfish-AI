@@ -201,6 +201,13 @@ class AIBridgeService:
         # import) and avoids tying the threshold-hook to the HTTP
         # process topology.
         self._source_ip_by_session: dict[UUID, str] = {}
+        # Pre-deploy sweep TODO-8: per-session monotonic last-activity
+        # timestamps. Updated by record_session_activity (every
+        # session_open + every per-session HTTP request); read by
+        # evict_idle_sessions which the server invokes piggybacked on
+        # every per-session call so eviction is amortised without a
+        # background task. Cutoff is settings.bridge.session_idle_eviction_s.
+        self._session_last_activity: dict[UUID, float] = {}
         self._session_store_reader = session_store_reader
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
@@ -291,6 +298,39 @@ class AIBridgeService:
         # Stage 11 per-session state cleanup.
         self._honeytoken_placed_for.discard(session_id)
         self._source_ip_by_session.pop(session_id, None)
+        # Pre-deploy sweep TODO-8: drop the activity timestamp last
+        # so a racing evict_idle_sessions() call cannot see this id
+        # as both stale + still tracked.
+        self._session_last_activity.pop(session_id, None)
+
+    def record_session_activity(self, session_id: UUID) -> None:
+        """Mark ``session_id`` as live as of now (pre-deploy sweep TODO-8).
+
+        Called by the HTTP server on every per-session request
+        (session_open + command POST) so :meth:`evict_idle_sessions`
+        sees an accurate liveness signal. Safe for unknown ids
+        (creates a fresh entry).
+        """
+        self._session_last_activity[session_id] = self._monotonic()
+
+    def evict_idle_sessions(self) -> list[UUID]:
+        """Drop per-session state for sessions idle past the cutoff.
+
+        Returns the list of evicted session ids so the HTTP server
+        can drop its own SessionContext map entries in lock-step.
+        Cutoff is ``settings.bridge.session_idle_eviction_s``.
+
+        Mirrors :class:`BridgeRateLimiter._evict_idle_locked`'s
+        piggyback pattern: callers invoke this on every per-session
+        access so eviction is amortised across normal traffic
+        without spinning up a background task. Closed via
+        pre-deploy sweep TODO-8.
+        """
+        cutoff = self._monotonic() - self._settings.bridge.session_idle_eviction_s
+        stale = [sid for sid, last in self._session_last_activity.items() if last < cutoff]
+        for sid in stale:
+            self.end_session_budget(sid)
+        return stale
 
     def record_threat_assessment(
         self,

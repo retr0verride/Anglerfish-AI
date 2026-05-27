@@ -457,6 +457,27 @@ class BridgeConfig(BaseModel):
             "analysis runs where the strategy should run unbounded)."
         ),
     )
+    session_idle_eviction_s: float = Field(
+        default=300.0,
+        gt=0.0,
+        le=86_400.0,
+        description=(
+            "Per-session in-memory state TTL on the bridge side. "
+            "Closed via pre-deploy sweep TODO-8: per-session dicts "
+            "(_budgets, _last_clarification, _wasted_ms, _latest_threat, "
+            "_honeytoken_placed_for, _source_ip_by_session) + the HTTP "
+            "server's SessionContext map are drained when a session "
+            "issues no commands for this many seconds. Mirrors the "
+            "rate limiter's bucket_idle_eviction_s pattern: eviction "
+            "runs piggybacked on every per-session access (not a "
+            "background task) so the cost is amortised across normal "
+            "traffic. Default 300s (5 min) matches the lure keepalive "
+            "(3 missed * 60s = 180s) plus a comfortable margin; lower "
+            "for more aggressive memory reclamation, raise for long-"
+            "running interactive engagements where minutes-between-"
+            "commands is legitimate."
+        ),
+    )
     intent_extraction_enabled: bool = Field(
         default=True,
         description=(

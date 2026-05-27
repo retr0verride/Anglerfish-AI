@@ -112,6 +112,39 @@ def test_delete_unknown_session_is_silent(client: TestClient) -> None:
     assert r.status_code == 204
 
 
+def test_command_after_idle_eviction_returns_404(
+    settings: AnglerfishSettings,
+) -> None:
+    """Pre-deploy sweep TODO-8: a session that ages past the
+    idle-eviction cutoff is dropped from both the service per-
+    session dicts and the server's SessionContext map. The next
+    per-command request returns 404 cleanly.
+    """
+    clock_value = [1000.0]
+
+    def fake_clock() -> float:
+        return clock_value[0]
+
+    ai_client = _mock_client(
+        lambda _r: httpx.Response(200, json={"message": {"content": "ok"}}),
+    )
+    service = AIBridgeService(settings, client=ai_client, monotonic=fake_clock)
+    app = create_bridge_app(service)
+    with TestClient(app) as c:
+        start = c.post(
+            "/api/v1/session",
+            json={"source_ip": "203.0.113.7", "username": "root"},
+        )
+        sid = start.json()["session_id"]
+        # Sanity: command works while the session is fresh.
+        cmd = c.post(f"/api/v1/session/{sid}/command", json={"command": "ls"})
+        assert cmd.status_code == 200
+        # Age past the cutoff (default 300s).
+        clock_value[0] = 1000.0 + 1000.0
+        cmd2 = c.post(f"/api/v1/session/{sid}/command", json={"command": "ls"})
+        assert cmd2.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Stage 2A: CommandRequest gained an optional fs_context field. The bridge
 # accepts it without rejecting requests that omit it (Cowrie v1 path) and

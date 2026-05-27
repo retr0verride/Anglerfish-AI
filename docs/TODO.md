@@ -187,37 +187,39 @@ beyond the file path (verified during the Stage 5 audit sweep).
 Surfaced during the Stage 5 retroactive audit sweep of the
 config and wizard subsystems. Owner: TBD.
 
-## TODO-8: bridge per-session state leaks if lure skips DELETE
+## TODO-8: bridge per-session state leaks if lure skips DELETE (closed in pre-deploy sweep)
 
-`AIBridgeService._budgets` (Stage 5 slice 5) and the existing
-`bridge.server.sessions` dict are both populated at session open and
-drained by the `DELETE /api/v1/session/{id}` endpoint. An attacker
-who hangs up without a clean session-close (the lure's normal
-behaviour on TCP reset is to send DELETE, but failures swallow) or
-a bridge restart leaves entries behind:
+Both the service-side per-session dicts
+(``_budgets``, ``_last_clarification``, ``_wasted_ms``,
+``_latest_threat``, ``_honeytoken_placed_for``,
+``_source_ip_by_session``) and the HTTP server's
+``sessions: dict[UUID, SessionContext]`` map are now drained by an
+idle-timeout sweep mirroring the rate limiter's
+``bucket_idle_eviction_s`` pattern:
 
-- ``sessions`` grows by one ``SessionContext`` per orphaned session
-  (~1 KB plus the per-session history window).
-- ``_budgets`` grows by one ``TokenBudget`` per orphaned session
-  (small but unbounded).
+- ``AIBridgeService._session_last_activity`` tracks the monotonic
+  timestamp of each session's most-recent per-session API call.
+- ``AIBridgeService.record_session_activity(session_id)`` is called
+  by the HTTP server on every ``POST /api/v1/session`` and
+  ``POST /api/v1/session/{id}/command`` request.
+- ``AIBridgeService.evict_idle_sessions() -> list[UUID]`` drops
+  every per-session dict entry whose timestamp is older than
+  ``settings.bridge.session_idle_eviction_s`` (default 300s)
+  and returns the evicted ids; the HTTP server drops the
+  matching ``sessions`` map entries in lock-step.
+- The eviction runs piggybacked on every per-command request so
+  the cost is amortised across normal traffic - no background
+  task, no extra IPC.
 
-In practice the rate-limiter's bucket eviction (5-minute idle) and
-the lure's keepalive (3 missed = disconnect) keep things bounded
-in the hot path. A long-running bridge with attacker churn still
-accumulates dead entries.
+Default 300s matches the lure keepalive (3 missed * 60s = 180s)
+plus a comfortable margin; operators with long-running interactive
+engagements raise via ``ANGLERFISH_BRIDGE__SESSION_IDLE_EVICTION_S``.
 
-Two viable fixes (both deferred):
-
-- Idle-timeout sweep on the sessions dict, mirroring the rate
-  limiter's ``bucket_idle_eviction_s`` pattern. Drop budget +
-  context for sessions with no commands in the last N minutes.
-- Have the bridge HTTP middleware notice the lure-side
-  ``X-Anglerfish-Last-Activity-At`` (a new header) and use it to
-  prune. More plumbing, less reliable than a server-side sweep.
-
-The pre-existing ``sessions`` leak predates Stage 5 (Stage 1A);
-Stage 5 slice 5 added the symmetric ``_budgets`` leak. Surfaced
-during the Stage 5 retroactive audit. Owner: TBD.
+Tests cover: per-session dict drain when a session ages past the
+cutoff, live sessions surviving when others go stale,
+``end_session_budget`` cleaning up the new activity timestamp, and
+the integration path where a stale session returns 404 on the
+next command request.
 
 ## TODO-9: per-chunk size cap on the bridge streaming response (closed in pre-deploy sweep)
 

@@ -930,6 +930,104 @@ async def test_handle_command_stream_mid_stream_error_closes_with_partial(
     assert session.history()[-1].response == "hel"
 
 
+# ---------------------------------------------------------------------------
+# Pre-deploy sweep TODO-8: idle-session eviction
+# ---------------------------------------------------------------------------
+
+
+def test_evict_idle_sessions_drops_per_session_dicts(
+    settings: AnglerfishSettings,
+) -> None:
+    """Per-session state is fully drained when the session ages past
+    the configured cutoff. Mirrors the rate limiter's pattern; the
+    HTTP server calls this piggybacked on every per-session request.
+    """
+    clock_value = [1000.0]
+
+    def fake_clock() -> float:
+        return clock_value[0]
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(lambda _r: httpx.Response(200, json={})),
+        monotonic=fake_clock,
+    )
+    try:
+        sid = uuid4()
+        # Mark live + create per-session state.
+        service.record_session_activity(sid)
+        budget = service.budget_for(sid)
+        assert budget is not None
+        # Advance time past the cutoff (default 300s).
+        clock_value[0] = 1000.0 + 301.0
+        evicted = service.evict_idle_sessions()
+        assert evicted == [sid]
+        # Every per-session dict is now drained.
+        assert sid not in service._budgets  # type: ignore[attr-defined]
+        assert sid not in service._session_last_activity  # type: ignore[attr-defined]
+        # A fresh budget_for call rebuilds (sessions can legitimately
+        # come back later if the client retries).
+        assert service.budget_for(sid) is not None
+    finally:
+        import asyncio as _asyncio
+
+        _asyncio.run(service.aclose())
+
+
+def test_evict_idle_sessions_keeps_live_sessions(
+    settings: AnglerfishSettings,
+) -> None:
+    """Sessions with recent activity (under the cutoff) survive eviction."""
+    clock_value = [1000.0]
+
+    def fake_clock() -> float:
+        return clock_value[0]
+
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(lambda _r: httpx.Response(200, json={})),
+        monotonic=fake_clock,
+    )
+    try:
+        live = uuid4()
+        stale = uuid4()
+        service.record_session_activity(stale)  # at t=1000
+        clock_value[0] = 1500.0
+        service.record_session_activity(live)  # at t=1500
+        # Cutoff is now - 300 = 1500. stale's t=1000 < 1500 (evicted);
+        # live's t=1500 == cutoff so NOT strictly less (survives).
+        clock_value[0] = 1800.0
+        evicted = service.evict_idle_sessions()
+        assert evicted == [stale]
+        assert live in service._session_last_activity  # type: ignore[attr-defined]
+        assert stale not in service._session_last_activity  # type: ignore[attr-defined]
+    finally:
+        import asyncio as _asyncio
+
+        _asyncio.run(service.aclose())
+
+
+def test_end_session_budget_drops_activity_timestamp(
+    settings: AnglerfishSettings,
+) -> None:
+    """end_session_budget cleans up the new activity dict too so a
+    DELETE-on-time-and-then-eviction sequence cannot resurrect the id.
+    """
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(lambda _r: httpx.Response(200, json={})),
+    )
+    try:
+        sid = uuid4()
+        service.record_session_activity(sid)
+        service.end_session_budget(sid)
+        assert sid not in service._session_last_activity  # type: ignore[attr-defined]
+    finally:
+        import asyncio as _asyncio
+
+        _asyncio.run(service.aclose())
+
+
 async def test_handle_command_stream_accumulator_aborts_past_response_cap(
     settings: AnglerfishSettings,
 ) -> None:
