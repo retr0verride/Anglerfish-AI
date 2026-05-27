@@ -20,7 +20,18 @@ EnvironmentFile=/etc/anglerfish/anglerfish.env
 ExecStart=/opt/anglerfish/venv/bin/anglerfish dashboard serve
 Restart=on-failure
 RestartSec=3s
+TimeoutStopSec=10s
 
+# Hardening — match the bridge + lure unit primitives so the dashboard
+# does not lag behind on defense-in-depth. ReadWritePaths must include
+# /var/log/anglerfish: the dashboard writes audit events from auth,
+# routes, overrides_publisher, and audit_tailer to
+# /var/log/anglerfish/audit.jsonl (AuditConfig default), which under
+# ProtectSystem=strict would otherwise raise OSError(EROFS) on every
+# login attempt + operator action. CapabilityBoundingSet retains
+# CAP_NET_BIND_SERVICE because operators may rebind the dashboard to
+# a privileged port via ANGLERFISH_DASHBOARD__PORT (parallels the
+# lure unit's reasoning for port 22).
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -35,10 +46,13 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ReadWritePaths=/var/lib/anglerfish
+ReadWritePaths=/var/lib/anglerfish /var/log/anglerfish
+PrivateDevices=yes
 
 [Install]
 WantedBy=multi-user.target
