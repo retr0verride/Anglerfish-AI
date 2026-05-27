@@ -12,13 +12,8 @@ bridge and dashboard read configuration exclusively from
 | `anglerfish-firewall.service`     | oneshot  | Apply nftables rules locking down the service NIC        |
 | `anglerfish-firstboot.service`    | oneshot  | Run the wizard before any other service comes up         |
 | `anglerfish-bridge.service`       | long     | Bridge HTTP API (loopback) consumed by the native lure   |
+| `anglerfish-lure.service`         | long     | Native asyncssh SSH honeypot bound to the bait NIC       |
 | `anglerfish-dashboard.service`    | long     | FastAPI/WebSocket operator UI                            |
-
-The native SSH lure currently runs via `anglerfish lure serve`
-invoked by the operator (or under a hand-rolled systemd unit). A
-first-class `anglerfish-lure.service` shipping in this tree is
-TODO-3 (`docs/TODO.md`); the Cowrie removal in 2026-05 surfaced
-the gap by deleting the only auto-enabled bait-NIC unit.
 
 ## Install
 
@@ -30,8 +25,8 @@ sudo cp systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now anglerfish-firewall.service
 sudo systemctl enable --now anglerfish-firstboot.service
-sudo systemctl enable anglerfish-bridge.service anglerfish-dashboard.service
-sudo systemctl start anglerfish-bridge.service anglerfish-dashboard.service
+sudo systemctl enable anglerfish-bridge.service anglerfish-lure.service anglerfish-dashboard.service
+sudo systemctl start anglerfish-bridge.service anglerfish-lure.service anglerfish-dashboard.service
 ```
 
 ## Required system state

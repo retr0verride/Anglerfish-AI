@@ -24,13 +24,10 @@ All commands assume:
 | `anglerfish-firewall.service`     | Applies the nftables ruleset at boot.                     |
 | `anglerfish-firstboot.service`    | Runs the wizard on first boot (and never again).          |
 | `anglerfish-bridge.service`       | The LLM bridge HTTP API + orchestrator.                   |
+| `anglerfish-lure.service`         | Native asyncssh SSH honeypot bound to the bait NIC.       |
 | `anglerfish-dashboard.service`    | FastAPI dashboard + WebSocket stream.                     |
 | `anglerfish-geo-update.service`   | One-shot MaxMind GeoLite2 fetch.                          |
 | `anglerfish-geo-update.timer`     | Weekly trigger for the geo-update service.                |
-
-The native SSH lure runs as `anglerfish lure serve`, invoked manually
-or under a hand-rolled systemd unit. A first-class
-`anglerfish-lure.service` is tracked as TODO-3 in `docs/TODO.md`.
 
 `systemctl status <unit>` and `journalctl -u <unit> -f` are your
 two main observation tools.

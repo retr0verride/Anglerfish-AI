@@ -12,6 +12,7 @@ set -e
 UNIT_SRC=/tmp/anglerfish-ai/systemd
 
 UNITS="anglerfish-bridge.service anglerfish-dashboard.service \
+       anglerfish-lure.service \
        anglerfish-firstboot.service anglerfish-firewall.service \
        anglerfish-geo-update.service anglerfish-geo-update.timer"
 
@@ -26,16 +27,18 @@ done
 # fetcher unit runs as that user.
 install -d -o anglerfish -g anglerfish -m 0750 /var/lib/anglerfish/geo
 
+# Lure host-key directory; anglerfish-lure.service generates Ed25519
+# host keys here on first boot via ensure_host_keys(). Pre-creating
+# with the right owner keeps the ProtectSystem=strict + ReadWritePaths
+# constraint working on first start.
+install -d -o anglerfish -g anglerfish -m 0700 /var/lib/anglerfish/lure-keys
+
 systemctl enable anglerfish-firewall.service
 systemctl enable anglerfish-firstboot.service
 systemctl enable anglerfish-bridge.service
 systemctl enable anglerfish-dashboard.service
+systemctl enable anglerfish-lure.service
 systemctl enable anglerfish-geo-update.timer
-
-# The native SSH lure has no first-class systemd unit yet (TODO-3 in
-# docs/TODO.md). Cowrie was removed in 2026-05; until the lure unit
-# ships, operators run `anglerfish lure serve` themselves on bait-NIC
-# deployments.
 
 # First-boot wizard owns tty1 until it completes (it unmasks getty in
 # ExecStartPost). Mask the unit so getty doesn't race the wizard for

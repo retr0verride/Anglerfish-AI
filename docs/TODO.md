@@ -56,27 +56,39 @@ during the Stage 4 scoped re-review.
 
 Owner: TBD. Verify the actual systemd unit text before picking a fix.
 
-## TODO-3: first-class `anglerfish-lure.service` systemd unit
+## TODO-3: first-class `anglerfish-lure.service` systemd unit (closed in pre-deploy sweep)
 
-The native SSH lure has no systemd unit in this tree. Stage 2 shipped
-the lure as a CLI subcommand (`anglerfish lure serve`) and the ISO
-build was never updated to enable it; the only auto-started bait-NIC
-unit was `cowrie.service`, which the 2026-05 Cowrie removal deleted.
-Production deployments need a proper unit:
+``systemd/anglerfish-lure.service`` shipped with the same
+sandboxing primitives as the bridge unit:
+``ProtectSystem=strict``, ``NoNewPrivileges``, ``RestrictNamespaces``,
+``MemoryDenyWriteExecute``, ``SystemCallFilter=@system-service`` with
+``SystemCallErrorNumber=EPERM``, ``ProtectKernel*``, ``LockPersonality``,
+``RestrictSUIDSGID``, etc. ``CapabilityBoundingSet`` +
+``AmbientCapabilities`` grant ``CAP_NET_BIND_SERVICE`` unconditionally
+because operators may rebind the lure to standard SSH (port 22)
+post-wizard via ``ANGLERFISH_LURE__LISTEN_PORT``; the default 2222
+does not need it but granting unconditionally avoids a fail-to-bind
+surprise after a port swap. ``ReadWritePaths`` includes
+``/var/lib/anglerfish`` (for ``lure-keys/`` host-key generation) and
+``/var/log/anglerfish`` (for audit-log appends).
 
-- `systemd/anglerfish-lure.service` with the same sandboxing primitives
-  as `anglerfish-bridge.service` (ProtectSystem=strict, SystemCallFilter,
-  restricted capability bounding set; `CAP_NET_BIND_SERVICE` only if the
-  lure listens below 1024).
-- `iso/config/hooks/normal/0050-systemd-units.hook.chroot` installs +
-  enables the unit alongside bridge / dashboard.
-- The unit's `Environment=ANGLERFISH_LURE__LISTEN_HOST=...` must be
-  populated from the wizard's rendered bait-NIC IP — either via a
-  drop-in or by sourcing the env file (which already has
-  `ANGLERFISH_LURE__*`).
+Ordering: ``After=anglerfish-bridge.service`` +
+``Requires=anglerfish-bridge.service`` since the lure forwards every
+command to the bridge HTTP API; a bridge restart cascades to a lure
+restart automatically.
 
-Owner: TBD. Surfaced during the Cowrie removal; without this, every
-deployment that runs the bait NIC needs a hand-rolled systemd unit.
+ISO build wiring: ``iso/config/hooks/normal/0050-systemd-units.hook.chroot``
+installs + enables the lure unit alongside bridge + dashboard, and
+pre-creates ``/var/lib/anglerfish/lure-keys`` (mode 0700, owned by
+``anglerfish``) so ``ensure_host_keys`` succeeds inside
+``ProtectSystem=strict``. ``systemd/README.md`` + ``docs/RUNBOOK.md``
+service tables list the new unit.
+
+The unit reads bait-NIC listen host from
+``ANGLERFISH_LURE__LISTEN_HOST`` in the env file (the wizard
+populates it for static configs; DHCP configs leave it commented
+and the operator fills the lease IP post-boot per the existing
+runbook).
 
 ## TODO-4: lure SSH banner — Debian suffix never reaches the wire (closed in audit(stage9) sweep)
 
