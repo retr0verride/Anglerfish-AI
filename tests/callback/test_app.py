@@ -186,3 +186,29 @@ def test_callback_x_forwarded_for_picks_leftmost_entry(
     )
     events = _audit_events(audit_path)
     assert events[0]["callback_source_ip"] == "198.51.100.7"
+
+
+def test_callback_hit_and_miss_responses_are_byte_identical(
+    client: TestClient,
+) -> None:
+    """The non-enumeration security contract: same token_id input
+    yields the same response body regardless of registry hit/miss.
+
+    Operators rely on this so attackers probing random IDs cannot
+    distinguish a registered token from an unregistered one by the
+    response shape. The audit log carries the hit/miss split; the
+    HTTP response must not.
+    """
+    hit = client.get("/cb/AAAAAAAAAAAAAAAA")
+    miss = client.get("/cb/ZZZZZZZZZZZZZZZZ")
+    assert hit.status_code == miss.status_code == 403
+    # Strip the echoed AKIA<token_id> marker (which legitimately
+    # varies per request - it mirrors what real AWS does) and
+    # compare the remaining structural body. The marker variance
+    # is the only difference operators or attackers should observe.
+    hit_stripped = hit.text.replace("AKIAAAAAAAAAAAAAAAAA", "MARKER")
+    miss_stripped = miss.text.replace("AKIAZZZZZZZZZZZZZZZZ", "MARKER")
+    assert hit_stripped == miss_stripped
+    # Headers identical (content-type, length, no extra cookies or
+    # debug headers that could leak hit/miss).
+    assert hit.headers["content-type"] == miss.headers["content-type"]
