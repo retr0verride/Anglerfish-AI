@@ -1104,3 +1104,118 @@ class HoneytokensConfig(BaseModel):
                 "receiver at that URL; tokens that point at nothing are "
                 "operator-confusing).",
             )
+
+
+class CounterDeceptionMode(StrEnum):
+    """How an engaged session experiences counter-deception (Stage 12).
+
+    Defined here rather than in
+    :mod:`anglerfish.bridge.strategies.counter_deception` so that
+    :class:`CounterDeceptionConfig` can reference it without a runtime
+    import cycle through :mod:`anglerfish.llm.client`. The strategy
+    module imports the enum back from here.
+    """
+
+    OFF = "off"
+    GARBLE = "garble"
+    TIMEBOMB = "timebomb"
+    BOTH = "both"
+
+
+class CounterDeceptionConfig(BaseModel):
+    """Active counter-deception settings (Stage 12). See
+    ``docs/design/STAGE_12_counter_deception.md``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Stage 12 master switch. Default False: the bridge does NOT "
+            "engage counter-deception on any session until the operator "
+            "explicitly flips this flag (env var or POST /api/settings/"
+            "features). Wizard prompts the operator to read the "
+            "THREAT_MODEL.md Active counter-deception section before "
+            "enabling - the heaviest install gate any stage uses, "
+            "matching the responsibility transfer (we are now "
+            "deliberately producing wrong information to harm attacker "
+            "workflows, and an honest visitor who crosses the threshold "
+            "experiences that harm)."
+        ),
+    )
+    engagement_threshold: int = Field(
+        default=70,
+        ge=0,
+        le=100,
+        description=(
+            "ThreatAssessment.score threshold that engages counter-"
+            "deception. Higher than honeytokens.placement_threshold "
+            "(default 50) so counter-deception engages on a strict "
+            "subset of the sessions Stage 11 plants tokens for; an "
+            "operator who turns both on gets a tokens-then-tokens-plus-"
+            "counter-deception ramp. 0 = engage on every session; "
+            "100 = effectively never."
+        ),
+    )
+    mode: CounterDeceptionMode = Field(
+        default=CounterDeceptionMode.BOTH,
+        description=(
+            "Which strategy or strategies engage when a session "
+            "crosses the threshold. off = no engagement even when "
+            "enabled=True (rollback override); garble = lure-side "
+            "byte corruption only; timebomb = bridge-LLM prompt "
+            "amendment only; both = both strategies. Default both "
+            "matches the wizard prompt: an operator who acknowledged "
+            "Stage 12 by definition wants both."
+        ),
+    )
+    garble_paths: tuple[str, ...] = Field(
+        default=(
+            "/root/.ssh/id_rsa",
+            "/root/.ssh/id_ed25519",
+            "/root/.aws/credentials",
+            "/root/.aws/config",
+        ),
+        description=(
+            "Fakefs paths the lure garbles when an engaged session "
+            "cats them. Defaults cover the two highest-signal honeytoken "
+            "shapes Stage 11 plants. Empty tuple = garbling disabled "
+            "even when mode is GARBLE or BOTH (operators who want only "
+            "the time-bomb effect set mode=TIMEBOMB)."
+        ),
+    )
+    timebomb_cold_to_mild: int = Field(
+        default=6,
+        ge=1,
+        le=1000,
+        description=(
+            "command_count at which the time-bomb shifts from cold "
+            "(no prompt amendment) to mild (one factual error per "
+            "response). Default 6 leaves the first chain of commands "
+            "answered correctly so the attacker stays engaged before "
+            "the deception ramps."
+        ),
+    )
+    timebomb_mild_to_severe: int = Field(
+        default=16,
+        ge=2,
+        le=1000,
+        description=(
+            "command_count at which the time-bomb shifts from mild to "
+            "severe (two to three errors per response, confidently "
+            "asserted). Must be strictly greater than "
+            "timebomb_cold_to_mild; the post-init validator enforces."
+        ),
+    )
+
+    def model_post_init(self, _context: object) -> None:
+        if self.timebomb_mild_to_severe <= self.timebomb_cold_to_mild:
+            raise ValueError(
+                "CounterDeceptionConfig.timebomb_mild_to_severe "
+                f"({self.timebomb_mild_to_severe}) must be strictly "
+                "greater than timebomb_cold_to_mild "
+                f"({self.timebomb_cold_to_mild}); the bands would "
+                "otherwise collapse and the severe instruction would "
+                "fire before the mild one had effect.",
+            )

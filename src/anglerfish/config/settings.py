@@ -29,6 +29,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from anglerfish.config.models import (
     AuditConfig,
     BridgeConfig,
+    CounterDeceptionConfig,
     CredentialsConfig,
     DashboardConfig,
     DefenseConfig,
@@ -82,6 +83,7 @@ class AnglerfishSettings(BaseSettings):
     audit: AuditConfig = Field(default_factory=AuditConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     honeytokens: HoneytokensConfig = Field(default_factory=HoneytokensConfig)
+    counter_deception: CounterDeceptionConfig = Field(default_factory=CounterDeceptionConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")
