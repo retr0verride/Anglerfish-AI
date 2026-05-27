@@ -113,3 +113,80 @@ def test_save_overwrites_existing(tmp_path: Path) -> None:
     loaded = load_answers(target)
     assert loaded is not None
     assert loaded.bait_interface == "ens1"
+
+
+# ---------------------------------------------------------------------------
+# Pre-deploy sweep TODO-7: SecretStr round-trip + repr masking
+# ---------------------------------------------------------------------------
+
+
+def test_secret_fields_round_trip_plaintext_through_save_and_load(
+    tmp_path: Path,
+) -> None:
+    """The bcrypt hash + MaxMind licence key survive save/load with their
+    plaintext intact. The custom @field_serializer unwraps the SecretStr
+    before JSON emit so ``--reconfigure`` reads back the actual hash, not
+    pydantic's masked ``"**********"`` literal.
+    """
+    from pydantic import SecretStr
+
+    bcrypt_hash = "$2b$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234"
+    license_key = "ABCDEFGH12345678"  # not a real credential
+    original = _answers(
+        dashboard_admin_password_hash=SecretStr(bcrypt_hash),
+        maxmind_license_key=SecretStr(license_key),
+    )
+    target = tmp_path / "wizard.json"
+    save_answers(original, target)
+
+    # Plaintext written to disk (the file is 0600 + root-owned in
+    # production; this is the existing trust boundary).
+    on_disk = json.loads(target.read_text("utf-8"))
+    assert on_disk["dashboard_admin_password_hash"] == bcrypt_hash
+    assert on_disk["maxmind_license_key"] == license_key
+    # The default pydantic masked literal MUST NOT appear.
+    assert "**********" not in target.read_text("utf-8")
+
+    loaded = load_answers(target)
+    assert loaded is not None
+    assert loaded.dashboard_admin_password_hash is not None
+    assert loaded.maxmind_license_key is not None
+    assert loaded.dashboard_admin_password_hash.get_secret_value() == bcrypt_hash
+    assert loaded.maxmind_license_key.get_secret_value() == license_key
+
+
+def test_secret_fields_repr_is_masked() -> None:
+    """SecretStr's repr/str show the masked literal so an unintended
+    log/traceback never leaks the bcrypt hash or licence key.
+    """
+    from pydantic import SecretStr
+
+    answers = _answers(
+        dashboard_admin_password_hash=SecretStr(
+            "$2b$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234",
+        ),
+        maxmind_license_key=SecretStr("SHHH-DO-NOT-LEAK"),
+    )
+    rendered = repr(answers)
+    assert "SHHH-DO-NOT-LEAK" not in rendered
+    assert "$2b$12" not in rendered
+    assert "**********" in rendered
+
+
+def test_secret_fields_length_bounds_enforced() -> None:
+    """The pre-sweep ``min_length``/``max_length`` on the SecretStr
+    fields are re-applied via the new ``_secret_length_bounds``
+    model validator (the Field bounds do not apply through SecretStr).
+    """
+    from pydantic import SecretStr, ValidationError
+
+    # MaxMind licence key must be 8..64 chars.
+    with pytest.raises(ValidationError, match="maxmind_license_key length"):
+        _answers(maxmind_license_key=SecretStr("short"))
+    with pytest.raises(ValidationError, match="maxmind_license_key length"):
+        _answers(maxmind_license_key=SecretStr("x" * 65))
+    # Bcrypt hash must be 1..256 chars.
+    with pytest.raises(ValidationError, match="dashboard_admin_password_hash length"):
+        _answers(dashboard_admin_password_hash=SecretStr(""))
+    with pytest.raises(ValidationError, match="dashboard_admin_password_hash length"):
+        _answers(dashboard_admin_password_hash=SecretStr("x" * 257))

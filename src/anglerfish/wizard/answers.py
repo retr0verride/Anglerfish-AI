@@ -27,6 +27,8 @@ from pydantic import (
     Field,
     HttpUrl,
     IPvAnyAddress,
+    SecretStr,
+    field_serializer,
     model_validator,
 )
 
@@ -98,14 +100,18 @@ class WizardAnswers(BaseModel):
         min_length=1,
         max_length=64,
     )
-    dashboard_admin_password_hash: str | None = Field(
+    dashboard_admin_password_hash: SecretStr | None = Field(
         default=None,
         description=(
             "bcrypt-hashed dashboard admin password. Set by the wizard from "
             "the operator's plaintext input. None ⇒ dashboard runs in open "
-            "mode (only safe behind a fully-isolated service NIC)."
+            "mode (only safe behind a fully-isolated service NIC). "
+            "SecretStr ⇒ tracebacks and unintended repr() calls show "
+            "``SecretStr('**********')`` rather than the bcrypt hash; "
+            "a custom ``field_serializer`` unwraps to plaintext for the "
+            "on-disk JSON so --reconfigure's blank-to-keep round-trip "
+            "stays intact. Closed via pre-deploy sweep TODO-7."
         ),
-        max_length=256,
     )
 
     # AI inference
@@ -123,15 +129,15 @@ class WizardAnswers(BaseModel):
 
     # Geo enrichment — MaxMind licence key is optional; without it
     # operators must drop pre-downloaded GeoLite2 .mmdb files in place.
-    maxmind_license_key: str | None = Field(
+    maxmind_license_key: SecretStr | None = Field(
         default=None,
         description=(
             "MaxMind licence key. When supplied, the first-boot oneshot "
             "anglerfish-geo-update.service downloads the GeoLite2-City "
-            "and GeoLite2-ASN databases."
+            "and GeoLite2-ASN databases. SecretStr per pre-deploy sweep "
+            "TODO-7; the same field_serializer that handles "
+            "dashboard_admin_password_hash unwraps this for on-disk JSON."
         ),
-        min_length=8,
-        max_length=64,
     )
 
     # Stage 11: decoy data poisoning. Opt-in via wizard. The doc
@@ -164,6 +170,45 @@ class WizardAnswers(BaseModel):
                 "honeytokens_enabled=True requires honeytokens_callback_base_url",
             )
         return self
+
+    @model_validator(mode="after")
+    def _secret_length_bounds(self) -> Self:
+        """Re-apply the length bounds the SecretStr upgrade dropped.
+
+        Pydantic's ``min_length`` / ``max_length`` on a ``Field`` do
+        not apply to ``SecretStr`` (the inner string is opaque to
+        Pydantic). The bounds matched the pre-sweep ``str`` typing
+        and prevent operator-pasted garbage from landing in the env
+        file. Closed via pre-deploy sweep TODO-7.
+        """
+        if self.dashboard_admin_password_hash is not None:
+            length = len(self.dashboard_admin_password_hash.get_secret_value())
+            if length == 0 or length > 256:
+                raise ValueError(
+                    f"dashboard_admin_password_hash length {length} outside (0, 256]",
+                )
+        if self.maxmind_license_key is not None:
+            length = len(self.maxmind_license_key.get_secret_value())
+            if length < 8 or length > 64:
+                raise ValueError(
+                    f"maxmind_license_key length {length} outside [8, 64]",
+                )
+        return self
+
+    @field_serializer("dashboard_admin_password_hash", "maxmind_license_key", when_used="json")
+    def _unwrap_secret(self, value: SecretStr | None) -> str | None:
+        """Emit the SecretStr's plaintext to the on-disk wizard.json.
+
+        Closed via pre-deploy sweep TODO-7. The default JSON
+        serialisation for SecretStr is the masked literal
+        ``"**********"`` which would round-trip into a SecretStr
+        whose ``.get_secret_value()`` returns ``"**********"`` -
+        silently replacing the bcrypt hash on every --reconfigure.
+        The wizard.json file is 0600 + root-owned in production,
+        so plaintext on-disk is the existing trust boundary;
+        SecretStr only adds repr/traceback masking on top of that.
+        """
+        return value.get_secret_value() if value is not None else None
 
 
 class WizardOutput(BaseModel):

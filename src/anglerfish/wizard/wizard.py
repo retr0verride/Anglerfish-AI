@@ -27,7 +27,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import HttpUrl, ValidationError
+from pydantic import HttpUrl, SecretStr, ValidationError
 
 from anglerfish.audit import AuditLog
 from anglerfish.dashboard.auth import hash_password
@@ -334,9 +334,13 @@ def prompt_for_answers(
             "Dashboard admin password (blank for open-mode — only safe on an isolated NIC)"  # nosec B105
         )
     plain_password = prompt(password_prompt_label, "").strip()
-    dashboard_admin_password_hash: str | None
+    dashboard_admin_password_hash: SecretStr | None
     if plain_password:
-        dashboard_admin_password_hash = hash_password(plain_password)
+        # Pre-deploy sweep TODO-7: wrap the bcrypt hash in SecretStr
+        # so repr/traceback masking applies. The hash is plain ascii
+        # text inside SecretStr; on-disk JSON unwraps via the
+        # WizardAnswers field_serializer.
+        dashboard_admin_password_hash = SecretStr(hash_password(plain_password))
     elif keep_existing_hash:
         # Only reachable when defaults is not None and its
         # dashboard_admin_password_hash is not None; the keep_existing_hash
@@ -403,8 +407,12 @@ def prompt_for_answers(
         except ValidationError as exc:
             raise ValueError(f"invalid webhook URL: {webhook_str!r}") from exc
 
+    # Pre-deploy sweep TODO-7: the prompt API takes a plain ``str``
+    # default; unwrap the SecretStr for that one purpose only. The
+    # value the operator types comes back as plain text and gets
+    # re-wrapped before WizardAnswers construction below.
     maxmind_default = (
-        defaults.maxmind_license_key
+        defaults.maxmind_license_key.get_secret_value()
         if defaults is not None and defaults.maxmind_license_key is not None
         else ""
     )
@@ -412,7 +420,7 @@ def prompt_for_answers(
         "MaxMind GeoLite2 licence key (optional, blank to skip)",
         maxmind_default,
     ).strip()
-    maxmind_license_key: str | None = maxmind_key_raw or None
+    maxmind_license_key: SecretStr | None = SecretStr(maxmind_key_raw) if maxmind_key_raw else None
 
     # Stage 11: decoy data poisoning. The doc acknowledgement
     # screen + HTTPS-URL prompt. Defaults to disabled; the

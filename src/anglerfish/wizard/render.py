@@ -110,7 +110,9 @@ def render_env(
         _line("ANGLERFISH_DASHBOARD__ADMIN_USERNAME", answers.dashboard_admin_username),
         _line(
             "ANGLERFISH_DASHBOARD__ADMIN_PASSWORD_HASH",
-            answers.dashboard_admin_password_hash,
+            answers.dashboard_admin_password_hash.get_secret_value()
+            if answers.dashboard_admin_password_hash is not None
+            else None,
         ),
         "",
         "# --- Threat alerting -----------------------------------------------------",
@@ -142,7 +144,12 @@ def render_env(
         "# --- Geo enrichment (MaxMind GeoLite2) -----------------------------------",
         _line("ANGLERFISH_GEO__CITY_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-City.mmdb"),
         _line("ANGLERFISH_GEO__ASN_DB_PATH", "/var/lib/anglerfish/geo/GeoLite2-ASN.mmdb"),
-        _line("ANGLERFISH_GEO__MAXMIND_LICENSE_KEY", answers.maxmind_license_key),
+        _line(
+            "ANGLERFISH_GEO__MAXMIND_LICENSE_KEY",
+            answers.maxmind_license_key.get_secret_value()
+            if answers.maxmind_license_key is not None
+            else None,
+        ),
         "",
         "# --- Honeytokens (Stage 11 decoy data poisoning) -------------------------",
         # Both lines omitted from the env file when the wizard left

@@ -169,45 +169,57 @@ boundary deliberately - the defensive branch is otherwise only
 reachable via a deliberately-non-numeric query, which no production
 caller emits.
 
-## TODO-7: `WizardAnswers` secret fields stored as bare `str`
+## TODO-7: `WizardAnswers` secret fields stored as bare `str` (closed in pre-deploy sweep)
 
-`src/anglerfish/wizard/answers.py` declares both
-``dashboard_admin_password_hash`` and ``maxmind_license_key`` as
-``str | None``. Both are credentials and should ideally be
-``SecretStr | None`` so they do not leak in tracebacks or repr
-output.
+Both fields now type as ``SecretStr | None``:
 
-The straightforward SecretStr upgrade breaks the persistence
-round-trip:
+- ``WizardAnswers.dashboard_admin_password_hash: SecretStr | None``
+- ``WizardAnswers.maxmind_license_key: SecretStr | None``
 
-- ``save_answers`` calls ``model_dump(mode="json")`` which by
-  default serialises ``SecretStr`` as the literal string
-  ``"**********"``.
-- ``load_answers`` then validates the loaded payload back into a
-  ``SecretStr`` whose ``.get_secret_value()`` returns
-  ``"**********"``.
-- The ``--reconfigure`` "blank to keep the previously-configured
-  password" flow (wizard.py:340) depends on the saved hash
-  round-tripping intact; the SecretStr default would silently
-  replace it with the masked string.
+Repr + traceback paths now show ``SecretStr('**********')``
+instead of the bcrypt hash or the licence key, closing the
+documented leak surface.
 
-Two viable fixes (both deferred):
+The round-trip regression the previous TODO entry warned about is
+solved by a per-field ``@field_serializer(..., when_used="json")``
+on ``WizardAnswers`` that unwraps the SecretStr to plaintext at
+``model_dump(mode="json")`` time. ``save_answers`` writes the
+plaintext into ``wizard.json`` (which is 0600 + root-owned in
+production - the existing trust boundary); ``load_answers``
+re-validates back into a SecretStr with the original value
+intact. The ``--reconfigure`` "blank to keep" flow stays
+functional because the loaded SecretStr round-trips with the
+correct ``.get_secret_value()``.
 
-- Custom ``@model_serializer`` on ``WizardAnswers`` that unwraps
-  SecretStr fields to plaintext for the on-disk JSON (the file is
-  already 0600 / trusted operator-only). This makes the SecretStr
-  type cosmetic but preserves the repr-leak protection.
-- Move secret-bearing fields out of ``WizardAnswers`` entirely so
-  they live only in transient memory during the prompt + render
-  flow and are never persisted; the wizard would prompt for the
-  password every ``--reconfigure`` rather than offering "blank to
-  keep".
+Field-level length bounds (the previous ``min_length`` /
+``max_length`` on the ``Field``) do NOT apply through SecretStr,
+so a new ``@model_validator(mode="after")`` re-applies the
+documented constraints (bcrypt hash in (0, 256], MaxMind key in
+[8, 64]). Operator-pasted garbage that violates the bounds is
+still rejected at construct time.
 
-Current protection: ``wizard.json`` is written 0600 in
-``persistence.save_answers``, no code path logs the answers object
-beyond the file path (verified during the Stage 5 audit sweep).
-Surfaced during the Stage 5 retroactive audit sweep of the
-config and wizard subsystems. Owner: TBD.
+Callsite updates:
+
+- ``render_env`` unwraps both SecretStrs with
+  ``.get_secret_value()`` before writing the env file (the env
+  file is the same 0600 trust boundary as wizard.json).
+- ``prompt_for_answers`` wraps the bcrypt hash via
+  ``SecretStr(hash_password(plain_password))`` and the MaxMind
+  licence key via ``SecretStr(maxmind_key_raw)``; the prompt's
+  default-string for re-display calls
+  ``defaults.maxmind_license_key.get_secret_value()`` for that
+  one purpose only.
+
+Tests (``tests/wizard/test_persistence.py``, 3 new):
+
+- ``test_secret_fields_round_trip_plaintext_through_save_and_load``:
+  the bcrypt hash + licence key survive save/load with plaintext
+  intact; the on-disk JSON does NOT contain pydantic's masked
+  ``"**********"`` literal.
+- ``test_secret_fields_repr_is_masked``: ``repr(answers)`` shows
+  ``**********`` not the hash or key.
+- ``test_secret_fields_length_bounds_enforced``: the re-applied
+  length bounds reject empty / oversized inputs at construct.
 
 ## TODO-8: bridge per-session state leaks if lure skips DELETE (closed in pre-deploy sweep)
 
@@ -277,8 +289,10 @@ Tests:
   projected total exceeds the cap, the over-cap chunk does NOT
   appear in the session record.
 
-## Pre-deploy sweep
+## Pre-deploy sweep (closed 2026-05-26)
 
-The pre-deploy sweep (kicked off 2026-05-26 after Stage 11
-shipped) closes TODO-2, TODO-3, TODO-6, TODO-7, TODO-8, TODO-9.
-TODO-6 closed first; the rest land sequentially.
+The pre-deploy sweep ran in one session after Stage 11 shipped
+and closed all six deferred items in the locked order TODO-6 →
+TODO-9 → TODO-8 → TODO-3 → TODO-2 → TODO-7. Each landed as its
+own commit with a documented audit-notes block. Backlog is empty
+as of this commit.
