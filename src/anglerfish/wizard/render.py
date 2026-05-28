@@ -167,6 +167,21 @@ def render_env(
             else None,
         ),
         "",
+        "# --- Counter-deception (Stage 12 active counter-deception) ---------------",
+        # Off by default; the wizard only emits ENABLED=true after the
+        # operator acknowledges the THREAT_MODEL.md Active counter-deception
+        # section. mode (off|garble|timebomb|both, default both),
+        # engagement_threshold (default 70), garble_paths, and the
+        # timebomb_* bands all default in CounterDeceptionConfig. Uncomment
+        # + set the lines below to tune them; the operator whitelist
+        # (pin a source IP with mode=off) lives in the dashboard.
+        _line(
+            "ANGLERFISH_COUNTER_DECEPTION__ENABLED",
+            "true" if answers.counter_deception_enabled else None,
+        ),
+        _line("# ANGLERFISH_COUNTER_DECEPTION__MODE", "both"),
+        _line("# ANGLERFISH_COUNTER_DECEPTION__ENGAGEMENT_THRESHOLD", "70"),
+        "",
     ]
     return "\n".join(_iter_lines(lines))
 

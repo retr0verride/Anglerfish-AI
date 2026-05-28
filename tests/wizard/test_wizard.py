@@ -251,7 +251,7 @@ def _make_prompter(
 
 def test_prompt_for_answers_happy_path_dhcp() -> None:
     # confirms: terms, bait DHCP, service DHCP, honeytokens-decline.
-    confirms = [True, True, True, False]
+    confirms = [True, True, True, False, False]  # +counter-deception decline (Stage 12)
     prompts = [
         "anglerfish-vm",  # vm_hostname
         "eth0",  # bait_interface
@@ -282,7 +282,7 @@ def test_prompt_for_answers_happy_path_dhcp() -> None:
 
 def test_prompt_for_answers_static_network() -> None:
     # confirms: terms, bait DHCP=False, service DHCP=True, honeytokens-decline.
-    confirms = [True, False, True, False]
+    confirms = [True, False, True, False, False]  # +counter-deception decline (Stage 12)
     prompts = [
         "anglerfish-vm",
         "eth0",
@@ -424,7 +424,7 @@ def test_prompt_for_answers_static_invalid_gateway_raises() -> None:
 
 def test_prompt_for_answers_remote_ollama_with_trusted_host() -> None:
     # confirms: terms, bait DHCP, service DHCP, honeytokens-decline.
-    confirms = [True, True, True, False]
+    confirms = [True, True, True, False, False]  # +counter-deception decline (Stage 12)
     prompts = [
         "anglerfish-vm",
         "eth0",
@@ -452,7 +452,7 @@ def test_prompt_for_answers_remote_ollama_with_trusted_host() -> None:
 
 
 def test_prompt_for_answers_invalid_webhook_raises() -> None:
-    confirms = [True, True, True, False]
+    confirms = [True, True, True, False, False]  # +counter-deception decline (Stage 12)
     prompts = [
         "anglerfish-vm",
         "eth0",

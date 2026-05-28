@@ -174,6 +174,23 @@ class WizardAnswers(BaseModel):
         ),
     )
 
+    # Stage 12: active counter-deception. Opt-in via the wizard's
+    # heaviest acknowledgement gate. Declining leaves it disabled
+    # (the env file comments out ANGLERFISH_COUNTER_DECEPTION__ENABLED).
+    # Mode + engagement_threshold are NOT prompted; they default in
+    # CounterDeceptionConfig (both / 70) and the operator tunes them
+    # in the env file or via the dashboard. No callback URL is needed
+    # (unlike Stage 11), so a single bool captures the wizard answer.
+    counter_deception_enabled: bool = Field(
+        default=False,
+        description=(
+            "Stage 12 opt-in. False ⇒ the bridge never engages counter-"
+            "deception. True requires the operator to have acknowledged "
+            "the THREAT_MODEL.md Active counter-deception section in the "
+            "wizard. Mode + threshold use CounterDeceptionConfig defaults."
+        ),
+    )
+
     @model_validator(mode="after")
     def _honeytokens_need_callback_url(self) -> Self:
         if self.honeytokens_enabled and self.honeytokens_callback_base_url is None:

@@ -49,8 +49,9 @@ def _common_prompts() -> list[str]:
 def test_honeytokens_terms_text_emitted_before_prompt() -> None:
     """The wizard outputs the acknowledgement text before the confirm."""
     sink: list[str] = []
-    # confirms: terms, bait DHCP, service DHCP, honeytokens-decline.
-    confirms = [True, True, True, False]
+    # confirms: terms, bait DHCP, service DHCP, honeytokens-decline,
+    # counter-deception-decline (Stage 12 added the 5th prompt).
+    confirms = [True, True, True, False, False]
     _prompt, _confirm = _make_prompter(confirms=confirms, prompts=_common_prompts())
 
     prompt_for_answers(
@@ -66,8 +67,9 @@ def test_honeytokens_terms_text_emitted_before_prompt() -> None:
 
 
 def test_honeytokens_decline_leaves_disabled() -> None:
-    # confirms: terms, bait DHCP, service DHCP, honeytokens-decline.
-    confirms = [True, True, True, False]
+    # confirms: terms, bait DHCP, service DHCP, honeytokens-decline,
+    # counter-deception-decline (Stage 12).
+    confirms = [True, True, True, False, False]
     _prompt, _confirm = _make_prompter(confirms=confirms, prompts=_common_prompts())
     answers = prompt_for_answers(
         prompt=_prompt,
@@ -80,8 +82,9 @@ def test_honeytokens_decline_leaves_disabled() -> None:
 
 
 def test_honeytokens_accept_requires_url_prompt() -> None:
-    # confirms: terms, bait DHCP, service DHCP, honeytokens-accept.
-    confirms = [True, True, True, True]
+    # confirms: terms, bait DHCP, service DHCP, honeytokens-accept,
+    # counter-deception-decline (Stage 12).
+    confirms = [True, True, True, True, False]
     # The URL prompt fires AFTER all common prompts.
     prompts = [*_common_prompts(), "https://honey.example.com"]
     _prompt, _confirm = _make_prompter(confirms=confirms, prompts=prompts)

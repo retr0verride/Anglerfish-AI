@@ -32,6 +32,7 @@ from pydantic import HttpUrl, SecretStr, ValidationError
 from anglerfish.audit import AuditLog
 from anglerfish.dashboard.auth import hash_password
 from anglerfish.wizard.answers import NetworkConfig, WizardAnswers, WizardOutput
+from anglerfish.wizard.counter_deception import COUNTER_DECEPTION_TERMS
 from anglerfish.wizard.honeytokens import HONEYTOKENS_TERMS
 from anglerfish.wizard.network import list_interfaces
 from anglerfish.wizard.persistence import save_answers
@@ -433,6 +434,16 @@ def prompt_for_answers(
         defaults=defaults,
     )
 
+    # Stage 12: active counter-deception. The heaviest acknowledgement
+    # gate; declining leaves it disabled. Acknowledgement-only (no URL),
+    # so a single bool captures the answer; mode + threshold default in
+    # CounterDeceptionConfig.
+    counter_deception_enabled = _prompt_for_counter_deception(
+        confirm=confirm,
+        output=output,
+        defaults=defaults,
+    )
+
     return WizardAnswers(
         terms_acknowledged=True,
         vm_hostname=vm_hostname,
@@ -453,6 +464,7 @@ def prompt_for_answers(
         fake_username=fake_username,
         honeytokens_enabled=honeytokens_enabled,
         honeytokens_callback_base_url=honeytokens_callback_url,
+        counter_deception_enabled=counter_deception_enabled,
     )
 
 
@@ -509,6 +521,32 @@ def _prompt_for_honeytokens(
         return True, HttpUrl(url_str)
     except ValidationError as exc:
         raise ValueError(f"invalid honeytoken callback URL: {url_str!r}") from exc
+
+
+def _prompt_for_counter_deception(
+    *,
+    confirm: ConfirmFn,
+    output: Callable[[str], None],
+    defaults: WizardAnswers | None,
+) -> bool:
+    """Display COUNTER_DECEPTION_TERMS + collect the enable answer.
+
+    Acknowledgement-only: counter-deception needs no callback URL, so
+    a single confirm captures the answer. Defaults to False; a
+    previously-enabled install still re-prompts so the operator
+    re-affirms the heaviest gate on every wizard run. Declining leaves
+    ``ANGLERFISH_COUNTER_DECEPTION__ENABLED`` commented out in the env
+    file; mode + engagement_threshold are not prompted (they default
+    in CounterDeceptionConfig and are tunable via the env file or the
+    dashboard).
+    """
+    output("\n" + COUNTER_DECEPTION_TERMS + "\n")
+    default_enabled = defaults is not None and defaults.counter_deception_enabled
+    return confirm(
+        "I have read the THREAT_MODEL.md Active counter-deception section "
+        "and want to enable counter-deception",
+        default_enabled,
+    )
 
 
 def _prompt_network(

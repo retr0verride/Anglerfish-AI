@@ -333,6 +333,58 @@ the bridge and the receiver.
 
 ---
 
+## Active counter-deception (Stage 12)
+
+Stage 12 is the most aggressive capability on the roadmap and the
+largest threat-model delta. Where every prior stage observes,
+engages, or tracks, Stage 12 deliberately produces wrong information
+to harm an attacker's workflow:
+
+* **garbled-binary** (lure-side): when an engaged session reads a
+  file in the configured allowlist (SSH keys, AWS credentials by
+  default), the lure's ``cat`` handler corrupts the bytes before
+  serving them. The PEM armor + AWS access-key-ID survive so the
+  file looks valid; the key body / secret is mangled so reuse fails
+  with a parse or signature error. Deterministic per
+  ``(session_id, path)`` so repeated reads in a session are stable.
+* **time-bomb** (bridge-side): once a flagged session passes the
+  command-count thresholds, the bridge appends a system instruction
+  telling the LLM to introduce small factual errors (wrong PIDs,
+  sizes, ports, plausibly-wrong paths), ramping mild → severe.
+
+The feature is gated by ``ANGLERFISH_COUNTER_DECEPTION__ENABLED``
+(default ``false``) AND requires the wizard's
+``COUNTER_DECEPTION_TERMS`` acknowledgement (the operator confirms
+they read this section before enabling - the heaviest gate any stage
+uses). Engagement fires when ``ThreatAssessment.score`` crosses
+``counter_deception.engagement_threshold`` (default 70, a strict
+superset of the Stage 11 honeytoken threshold of 50) OR when an
+operator pins the source IP. A pin with mode ``off`` is a whitelist:
+it suppresses counter-deception for that IP even above the threshold.
+Engagements audit ``bridge.counter_deception_engaged`` (with a
+``trigger`` of ``threat`` or ``pin``); the alerts panel surfaces them
+as the ``counter_deception_engaged`` kind.
+
+| Threat | Mitigation | Residual risk |
+|---|---|---|
+| **Honest visitor crosses the threat threshold by accident (researcher with an exploit toolchain, buggy scanner, mistyped IP) and receives garbled credentials + wrong shell output** | ``counter_deception.enabled`` defaults to ``false``; the wizard requires the operator to affirm they read this section before enabling. Default ``engagement_threshold=70`` is higher than the honeytoken threshold so the false-positive surface is a strict subset. The operator whitelist (pin a source IP with mode ``off``) explicitly excludes known researchers. | No technical means distinguishes a real attacker from a researcher who tripped the heuristics. Operators own deployment context (bait NICs, internet-facing only). This section + the wizard gate are the load-bearing controls. |
+| **The time-bomb LLM drifts into security-sensitive falsehoods (a fake CVE an analyst chases, a fake routable IP that gets blocklisted, a fake credential format that lands in a SOAR playbook)** | The injected instruction explicitly forbids fake credentials, fake IPs outside RFC 1918, and fake CVE numbers. The assembled response runs through the Stage 1 ``OutputFilter`` post-stream; ``tests/llm_defense/`` gains time-bomb-interaction corpus cases. | The prompt guardrail is advisory, not enforceable - a local model can still hallucinate a forbidden value. ``bridge.counter_deception_timebomb_applied`` audit events let operators spot-check; a post-filter regex on IP/CVE/credential shapes is a documented v1.1 follow-up. |
+| **Garbled-binary corrupts a file the operator themselves needs (an operator cats /root/.ssh/id_rsa to verify the honeytoken and sees garbage)** | Operator access goes through the service NIC; those sessions never trigger threat scoring, so counter-deception never engages for them. Garbling is per-session: the attacker's engaged session sees corruption while a concurrent operator debug session sees pristine files. | If the operator misconfigures NIC binding so the lure listens on the service NIC, every connection is treated as attacker-facing. The wizard validates bait-NIC binding at install; documented in the runbook. |
+| **Cross-honeypot attacker fingerprints Anglerfish by diffing corruption patterns across multiple deployments** | ``garble()`` seeds on ``(session_id, path)`` so two sessions (same IP or not) produce different mangled bytes, and two deployments differ for the same logical path. The shared STRUCTURAL pattern (armor + AKIA prefix preserved) is intentional - it is what makes the file parse-shaped enough for the attacker's tools to consume. | A determined collector who gathers N corrupted files across deployments could infer the deception from the shared structure. By then they have already triggered N Stage 11 callbacks (the higher-value signal). Documented residual; deception value degrades against sophisticated multi-honeypot collectors. |
+| **Time-bomb output confuses Anglerfish's own threat scorer** | The threat scorer runs on the attacker's INPUT, never on the LLM's output. Time-bomb only mutates the LLM response, so it cannot feed back into scoring. ``bridge.counter_deception_timebomb_applied`` events ride alongside the threat events for operator correlation. | A future stage that scores attacker behaviour from LLM-response content would need to know time-bomb was active; v1 leaves that correlation to operator log inspection. |
+| **A compromised dashboard account pins counter-deception on the wrong session (or disables it on the attacker's own)** | The pin endpoints are auth + CSRF gated, identical to the persona-pin + settings surface; every pin audits ``dashboard.counter_deception_pinned`` with the operator identity. Defeating this requires defeating dashboard auth, the same trust boundary the whole dashboard sits behind. | A 0-day in dashboard auth lets the attacker flip pins; both directions leave audit-log evidence. v1 adds no integrity layer beyond the existing auth. |
+
+Counter-deception state is in-memory in the bridge (no schema change
+for the engagement itself); only the operator PINS persist, in the
+``counter_deception_pins`` table (schema v7), read by the bridge at
+session-open via ``SessionStoreReader``. The per-command
+``bridge.counter_deception_timebomb_applied`` and lure-side
+``lure.counter_deception_garble_served`` events are intentionally NOT
+alerts (per-command noise); the once-per-session engagement is the
+operator signal.
+
+---
+
 ## Known limitations (acknowledged, not yet mitigated)
 
 1. **Audit log is not write-once at the FS layer.** A root attacker can `cat /dev/null > audit.jsonl`. Operators wanting WORM should layer `chattr +a` or write to an external WORM target.
