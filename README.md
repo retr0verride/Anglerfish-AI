@@ -10,11 +10,9 @@
 
 > AI-powered SSH honeypot. Deep-sea threat intelligence.
 
-Anglerfish AI is a self-contained honeypot operating system. Boot the ISO,
-complete the first-boot wizard, and an AI-driven SSH honeypot is running
-in minutes. Attackers see a convincing fake Debian shell driven by a local
-LLM. You see a live dashboard, a MITRE ATT&CK-tagged threat timeline, and
-an encrypted credential database.
+Anglerfish AI started as a side experiment while I was standing up a SOC lab with Proxmox, Splunk, and Suricata. It turned into the part that taught me the most. I did the architecture and the security decisions. Claude Code did the implementation. The goal was never to ship a product. It was to understand how the pieces of a honeypot fit together once you have to make the calls yourself: what an attacker is actually looking for and how to show it to them, why a stock honeypot gives itself away the moment it's scanned, which local model to trust and which to keep out, and where the real trust boundaries have to sit. Working those decisions through is what made them stick. Reading about them never did.
+
+It's public because that's what kept the work honest, and because the docs (the design-doc-first trail, the threat model, the audit notes) are worth reading even if you never run it. It's built to run isolated in a VM, never on a network you don't own. docs/THREAT_MODEL.md, docs/PRE_DEPLOY_CHECKLIST.md, and docs/INCIDENT_RESPONSE.md lay out the boundaries and the failure modes. If something here is wrong, careless, or dangerous, tell me. I'd rather hear what I missed than what I caught.
 
 ---
 
