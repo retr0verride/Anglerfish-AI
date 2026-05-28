@@ -35,7 +35,7 @@ Status legend: `🟦 not started` · `🟨 in design` · `🟩 in progress` · `
 | 10  | Capability: engaged persistence    | ✅ shipped     | ~14h        | `design/STAGE_10_engaged_persistence.md`  | 1, 9       |
 | 11  | Capability: decoy data poisoning   | ✅ shipped     | ~14h        | `design/STAGE_11_decoy_data_poisoning.md` | 4, 7       |
 | 12  | Capability: counter-deception      | ✅ shipped     | ~10h        | `design/STAGE_12_counter_deception.md`    | 1, 5, 10   |
-| 13  | Dashboard capability views overhaul | 🟦 not started | ~10h       | `design/STAGE_13_dashboard_views.md`    | 4, 7, 8, 9 |
+| 13  | Dashboard capability views overhaul | 🟨 in design   | ~10h        | `design/STAGE_13_dashboard_views.md`      | 4, 7, 8, 9 |
 
 **Total estimated effort:** ~126 hours. Spread over weeks/months at a
 sustainable pace, not a sprint.
