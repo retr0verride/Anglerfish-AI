@@ -70,6 +70,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks scans the range <head>^..<head> on pull_request runs; a
+          # shallow clone omits the parent commit, so the scan aborts with
+          # "unknown revision". Full history lets git resolve the range.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
