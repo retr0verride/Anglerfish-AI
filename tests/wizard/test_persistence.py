@@ -131,7 +131,7 @@ def test_secret_fields_round_trip_plaintext_through_save_and_load(
     from pydantic import SecretStr
 
     bcrypt_hash = "$2b$12$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234"
-    license_key = "ABCDEFGH12345678"  # not a real credential
+    license_key = "ABCDEFGH12345678"  # not a real credential  # gitleaks:allow
     original = _answers(
         dashboard_admin_password_hash=SecretStr(bcrypt_hash),
         maxmind_license_key=SecretStr(license_key),

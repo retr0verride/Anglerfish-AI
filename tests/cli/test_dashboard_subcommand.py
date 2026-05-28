@@ -19,6 +19,14 @@ from typer.testing import CliRunner
 
 from anglerfish.cli.__main__ import app
 
+# Typer + Rich render help inside a panel sized to the terminal width.
+# CI runs the gates without a TTY so the default width (~80 cols)
+# wraps long option-help strings across lines and renders ANSI styling
+# that fragments substring searches like "--host". Force a wide,
+# colorless terminal so the help output stays deterministic across
+# local + CI environments.
+_HELP_ENV = {"COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"}
+
 
 @pytest.fixture
 def env_setup(
@@ -38,14 +46,14 @@ def env_setup(
 
 def test_dashboard_help_lists_serve_subcommand(env_setup: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["dashboard", "--help"])
+    result = runner.invoke(app, ["dashboard", "--help"], env=_HELP_ENV)
     assert result.exit_code == 0
     assert "serve" in result.output
 
 
 def test_dashboard_serve_help_shows_options(env_setup: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["dashboard", "serve", "--help"])
+    result = runner.invoke(app, ["dashboard", "serve", "--help"], env=_HELP_ENV)
     assert result.exit_code == 0
     assert "--host" in result.output
     assert "--port" in result.output
@@ -65,7 +73,7 @@ def test_dashboard_serve_exits_2_on_invalid_config(
     """
     monkeypatch.setenv("ANGLERFISH_DASHBOARD__PORT", "999999")  # out of [1, 65535]
     runner = CliRunner()
-    result = runner.invoke(app, ["dashboard", "serve"])
+    result = runner.invoke(app, ["dashboard", "serve"], env=_HELP_ENV)
     assert result.exit_code == 2
     assert "Configuration error" in result.output
 
@@ -73,6 +81,6 @@ def test_dashboard_serve_exits_2_on_invalid_config(
 def test_dashboard_top_level_help_lists_dashboard_group(env_setup: Path) -> None:
     """The dashboard typer subgroup is registered on the root app."""
     runner = CliRunner()
-    result = runner.invoke(app, ["--help"])
+    result = runner.invoke(app, ["--help"], env=_HELP_ENV)
     assert result.exit_code == 0
     assert "dashboard" in result.output

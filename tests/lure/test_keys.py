@@ -28,9 +28,12 @@ def test_ensure_creates_both_keys_with_correct_modes(tmp_path: Path) -> None:
     assert paths.ed25519.exists()
     rsa_bytes = paths.rsa.read_bytes()
     ed_bytes = paths.ed25519.read_bytes()
-    # OpenSSH PEM private keys start with this marker.
-    assert rsa_bytes.startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----")
-    assert ed_bytes.startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----")
+    # OpenSSH PEM private keys start with this marker. The literals below
+    # are the PUBLIC armor strings every OpenSSH private key file begins
+    # with, not the secret material; gitleaks flags the literal text but
+    # the test is checking ground truth, not leaking a key.
+    assert rsa_bytes.startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----")  # gitleaks:allow
+    assert ed_bytes.startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----")  # gitleaks:allow
     if _IS_POSIX:
         assert stat.S_IMODE(paths.rsa.stat().st_mode) == 0o600
         assert stat.S_IMODE(paths.ed25519.stat().st_mode) == 0o600
