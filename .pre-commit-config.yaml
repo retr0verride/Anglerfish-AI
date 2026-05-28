@@ -60,7 +60,11 @@ repos:
 
       - id: pip-audit
         name: pip-audit (known-CVE scan against installed deps)
-        entry: pip-audit --skip-editable --strict
+        # --strict dropped: pip-audit 2.10+ treats --skip-editable as a
+        # fatal skip; the anglerfish-ai editable install is the only
+        # thing skipped. See .github/workflows/ci.yml pip-audit step
+        # for matching invocation.
+        entry: pip-audit --skip-editable
         language: system
         pass_filenames: false
         stages: [pre-push]
