@@ -1,0 +1,47 @@
+# Dependabot configuration for Anglerfish AI.
+#
+# Two ecosystems monitored:
+#   - pip: the Python dependency tree declared in pyproject.toml
+#   - github-actions: the workflow action versions in .github/workflows/
+#
+# CODEOWNERS routes every PR to @retr0verride already; no explicit
+# `reviewers:` block is needed. The weekly Monday schedule batches PRs
+# into one reviewable group instead of trickling them out daily.
+#
+# Patch + minor updates are grouped so a Pydantic 2.6.5 -> 2.6.6 bump
+# does not occupy a separate PR from an httpx 0.27.1 -> 0.27.2 bump.
+# Major updates still open one PR per dependency so the breaking-
+# change review surface stays explicit.
+
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "patch"
+          - "minor"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(actions)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
