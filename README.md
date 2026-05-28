@@ -4,6 +4,11 @@
 
 # Anglerfish AI
 
+[![CI](https://github.com/retr0verride/Anglerfish-AI/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/retr0verride/Anglerfish-AI/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
+
 > AI-powered SSH honeypot. Deep-sea threat intelligence.
 
 Anglerfish AI is a self-contained honeypot operating system. Boot the ISO,
