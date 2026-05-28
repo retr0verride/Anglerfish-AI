@@ -271,3 +271,81 @@ main {
   font-size: 0.8rem;
   border-top: 1px solid var(--border);
 }
+
+/* Stage 13 slice 13.1: per-session detail panel. */
+.panel__bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.detail__close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 0.4rem;
+  padding: 0.2rem 0.7rem;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.detail__close:hover {
+  color: var(--text);
+  border-color: var(--bioluminescence);
+}
+
+.detail__head {
+  font-size: 1rem;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.detail__section {
+  margin-top: 1.1rem;
+}
+
+.detail__section h3 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bioluminescence-soft);
+  margin: 0 0 0.4rem;
+}
+
+.detail__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.detail__list li {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  padding: 0.15rem 0;
+}
+
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.7rem;
+  color: var(--bioluminescence-soft);
+  margin-left: 0.4rem;
+}
+
+.session-link {
+  background: transparent;
+  border: none;
+  color: var(--bioluminescence);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.session-link:hover {
+  color: var(--bioluminescence-soft);
+  text-decoration: underline;
+}

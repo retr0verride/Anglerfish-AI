@@ -18,6 +18,9 @@ const commandStream = $("#command-stream");
 const threatTable = $("#threat-table");
 const credentialsTable = $("#credentials-table");
 const credentialsMeta = $("#credentials-meta");
+const detailPanel = $("#detail-panel");
+const detailBody = $("#detail-body");
+const detailClose = $("#detail-close");
 
 let wsBackoffMs = 1000;
 
@@ -78,7 +81,11 @@ async function refreshThreats() {
       const techIds = (t.techniques || []).map((x) => x.id).join(", ");
       const score = Number(t.score) || 0;
       tr.innerHTML = `
-        <td><code>${escapeText(t.session_id).slice(0, 8)}</code></td>
+        <td>
+          <button type="button" class="session-link" data-session-id="${escapeText(t.session_id)}">
+            <code>${escapeText(t.session_id).slice(0, 8)}</code>
+          </button>
+        </td>
         <td>
           <span class="score-bar"><span class="score-bar__fill" style="width:${score}%"></span></span>
           ${score}
@@ -120,6 +127,136 @@ async function refreshCredentials() {
     }
   } catch (err) {
     console.warn("credentials refresh failed:", err);
+  }
+}
+
+function fmtMs(ms) {
+  const n = Number(ms) || 0;
+  if (n < 1000) return `${n} ms`;
+  const totalSec = Math.floor(n / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+}
+
+// Render the aggregate /api/sessions/{id}/detail payload into the panel.
+// Every dynamic value goes through escapeText before innerHTML; turns
+// reuse the live-stream classes so they read identically.
+function renderDetail(d) {
+  const s = d.session || {};
+  const sid = escapeText(s.session_id);
+  const parts = [];
+
+  parts.push(`
+    <p class="detail__head">
+      <code>${sid.slice(0, 8)}</code> · <code>${escapeText(s.source_ip)}</code>
+      ${d.persona ? `<span class="badge">persona: ${escapeText(d.persona)}</span>` : ""}
+    </p>
+    <p class="meta">
+      started ${escapeText(formatTimestamp(s.started_at))} ·
+      last activity ${escapeText(formatTimestamp(s.last_activity_at))} ·
+      time-wasted ${escapeText(fmtMs(d.time_wasted_ms))}
+    </p>
+  `);
+
+  if (d.intent) {
+    const tech = (d.intent.matched_techniques || []).map(escapeText).join(", ");
+    parts.push(`
+      <div class="detail__section">
+        <h3>Intent · ${escapeText(d.intent.confidence)}</h3>
+        <p>${escapeText(d.intent.summary)}</p>
+        ${tech ? `<p class="meta">${tech}</p>` : ""}
+      </div>
+    `);
+  }
+
+  if (d.counter_deception) {
+    const cd = d.counter_deception;
+    parts.push(`
+      <div class="detail__section">
+        <h3>Counter-deception · ${escapeText(cd.mode)}</h3>
+        <p class="meta">
+          engaged ${escapeText(formatTimestamp(cd.engaged_at))} ·
+          garbled ${escapeText(cd.garble_paths_count ?? "?")} paths
+        </p>
+      </div>
+    `);
+  }
+
+  const tokens = d.honeytokens || [];
+  if (tokens.length) {
+    const rows = tokens
+      .map(
+        (h) =>
+          `<li><code>${escapeText(h.id)}</code> · ${escapeText(h.kind)} · <code>${escapeText(h.placed_at)}</code></li>`,
+      )
+      .join("");
+    parts.push(`
+      <div class="detail__section">
+        <h3>Honeytokens served</h3>
+        <ul class="detail__list">${rows}</ul>
+      </div>
+    `);
+  }
+
+  const turns = d.turns || [];
+  if (turns.length) {
+    const rows = turns
+      .map(
+        (t) =>
+          `<li class="is-${escapeText(t.source)}">
+             <div class="stream__cmd">$ ${escapeText(t.command)}</div>
+             <div class="stream__response">${escapeText(t.response)}</div>
+           </li>`,
+      )
+      .join("");
+    parts.push(`
+      <div class="detail__section">
+        <h3>Turns (${turns.length})</h3>
+        <ol class="stream">${rows}</ol>
+      </div>
+    `);
+  }
+
+  const similar = d.similar || [];
+  if (similar.length) {
+    const links = similar
+      .map((n) => {
+        const nid = escapeText(n.session_id);
+        const sim = (Number(n.similarity) || 0).toFixed(2);
+        return `<button type="button" class="session-link" data-session-id="${nid}"><code>${nid.slice(0, 8)}</code></button> (${sim})`;
+      })
+      .join(" · ");
+    parts.push(`
+      <div class="detail__section">
+        <h3>Similar sessions</h3>
+        <p>${links}</p>
+      </div>
+    `);
+  }
+
+  detailBody.innerHTML = parts.join("");
+}
+
+async function openDetail(sessionId) {
+  try {
+    const detail = await fetchJSON(
+      `/api/sessions/${encodeURIComponent(sessionId)}/detail`,
+    );
+    renderDetail(detail);
+    if (detailPanel) {
+      detailPanel.hidden = false;
+      detailPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  } catch (err) {
+    console.warn("session detail fetch failed:", err);
+  }
+}
+
+function onSessionLinkClick(ev) {
+  const link = ev.target.closest(".session-link");
+  if (link && link.dataset.sessionId) {
+    openDetail(link.dataset.sessionId);
   }
 }
 
@@ -191,6 +328,15 @@ async function boot() {
   setInterval(refreshStats, STATS_POLL_MS);
   setInterval(refreshThreats, TABLE_POLL_MS);
   setInterval(refreshCredentials, TABLE_POLL_MS);
+  if (detailClose && detailPanel) {
+    detailClose.addEventListener("click", () => {
+      detailPanel.hidden = true;
+    });
+  }
+  // Delegated: session links live in the threats table and inside the
+  // panel's own "similar sessions" list, both rebuilt on each render.
+  if (threatTable) threatTable.addEventListener("click", onSessionLinkClick);
+  if (detailBody) detailBody.addEventListener("click", onSessionLinkClick);
   connectWebSocket();
 }
 

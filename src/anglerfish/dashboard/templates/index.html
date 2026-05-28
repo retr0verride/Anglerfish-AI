@@ -40,6 +40,15 @@
       </article>
     </section>
 
+    <section class="panel" id="detail-panel" aria-label="Session detail" hidden>
+      <div class="panel__bar">
+        <h2 class="panel__title">Session detail</h2>
+        <button type="button" id="detail-close" class="detail__close"
+                aria-label="Close session detail">close</button>
+      </div>
+      <div id="detail-body"></div>
+    </section>
+
     <section class="panel" aria-label="Live commands">
       <h2 class="panel__title">Live command stream</h2>
       <ol class="stream" id="command-stream" aria-live="polite"></ol>
