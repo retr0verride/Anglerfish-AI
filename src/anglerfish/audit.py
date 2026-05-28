@@ -26,19 +26,31 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   ``dashboard.export_served``, ``dashboard.audit_read``,
   ``dashboard.settings_changed``, ``dashboard.feature_toggled``,
   ``dashboard.overrides_published``,
-  ``dashboard.overrides_publish_failed``.
+  ``dashboard.overrides_publish_failed``, ``dashboard.persona_pinned``,
+  ``dashboard.persona_unpinned``,
+  ``dashboard.counter_deception_pinned``,
+  ``dashboard.counter_deception_unpinned``.
 * Bridge: ``bridge.defense_fired``, ``bridge.defense_scan_truncated``,
   ``bridge.model_integrity_verified``, ``bridge.model_integrity_failed``,
   ``bridge.model_integrity_skipped``, ``bridge.budget_exhausted``,
   ``bridge.overrides_read_failed``, ``bridge.wasting_applied``,
   ``bridge.wasting_budget_exhausted``, ``bridge.intent_extracted``,
-  ``bridge.intent_extraction_failed``.
+  ``bridge.intent_extraction_failed``, ``bridge.embedding_generated``,
+  ``bridge.embedding_failed``, ``bridge.embedding_skipped``,
+  ``bridge.cluster_match``, ``bridge.persona_selected``,
+  ``bridge.persona_rebound``, ``bridge.persistence_attempt``,
+  ``bridge.persistence_classifier_error``,
+  ``bridge.honeytoken_placed``, ``bridge.honeytoken_callback``,
+  ``bridge.honeytoken_placement_error``,
+  ``bridge.counter_deception_engaged``,
+  ``bridge.counter_deception_timebomb_applied``.
 * Lure: ``lure.server_started``, ``lure.server_stopped``,
   ``lure.session_opened``, ``lure.session_closed``,
   ``lure.command_native``, ``lure.command_bridge``,
   ``lure.fallback_served``, ``lure.bridge_unavailable``,
   ``lure.rate_limited``, ``lure.subsystem_refused``,
-  ``lure.fingerprint_observed``, ``lure.login_attempt``.
+  ``lure.fingerprint_observed``, ``lure.login_attempt``,
+  ``lure.counter_deception_garble_served``.
 * Threat: ``threat.alert_fired`` (reserved; wired in
   ``dashboard/alerts.py`` as ``high_severity_session`` ahead of
   the Stage 9+ threat-engine emission. No code path emits it yet
