@@ -27,14 +27,14 @@ Status legend: `🟦 not started` · `🟨 in design` · `🟩 in progress` · `
 | 2   | Lure subsystem (Cowrie replacement) | ✅ shipped    | ~12h        | `design/STAGE_2_lure_subsystem.md`      | 1          |
 | 3   | Dashboard control plane            | ✅ shipped     | ~8h         | `design/STAGE_3_dashboard_control_plane.md` | 2      |
 | 4   | Persistent rich session store      | ✅ shipped     | ~8h         | `design/STAGE_4_session_store.md`       | 3          |
-| 5   | Local-LLM leverage layer           | 🟦 not started | ~8h         | `design/STAGE_5_llm_leverage.md`        | 1          |
-| 6   | Capability: active time-wasting    | 🟦 not started | ~6h         | `design/STAGE_6_time_wasting.md`        | 1, 5       |
-| 7   | Capability: intent extraction      | 🟦 not started | ~6h         | `design/STAGE_7_intent_extraction.md`   | 1, 4, 5    |
-| 8   | Capability: behavioral clustering  | 🟦 not started | ~10h        | `design/STAGE_8_clustering.md`          | 4, 5       |
-| 9   | Capability: adaptive persona       | 🟦 not started | ~12h        | `design/STAGE_9_persona.md`             | 5, 7       |
-| 10  | Capability: engaged persistence    | 🟦 not started | ~14h        | `design/STAGE_10_persistence.md`        | 1, 9       |
-| 11  | Capability: decoy data poisoning   | 🟦 not started | ~14h        | `design/STAGE_11_poisoning.md`          | 4, 7       |
-| 12  | Capability: counter-deception      | 🟦 not started | ~10h        | `design/STAGE_12_counter_deception.md`  | 1, 5, 10   |
+| 5   | Local-LLM leverage layer           | ✅ shipped     | ~8h         | `design/STAGE_5_llm_leverage.md`          | 1          |
+| 6   | Capability: active time-wasting    | ✅ shipped     | ~6h         | `design/STAGE_6_active_time_wasting.md`   | 1, 5       |
+| 7   | Capability: intent extraction      | ✅ shipped     | ~6h         | `design/STAGE_7_intent_extraction.md`     | 1, 4, 5    |
+| 8   | Capability: behavioral clustering  | ✅ shipped     | ~10h        | `design/STAGE_8_behavioral_clustering.md` | 4, 5       |
+| 9   | Capability: adaptive persona       | ✅ shipped     | ~12h        | `design/STAGE_9_adaptive_persona.md`      | 5, 7       |
+| 10  | Capability: engaged persistence    | ✅ shipped     | ~14h        | `design/STAGE_10_engaged_persistence.md`  | 1, 9       |
+| 11  | Capability: decoy data poisoning   | ✅ shipped     | ~14h        | `design/STAGE_11_decoy_data_poisoning.md` | 4, 7       |
+| 12  | Capability: counter-deception      | ✅ shipped     | ~10h        | `design/STAGE_12_counter_deception.md`    | 1, 5, 10   |
 | 13  | Dashboard capability views overhaul | 🟦 not started | ~10h       | `design/STAGE_13_dashboard_views.md`    | 4, 7, 8, 9 |
 
 **Total estimated effort:** ~126 hours. Spread over weeks/months at a
