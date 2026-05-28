@@ -55,10 +55,14 @@ from anglerfish.bridge.strategies import (
     WastingStrategyBase,
     get_strategy,
 )
+from anglerfish.bridge.strategies.counter_deception import (
+    CounterDeceptionState,
+    CounterDeceptionStrategyBase,
+)
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.honeytokens import Honeytoken, HoneytokenPlacementService
 from anglerfish.intel import EmbeddingGenerator, IntentExtractor
-from anglerfish.llm import LLMClient, TokenBudget
+from anglerfish.llm import ChatMessage, LLMClient, TokenBudget
 from anglerfish.llm.budget import BudgetExhaustedError
 from anglerfish.llm.errors import LLMError
 from anglerfish.models.embedding import SessionEmbedding
@@ -100,6 +104,7 @@ class AIBridgeService:
         persona_selector: PersonaSelector | None = None,
         persistence_classifier: PersistenceClassifier | None = None,
         honeytoken_placement: HoneytokenPlacementService | None = None,
+        counter_deception_strategy: CounterDeceptionStrategyBase | None = None,
         session_store_reader: SessionStoreReader | None = None,
         sleep: Callable[[float], asyncio.Future[None]] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -209,6 +214,29 @@ class AIBridgeService:
         # background task. Cutoff is settings.bridge.session_idle_eviction_s.
         self._session_last_activity: dict[UUID, float] = {}
         self._session_store_reader = session_store_reader
+        # Stage 12: optional counter-deception strategy. None in tests +
+        # dev loops; real in production via the CLI when
+        # settings.counter_deception.enabled. engage_counter_deception
+        # (called from record_threat_assessment after honeytoken
+        # placement) stashes a per-session CounterDeceptionState when the
+        # threat score crosses engagement_threshold; amend_prompt_for_session
+        # applies the time-bomb prompt amendment per command.
+        self._counter_deception_strategy = counter_deception_strategy
+        self._counter_deception_state: dict[UUID, CounterDeceptionState] = {}
+        # Per-session de-dup so a repeatedly-firing threat scorer engages
+        # (and audits) counter-deception once per session, mirroring the
+        # Stage 11 _honeytoken_placed_for pattern.
+        self._counter_deception_engaged_for: set[UUID] = set()
+        # Cross-session map: source_ip -> garble_paths from the most recent
+        # engagement for that IP within this bridge process lifetime. The
+        # HTTP server reads it at session-open (get_garble_paths_for_source_ip)
+        # so the NEXT session from an engaged IP ships the garble allowlist
+        # on its SessionStartResponse. Same v1 cross-session simplification
+        # as Stage 10/11: the CURRENT session does not see the effect (its
+        # overlay was set at session-open). Not dropped by end_session_budget
+        # because it is keyed by IP, not session, and is intentionally
+        # process-lifetime.
+        self._counter_deception_paths_by_source_ip: dict[str, tuple[str, ...]] = {}
         # Stage 6: reader for dashboard-published runtime overrides. None
         # in tests + dev loops where no dashboard process is running;
         # _current_strategy() falls back to settings.bridge.wasting_strategy.
@@ -298,6 +326,11 @@ class AIBridgeService:
         # Stage 11 per-session state cleanup.
         self._honeytoken_placed_for.discard(session_id)
         self._source_ip_by_session.pop(session_id, None)
+        # Stage 12 per-session state cleanup. The source-IP-keyed
+        # garble-paths map is deliberately NOT dropped here; it is
+        # cross-session by design (see __init__).
+        self._counter_deception_state.pop(session_id, None)
+        self._counter_deception_engaged_for.discard(session_id)
         # Pre-deploy sweep TODO-8: drop the activity timestamp last
         # so a racing evict_idle_sessions() call cannot see this id
         # as both stale + still tracked.
@@ -351,9 +384,18 @@ class AIBridgeService:
         IP. Per-source-IP de-dup via ``_honeytoken_placed_for``
         bounds the audit-log noise when the scorer fires
         repeatedly above the threshold for the same session.
+
+        Stage 12: after honeytoken placement, ``engage_counter_deception``
+        runs (synchronously) so a session above
+        ``settings.counter_deception.engagement_threshold`` gets its
+        per-session :class:`CounterDeceptionState` stashed. Ordering
+        matters only for the audit log: ``bridge.honeytoken_placed``
+        precedes ``bridge.counter_deception_engaged`` for the same
+        session.
         """
         self._latest_threat[session_id] = threat
         self._maybe_schedule_honeytoken_placement(session_id, threat)
+        self.engage_counter_deception(session_id, threat)
 
     def _maybe_schedule_honeytoken_placement(
         self,
@@ -420,6 +462,144 @@ class AIBridgeService:
         circular import).
         """
         self._source_ip_by_session[session_id] = source_ip
+
+    # ------------------------------------------------------------------
+    # Stage 12 counter-deception engagement + prompt amendment
+    # ------------------------------------------------------------------
+
+    def engage_counter_deception(
+        self,
+        session_id: UUID,
+        threat: ThreatAssessment,
+    ) -> None:
+        """Stash per-session counter-deception state if the strategy engages.
+
+        Called from :meth:`record_threat_assessment` after honeytoken
+        placement. No-op when counter-deception is disabled, no strategy
+        is wired, this session already engaged (de-dup via
+        ``_counter_deception_engaged_for``), the threat score is below
+        ``settings.counter_deception.engagement_threshold``, or the
+        strategy declines this session (returns ``None``).
+
+        On engagement: stashes the :class:`CounterDeceptionState` for
+        per-command prompt amendment, mirrors the garble paths into the
+        source-IP map so the NEXT session from this IP carries them on
+        its ``SessionStartResponse``, and audits
+        ``bridge.counter_deception_engaged`` once.
+        """
+        if not self._settings.counter_deception.enabled:
+            return
+        if self._counter_deception_strategy is None:
+            return
+        if session_id in self._counter_deception_engaged_for:
+            return
+        if threat.score < self._settings.counter_deception.engagement_threshold:
+            return
+        state = self._counter_deception_strategy.state_for_session(
+            threat=threat,
+            session_id=session_id,
+        )
+        if state is None:
+            return
+        self._counter_deception_state[session_id] = state
+        self._counter_deception_engaged_for.add(session_id)
+        source_ip = self._source_ip_by_session.get(session_id)
+        if source_ip is not None and state.garble_paths:
+            self._counter_deception_paths_by_source_ip[source_ip] = state.garble_paths
+        self._record_counter_deception_engaged(
+            session_id=session_id,
+            source_ip=source_ip,
+            state=state,
+            threat=threat,
+        )
+
+    def amend_prompt_for_session(
+        self,
+        session_id: UUID,
+        messages: list[ChatMessage],
+        command_count: int,
+    ) -> list[ChatMessage]:
+        """Apply the engaged strategy's prompt amendment for this command.
+
+        Returns ``messages`` unchanged when no counter-deception state is
+        stashed for ``session_id`` (the common case). When state exists
+        and the command crosses a time-bomb threshold, audits
+        ``bridge.counter_deception_timebomb_applied`` with the intensity
+        band and returns the strategy-amended message list.
+        """
+        state = self._counter_deception_state.get(session_id)
+        if state is None or self._counter_deception_strategy is None:
+            return messages
+        cold_to_mild, mild_to_severe = state.timebomb_thresholds
+        if cold_to_mild > 0:
+            if command_count >= mild_to_severe:
+                self._record_counter_deception_timebomb_applied(
+                    session_id=session_id,
+                    command_count=command_count,
+                    intensity="severe",
+                )
+            elif command_count >= cold_to_mild:
+                self._record_counter_deception_timebomb_applied(
+                    session_id=session_id,
+                    command_count=command_count,
+                    intensity="mild",
+                )
+        return self._counter_deception_strategy.amend_prompt(
+            messages=messages,
+            command_count=command_count,
+            state=state,
+        )
+
+    def get_garble_paths_for_source_ip(self, source_ip: str) -> tuple[str, ...]:
+        """Return garble paths for the next session from ``source_ip``.
+
+        Cross-session, in-memory, bridge-process-lifetime. Populated by
+        :meth:`engage_counter_deception` when counter-deception engaged
+        on a prior session from this IP. Returns an empty tuple when no
+        prior engagement (the common case). The bridge HTTP server reads
+        this at session-open to seed
+        ``SessionStartResponse.counter_deception_garble_paths``.
+        """
+        return self._counter_deception_paths_by_source_ip.get(source_ip, ())
+
+    def _record_counter_deception_engaged(
+        self,
+        *,
+        session_id: UUID,
+        source_ip: str | None,
+        state: CounterDeceptionState,
+        threat: ThreatAssessment,
+    ) -> None:
+        """Audit a single bridge.counter_deception_engaged event.
+
+        ``garble_paths`` rides as a count (not the full list) to bound
+        the audit-log payload; the dashboard reads the live config for
+        the path list.
+        """
+        self._audit_log.record(
+            "bridge.counter_deception_engaged",
+            session_id=str(session_id),
+            attacker_ip=source_ip,
+            mode=state.mode.value,
+            garble_paths_count=len(state.garble_paths),
+            timebomb_thresholds=list(state.timebomb_thresholds),
+            threat_score=threat.score,
+        )
+
+    def _record_counter_deception_timebomb_applied(
+        self,
+        *,
+        session_id: UUID,
+        command_count: int,
+        intensity: str,
+    ) -> None:
+        """Audit a per-command time-bomb prompt amendment (mild | severe)."""
+        self._audit_log.record(
+            "bridge.counter_deception_timebomb_applied",
+            session_id=str(session_id),
+            command_count=command_count,
+            intensity=intensity,
+        )
 
     async def select_persona(self, source_ip: str) -> SelectionResult | None:
         """Pick a persona for ``source_ip`` via the configured selector.
@@ -799,6 +979,13 @@ class AIBridgeService:
                     persona=session.persona,
                     persistence_events=session.persistence_events,
                 )
+                # Stage 12: time-bomb prompt amendment (no-op unless this
+                # session engaged counter-deception above the threshold).
+                messages = self.amend_prompt_for_session(
+                    session.session_id,
+                    messages,
+                    session.command_count,
+                )
                 result = await self._client.chat(messages, budget=budget)
                 # Defense layer (Stage 1): cap FIRST, then scan. Capping
                 # before the filter prevents a misbehaving model (or an
@@ -960,6 +1147,13 @@ class AIBridgeService:
                     history=session.history(),
                     persona=session.persona,
                     persistence_events=session.persistence_events,
+                )
+                # Stage 12: time-bomb prompt amendment (no-op unless this
+                # session engaged counter-deception above the threshold).
+                messages = self.amend_prompt_for_session(
+                    session.session_id,
+                    messages,
+                    session.command_count,
                 )
                 # Pre-deploy sweep TODO-9: bound the accumulator so a
                 # flood of small chunks cannot push lure memory past

@@ -169,6 +169,12 @@ class SessionStartResponse(BaseModel):
     # container.config.hostname pre-Stage-9 behaviour.
     persona_name: str | None = None
     persona_overlay: dict[str, str] = Field(default_factory=dict)
+    # Stage 12: fakefs paths the lure should garble for this session when
+    # the bridge has engaged counter-deception for this source IP on a
+    # prior session (in-memory, bridge-process-lifetime). Empty for the
+    # common case. Slice 12.2 populates this; the lure consumer lands in
+    # slice 12.3 (until then the lure ignores the field).
+    counter_deception_garble_paths: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class CommandRequest(BaseModel):
@@ -348,6 +354,11 @@ def create_bridge_app(
         overlay: dict[str, str] = dict(persona.fakefs_overlay) if persona is not None else {}
         for token in honeytokens:
             overlay[token.placed_at] = token.payload
+        # Stage 12: if counter-deception engaged on a prior session from
+        # this source IP (within this bridge process lifetime), ship the
+        # garble allowlist so the lure can corrupt those files. Empty for
+        # the common case. Slice 12.3 wires the lure consumer.
+        garble_paths = service.get_garble_paths_for_source_ip(req.source_ip)
         return SessionStartResponse(
             session_id=ctx.session_id,
             fake_hostname=ctx.fake_hostname,
@@ -355,6 +366,7 @@ def create_bridge_app(
             fake_cwd=ctx.cwd,
             persona_name=persona.name if persona is not None else None,
             persona_overlay=overlay,
+            counter_deception_garble_paths=garble_paths,
         )
 
     @app.post("/api/v1/session/{session_id}/command", response_model=None)
