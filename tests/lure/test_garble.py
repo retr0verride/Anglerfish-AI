@@ -33,7 +33,8 @@ def test_infer_kind_pem_by_name() -> None:
 
 
 def test_infer_kind_pem_by_content_armor() -> None:
-    assert infer_kind("/tmp/whatever", "-----BEGIN OPENSSH PRIVATE KEY-----\n") is GarbleKind.PEM
+    armor = "-----BEGIN OPENSSH PRIVATE KEY-----\n"  # gitleaks:allow - public PEM armor literal, not a key
+    assert infer_kind("/tmp/whatever", armor) is GarbleKind.PEM
 
 
 def test_infer_kind_aws() -> None:
@@ -54,7 +55,7 @@ def test_pem_garble_preserves_armor_and_breaks_parse() -> None:
     original = _real_openssh_key()
     result = garble(original, session_id=_SID, path="/root/.ssh/id_ed25519")
     assert result.kind is GarbleKind.PEM
-    assert result.content.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert result.content.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")  # gitleaks:allow
     assert "-----END OPENSSH PRIVATE KEY-----" in result.content
     assert result.content != original
     # The corrupted body must no longer load as a valid key. Any parse
