@@ -79,17 +79,23 @@ GET /api/sessions/{session_id}/detail
     "counter_deception": {     # null when never engaged
       "mode": "both",
       "engaged_at": "<iso>",
-      "garble_paths_count": int,
-      "timebomb_intensity": "cold|mild|severe"
+      "garble_paths_count": int
     } | null,
     "similar": [{...}]         # top-k cluster neighbours, may be []
   }
   404 -> session_id not in the store
 ```
 
-The handler composes existing `DashboardState` / `SessionStore`
-reads; it adds no new SQL beyond a join already expressible against the
-v7 schema. It does not call the LLM.
+The handler composes existing `DashboardState` / `SessionStore` reads
+for the session, turns, intent, persona, honeytokens, and cluster
+neighbours. `time_wasted_ms` and `counter_deception` are not in the
+session store: the bridge keeps per-session wasted-ms and engagement
+state in its own process and emits them only to the audit log, so the
+handler derives those two from the audit log via `iter_events_in_range`,
+the same read path `/api/counter_deception/engagements` and the health
+endpoints already use. Time-bomb intensity is escalating in-process
+bridge state, never persisted, so it is dropped from the payload. The
+handler does not call the LLM.
 
 Frontend: a session row in the existing sessions table becomes a
 clickable link that opens a detail panel (a `<section class="panel">`

@@ -12,6 +12,7 @@ balancers and service probes), and ``/api/login``/``/api/logout``
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -92,6 +93,87 @@ def _get_overrides_publisher(request: Request) -> Any:
     in that case so existing tests continue to pass.
     """
     return getattr(request.app.state, "overrides_publisher", None)
+
+
+# Default neighbour count for the aggregate detail view's similar
+# section; mirrors the /api/sessions/{id}/similar k default.
+_DETAIL_SIMILAR_K = 5
+
+
+async def _build_similar_items(
+    state: DashboardState,
+    session_id: UUID,
+    *,
+    k: int,
+    min_similarity: float,
+) -> list[dict[str, Any]]:
+    """Map ``find_similar`` neighbours to the REST item shape.
+
+    Shared by ``/api/sessions/{id}/similar`` and the aggregate
+    ``/api/sessions/{id}/detail`` so both surface identical neighbour
+    rows from one code path.
+    """
+    neighbours = await state.find_similar(
+        session_id,
+        k=k,
+        min_similarity=min_similarity,
+    )
+    items: list[dict[str, Any]] = []
+    for embedding, similarity in neighbours:
+        session = await state.get_session(embedding.session_id)
+        items.append(
+            {
+                "session_id": str(embedding.session_id),
+                "similarity": round(similarity, 6),
+                "model": embedding.model,
+                "generated_at": embedding.generated_at.isoformat(),
+                "session": session.model_dump(mode="json") if session else None,
+            },
+        )
+    return items
+
+
+def _read_session_audit_facts(
+    audit_path: Path,
+    session_id: UUID,
+) -> tuple[int, dict[str, Any] | None]:
+    """Derive ``(time_wasted_ms, counter_deception)`` from the audit log.
+
+    Neither fact is in the session store: the bridge keeps per-session
+    wasted-ms and counter-deception engagement state in its own
+    process and emits them only to the audit log. One pass over the
+    log, scoped to ``session_id``:
+
+    * ``time_wasted_ms`` sums the per-command ``wasted_ms`` deltas on
+      ``bridge.wasting_applied`` events (the same field health.py
+      reads).
+    * ``counter_deception`` is built from the session's single
+      ``bridge.counter_deception_engaged`` event (mode, engaged_at,
+      garble_paths_count); ``None`` when never engaged. Time-bomb
+      intensity is escalating in-process bridge state, never
+      persisted, so it is not surfaced here.
+    """
+    sid = str(session_id)
+    time_wasted_ms = 0
+    counter_deception: dict[str, Any] | None = None
+    start = datetime.fromtimestamp(0, tz=UTC)
+    end = datetime.now(tz=UTC)
+    for event in iter_events_in_range(audit_path, start=start, end=end):
+        if event.get("session_id") != sid:
+            continue
+        event_type = event.get("event_type")
+        if event_type == "bridge.wasting_applied":
+            wasted = event.get("wasted_ms")
+            if isinstance(wasted, int):
+                time_wasted_ms += wasted
+        elif event_type == "bridge.counter_deception_engaged" and counter_deception is None:
+            count = event.get("garble_paths_count")
+            counter_deception = {
+                "mode": event.get("mode"),
+                "engaged_at": event.get("ts"),
+                "garble_paths_count": count if isinstance(count, int) else None,
+            }
+    return time_wasted_ms, counter_deception
 
 
 # ---------------------------------------------------------------------------
@@ -245,29 +327,74 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             if min_similarity is not None
             else request.app.state.settings.bridge.cluster_similarity_threshold
         )
-        neighbours = await state.find_similar(
+        items = await _build_similar_items(
+            state,
             session_id,
             k=k,
             min_similarity=threshold,
         )
-        items: list[dict[str, Any]] = []
-        for embedding, similarity in neighbours:
-            session = await state.get_session(embedding.session_id)
-            items.append(
-                {
-                    "session_id": str(embedding.session_id),
-                    "similarity": round(similarity, 6),
-                    "model": embedding.model,
-                    "generated_at": embedding.generated_at.isoformat(),
-                    "session": session.model_dump(mode="json") if session else None,
-                },
-            )
         return {
             "session_id": str(session_id),
             "k": k,
             "min_similarity": threshold,
             "count": len(items),
             "items": items,
+        }
+
+    @router.get(
+        "/api/sessions/{session_id}/detail",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_session_detail(
+        session_id: UUID,
+        request: Request,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Aggregate every per-session read behind a single fetch.
+
+        Composes the session snapshot and its ordered turns, the Stage 7
+        intent summary, the assigned persona, honeytokens placed for the
+        session's source IP, the Stage 12 counter-deception engagement,
+        and the Stage 8 cluster neighbours. ``time_wasted_ms`` and
+        ``counter_deception`` come from the audit log (the bridge keeps
+        both in-process; neither is in the session store), the same read
+        path the engagements and health endpoints use. Returns 404 for an
+        unknown session id. No LLM call.
+        """
+        session = await state.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+        intent = await state.get_intent(session_id)
+        honeytokens = await state.list_honeytokens_for_source_ip(session.source_ip)
+
+        # Cluster neighbours render empty (not 404) when the session has
+        # no embedding yet, so the panel still opens for fresh sessions.
+        similar: list[dict[str, Any]] = []
+        if await state.get_embedding(session_id) is not None:
+            threshold = request.app.state.settings.bridge.cluster_similarity_threshold
+            similar = await _build_similar_items(
+                state,
+                session_id,
+                k=_DETAIL_SIMILAR_K,
+                min_similarity=threshold,
+            )
+
+        time_wasted_ms, counter_deception = _read_session_audit_facts(
+            audit.path,
+            session_id,
+        )
+
+        return {
+            "session": session.model_dump(mode="json"),
+            "turns": [turn.model_dump(mode="json") for turn in session.turns],
+            "intent": intent.model_dump(mode="json") if intent else None,
+            "persona": session.persona_name,
+            "time_wasted_ms": time_wasted_ms,
+            "honeytokens": [token.model_dump(mode="json") for token in honeytokens],
+            "counter_deception": counter_deception,
+            "similar": similar,
         }
 
     # Stage 9 slice 9.4: operator persona pins. The selector consults
