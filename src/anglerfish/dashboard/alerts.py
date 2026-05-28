@@ -17,6 +17,7 @@ contract is exposed but not parsed by callers; round-trip via
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -273,7 +274,7 @@ def _top_match_similarity(matches: object) -> float | None:
     return float(sim) if isinstance(sim, (int, float)) else None
 
 
-_SUMMARISERS: dict[str, Any] = {
+_SUMMARISERS: dict[str, Callable[[dict[str, Any]], str]] = {
     "defense_fired": _summarise_defense_fired,
     "defense_scan_truncated": _summarise_defense_scan_truncated,
     "subsystem_refused": _summarise_subsystem_refused,

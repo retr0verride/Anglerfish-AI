@@ -46,7 +46,7 @@ class LureConfig(BaseModel):
 
     # Network
     listen_host: IPvAnyAddress = Field(
-        default=ipaddress.IPv4Address("0.0.0.0"),  # noqa: S104 - intentionally wildcard
+        default=ipaddress.IPv4Address("0.0.0.0"),  # noqa: S104  # nosec B104 - intentionally wildcard
         description=(
             "Bait-NIC IP to bind the SSH listener on. The lure refuses "
             "to start unless this IP is currently assigned to an "

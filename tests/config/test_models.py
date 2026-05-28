@@ -28,11 +28,13 @@ from anglerfish.config.models import (
 
 
 def test_log_level_members() -> None:
-    assert LogLevel.DEBUG == "DEBUG"
-    assert LogLevel.INFO == "INFO"
-    assert LogLevel.WARNING == "WARNING"
-    assert LogLevel.ERROR == "ERROR"
-    assert LogLevel.CRITICAL == "CRITICAL"
+    # Compare via .value to side-step mypy 1.10's StrEnum literal narrowing,
+    # which classifies the post-first-assert tail of this test unreachable.
+    assert LogLevel.DEBUG.value == "DEBUG"
+    assert LogLevel.INFO.value == "INFO"
+    assert LogLevel.WARNING.value == "WARNING"
+    assert LogLevel.ERROR.value == "ERROR"
+    assert LogLevel.CRITICAL.value == "CRITICAL"
 
 
 # ---------------------------------------------------------------------------

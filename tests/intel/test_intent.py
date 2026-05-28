@@ -283,11 +283,9 @@ async def test_no_threat_argument_omits_context_block() -> None:
     finally:
         await client.aclose()
 
-    system_contents = [
-        m["content"]
-        for m in seen[0]["messages"]
-        if m["role"] == "system"  # type: ignore[union-attr,index]
-    ]
+    messages = seen[0]["messages"]
+    assert isinstance(messages, list)
+    system_contents = [m["content"] for m in messages if m["role"] == "system"]
     assert not any("Score:" in c for c in system_contents)
 
 
@@ -303,7 +301,7 @@ async def test_budget_constructed_per_call_with_configured_cap() -> None:
     # the response so the second extract() call should fire
     # BudgetExhaustedError - but since we construct a fresh budget
     # per call, it should succeed every time.
-    payload = {
+    payload: dict[str, object] = {
         "actor_profile": "opportunistic",
         "intent": "x",
         "why": "x",

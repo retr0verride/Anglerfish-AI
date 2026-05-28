@@ -24,6 +24,7 @@ from anglerfish.config.models import OllamaConfig
 from anglerfish.intel import EmbeddingGenerator
 from anglerfish.models import ResponseSource
 from anglerfish.models.embedding import SessionEmbedding
+from anglerfish.models.session import SessionSnapshot
 
 _Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -209,7 +210,7 @@ async def test_schedule_embedding_audits_on_timeout(
     audit = _MockAudit()
 
     class _NeverFinish(EmbeddingGenerator):
-        async def generate(self, snapshot):  # type: ignore[override,no-untyped-def]
+        async def generate(self, snapshot: SessionSnapshot) -> SessionEmbedding | None:
             del snapshot
             await asyncio.sleep(10.0)
             raise AssertionError("should not reach")

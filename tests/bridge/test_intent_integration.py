@@ -22,6 +22,8 @@ from anglerfish.config import (
 from anglerfish.config.models import OllamaConfig
 from anglerfish.intel import IntentExtractor
 from anglerfish.models import ResponseSource, ThreatAssessment, ThreatTechnique
+from anglerfish.models.intent import IntentSummary
+from anglerfish.models.session import SessionSnapshot
 
 _Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -184,7 +186,11 @@ async def test_schedule_intent_extraction_audits_on_timeout(
     audit = _MockAudit()
 
     class _NeverFinish(IntentExtractor):
-        async def extract(self, snapshot, threat=None):  # type: ignore[override,no-untyped-def]
+        async def extract(
+            self,
+            snapshot: SessionSnapshot,
+            threat: ThreatAssessment | None = None,
+        ) -> IntentSummary:
             del snapshot, threat
             await asyncio.sleep(10.0)
             raise AssertionError("should not reach")
@@ -316,7 +322,9 @@ async def test_threat_assessment_passed_through_to_extractor(
 
     # The structured_chat payload includes the threat-context system
     # message with the score we recorded.
-    system_contents = [m["content"] for m in seen_payloads[0]["messages"] if m["role"] == "system"]
+    messages = seen_payloads[0]["messages"]
+    assert isinstance(messages, list)
+    system_contents = [m["content"] for m in messages if m["role"] == "system"]
     assert any("Score: 77" in c for c in system_contents)
 
 

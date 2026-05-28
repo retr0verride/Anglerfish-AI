@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -47,7 +47,7 @@ def _snapshot() -> SessionSnapshot:
     )
 
 
-def _intent_for(session_id) -> IntentSummary:
+def _intent_for(session_id: UUID) -> IntentSummary:
     return IntentSummary(
         session_id=session_id,
         actor_profile="automated",

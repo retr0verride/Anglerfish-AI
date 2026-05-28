@@ -284,7 +284,7 @@ async def test_scalar_helper_raises_typeerror_on_non_numeric_result(
     db = tmp_path / "creds.db"
     async with CredentialStore(_config(db)) as store:
         with pytest.raises(TypeError, match="expected numeric result"):
-            store._scalar("SELECT 'not-a-number'")  # type: ignore[attr-defined]
+            store._scalar("SELECT 'not-a-number'")
 
 
 async def test_methods_require_open(tmp_path: Path) -> None:

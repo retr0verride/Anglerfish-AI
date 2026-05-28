@@ -963,8 +963,8 @@ def test_evict_idle_sessions_drops_per_session_dicts(
         evicted = service.evict_idle_sessions()
         assert evicted == [sid]
         # Every per-session dict is now drained.
-        assert sid not in service._budgets  # type: ignore[attr-defined]
-        assert sid not in service._session_last_activity  # type: ignore[attr-defined]
+        assert sid not in service._budgets
+        assert sid not in service._session_last_activity
         # A fresh budget_for call rebuilds (sessions can legitimately
         # come back later if the client retries).
         assert service.budget_for(sid) is not None
@@ -999,8 +999,8 @@ def test_evict_idle_sessions_keeps_live_sessions(
         clock_value[0] = 1800.0
         evicted = service.evict_idle_sessions()
         assert evicted == [stale]
-        assert live in service._session_last_activity  # type: ignore[attr-defined]
-        assert stale not in service._session_last_activity  # type: ignore[attr-defined]
+        assert live in service._session_last_activity
+        assert stale not in service._session_last_activity
     finally:
         import asyncio as _asyncio
 
@@ -1021,7 +1021,7 @@ def test_end_session_budget_drops_activity_timestamp(
         sid = uuid4()
         service.record_session_activity(sid)
         service.end_session_budget(sid)
-        assert sid not in service._session_last_activity  # type: ignore[attr-defined]
+        assert sid not in service._session_last_activity
     finally:
         import asyncio as _asyncio
 
@@ -1318,7 +1318,9 @@ async def test_handle_command_stream_with_light_strategy_emits_audit(
     _, fields = wasting_events[0]
     assert fields["strategy"] == "light"
     assert fields["session_id"] == str(session.session_id)
-    assert fields["wasted_ms"] > 0
+    wasted_ms = fields["wasted_ms"]
+    assert isinstance(wasted_ms, int)
+    assert wasted_ms > 0
 
 
 async def test_handle_command_stream_off_strategy_emits_no_wasting_audit(
@@ -1466,8 +1468,12 @@ async def test_clarification_one_per_chain_blocks_follow_up(
     # Both LLM calls went out; the first carries the clarification suffix
     # and the second does not.
     assert len(seen_payloads) == 2
-    first_systems = [m["content"] for m in seen_payloads[0]["messages"] if m["role"] == "system"]  # type: ignore[union-attr]
-    second_systems = [m["content"] for m in seen_payloads[1]["messages"] if m["role"] == "system"]  # type: ignore[union-attr]
+    first_messages = seen_payloads[0]["messages"]
+    second_messages = seen_payloads[1]["messages"]
+    assert isinstance(first_messages, list)
+    assert isinstance(second_messages, list)
+    first_systems = [m["content"] for m in first_messages if m["role"] == "system"]
+    second_systems = [m["content"] for m in second_messages if m["role"] == "system"]
     assert any("disambiguate" in c for c in first_systems)
     assert not any("disambiguate" in c for c in second_systems)
 
@@ -1543,7 +1549,9 @@ async def test_wasting_budget_exhausts_drops_to_off_strategy(
     _, fields = exhausted_events[0]
     assert fields["session_id"] == str(session.session_id)
     assert fields["cap_ms"] == 100
-    assert fields["wasted_ms"] >= 100
+    wasted_ms_total = fields["wasted_ms"]
+    assert isinstance(wasted_ms_total, int)
+    assert wasted_ms_total >= 100
 
     # Three commands made it to Ollama (off path is still a real LLM call).
     assert len(seen_payloads) == 3

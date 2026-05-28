@@ -381,7 +381,7 @@ def test_scalar_helper_raises_typeerror_on_non_numeric_result(
     non-numeric query.
     """
     with pytest.raises(TypeError, match="expected numeric result"):
-        session_store._scalar("SELECT 'not-a-number'")  # type: ignore[attr-defined]
+        session_store._scalar("SELECT 'not-a-number'")
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -124,7 +124,7 @@ async def test_record_threat_assessment_above_threshold_schedules_placement(
         threat = _threat(score=75).model_copy(update={"session_id": sid})
         service.record_threat_assessment(sid, threat)
         # Wait for all background placement tasks.
-        await asyncio.gather(*placement._tasks, return_exceptions=True)  # type: ignore[attr-defined]
+        await asyncio.gather(*placement._tasks, return_exceptions=True)
     finally:
         await service.aclose()
     placed = [e for e in audit.events if e[0] == "bridge.honeytoken_placed"]
@@ -158,7 +158,7 @@ async def test_record_threat_assessment_below_threshold_no_placement(
     try:
         service.record_threat_assessment(sid, _threat(score=70))
         # No task scheduled means the await on the empty set is trivial.
-        await asyncio.gather(*placement._tasks, return_exceptions=True)  # type: ignore[attr-defined]
+        await asyncio.gather(*placement._tasks, return_exceptions=True)
     finally:
         await service.aclose()
     assert not [e for e in audit.events if e[0] == "bridge.honeytoken_placed"]
@@ -225,7 +225,7 @@ async def test_record_threat_assessment_dedups_per_session(
         # Fire three times above threshold for the same session.
         for score in (75, 90, 100):
             service.record_threat_assessment(sid, _threat(score=score))
-        await asyncio.gather(*placement._tasks, return_exceptions=True)  # type: ignore[attr-defined]
+        await asyncio.gather(*placement._tasks, return_exceptions=True)
     finally:
         await service.aclose()
     placed = [e for e in audit.events if e[0] == "bridge.honeytoken_placed"]
@@ -269,7 +269,7 @@ async def test_record_threat_assessment_no_source_ip_skipped(
 @pytest.fixture
 async def opened_reader_with_seed(
     tmp_path: Path,
-):
+) -> AsyncIterator[tuple[SessionStoreReader, Path]]:
     """Seed one per-IP + one static-base token, then yield (reader, db_path)."""
     sessions_db = tmp_path / "sessions.db"
     config = SessionStoreConfig(database_path=sessions_db)
@@ -311,7 +311,7 @@ async def opened_reader_with_seed(
 async def test_load_honeytokens_merges_static_and_per_ip(
     session_secret: str,
     encryption_key_b64: str,
-    opened_reader_with_seed,
+    opened_reader_with_seed: tuple[SessionStoreReader, Path],
 ) -> None:
     reader, sessions_db = opened_reader_with_seed
     settings = _settings(
@@ -335,7 +335,7 @@ async def test_load_honeytokens_merges_static_and_per_ip(
 async def test_load_honeytokens_empty_when_disabled(
     session_secret: str,
     encryption_key_b64: str,
-    opened_reader_with_seed,
+    opened_reader_with_seed: tuple[SessionStoreReader, Path],
 ) -> None:
     reader, sessions_db = opened_reader_with_seed
     settings = _settings(

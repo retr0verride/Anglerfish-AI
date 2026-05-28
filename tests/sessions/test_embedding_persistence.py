@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 import struct
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -27,7 +28,7 @@ from anglerfish.sessions.store import (
 )
 
 
-def _snapshot(*, session_id=None) -> SessionSnapshot:
+def _snapshot(*, session_id: UUID | None = None) -> SessionSnapshot:
     now = datetime(2026, 5, 26, 12, 0, tzinfo=UTC)
     return SessionSnapshot(
         session_id=session_id or uuid4(),
@@ -51,10 +52,10 @@ def _snapshot(*, session_id=None) -> SessionSnapshot:
 
 
 def _embedding_for(
-    session_id,
+    session_id: UUID,
     *,
-    vector=None,
-    model="embed-test",
+    vector: Sequence[float] | None = None,
+    model: str = "embed-test",
 ) -> SessionEmbedding:
     vec = tuple(vector) if vector is not None else tuple(0.01 * i for i in range(64))
     return SessionEmbedding(

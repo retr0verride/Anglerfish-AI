@@ -76,7 +76,7 @@ async def _seed_session_with_persona(
 async def _set_pin(store: SessionStore, source_ip: str, persona: str) -> None:
     """Insert a row directly into persona_pins for selector lookups."""
     now = datetime(2026, 5, 26, 12, 0, tzinfo=UTC).isoformat()
-    async with store._lock:  # type: ignore[attr-defined]
+    async with store._lock:
         store._conn.execute(  # type: ignore[union-attr]
             "INSERT INTO persona_pins (source_ip, persona, created_at, created_by) "
             "VALUES (?, ?, ?, ?)",

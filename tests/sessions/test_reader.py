@@ -161,7 +161,7 @@ async def test_get_persona_pin_returns_persona_when_pinned(tmp_path: Path) -> No
     try:
         # Insert directly; the dashboard's POST /api/persona/pin
         # endpoint ships in slice 9.4.
-        async with writer._lock:  # type: ignore[attr-defined]
+        async with writer._lock:
             writer._conn.execute(  # type: ignore[union-attr]
                 "INSERT INTO persona_pins (source_ip, persona, created_at, created_by) "
                 "VALUES (?, ?, ?, ?)",

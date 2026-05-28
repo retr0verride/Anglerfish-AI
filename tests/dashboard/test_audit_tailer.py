@@ -1319,7 +1319,7 @@ async def test_persistence_attempt_replay_is_idempotent(
     _append(tailer.audit_path, line)
     await tailer._poll_once()
     # Simulate offset-cache loss: zero the offset + re-tail.
-    tailer._offset = 0  # type: ignore[attr-defined]
+    tailer._offset = 0
     await tailer._poll_once()
     events = await dashboard_state.list_persistence_events_for_source_ip(
         "203.0.113.7",
@@ -1471,7 +1471,7 @@ async def test_honeytoken_placed_replay_is_idempotent(
     line = _honeytoken_placed_line(token_id="REPLAYREPLAYAAAA", session_id=sid)
     _append(tailer.audit_path, line)
     await tailer._poll_once()
-    tailer._offset = 0  # type: ignore[attr-defined]
+    tailer._offset = 0
     await tailer._poll_once()
     ip_rows = await dashboard_state.list_honeytokens_for_source_ip("203.0.113.7")
     assert len(ip_rows) == 1

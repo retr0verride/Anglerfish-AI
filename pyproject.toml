@@ -78,7 +78,15 @@ dev = [
     "bandit[toml]>=1.7,<2",
     # Lint / type-check
     "ruff>=0.4.4,<1",
-    "mypy>=1.10,<2",
+    # mypy pinned to the 1.10.x series to match the pre-commit hook
+    # (.pre-commit-config.yaml rev v1.10.0). The wider range mypy >=1.10,<2
+    # previously let uv + CI install mypy 1.20.x while pre-commit stayed
+    # on 1.10.0, producing different error sets locally vs CI. CI has
+    # been failing on the strict mypy step continuously (test-file type-
+    # annotation drift, accumulated unused-type:ignore comments); pinning
+    # keeps the failure surface deterministic across environments while
+    # the fix is scoped as a dedicated tech-debt sweep.
+    "mypy>=1.10,<1.11",
     "pre-commit>=3.7,<5",
     "types-PyYAML>=6.0,<7",
     # All runtime extras flattened in for full test coverage.

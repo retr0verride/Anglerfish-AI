@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -67,7 +67,7 @@ def _snapshot() -> SessionSnapshot:
     )
 
 
-def _intent(*, session_id, extracted_at) -> IntentSummary:
+def _intent(*, session_id: UUID, extracted_at: datetime) -> IntentSummary:
     return IntentSummary(
         session_id=session_id,
         actor_profile="automated",

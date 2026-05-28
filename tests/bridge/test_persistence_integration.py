@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -232,7 +232,7 @@ async def test_classify_command_swallows_classifier_error_and_audits(
 @pytest.fixture
 async def opened_reader_with_seed(
     tmp_path: Path,
-):
+) -> AsyncIterator[tuple[SessionStoreReader, Path]]:
     """Migrate the DB + seed a prior install, then yield (reader, sessions_db)."""
     sessions_db = tmp_path / "sessions.db"
     config = SessionStoreConfig(database_path=sessions_db)
@@ -261,7 +261,7 @@ async def opened_reader_with_seed(
 async def test_load_persistence_returns_prior_installs(
     session_secret: str,
     encryption_key_b64: str,
-    opened_reader_with_seed,
+    opened_reader_with_seed: tuple[SessionStoreReader, Path],
 ) -> None:
     reader, sessions_db = opened_reader_with_seed
     settings = _settings(
@@ -285,7 +285,7 @@ async def test_load_persistence_returns_prior_installs(
 async def test_load_persistence_empty_when_disabled(
     session_secret: str,
     encryption_key_b64: str,
-    opened_reader_with_seed,
+    opened_reader_with_seed: tuple[SessionStoreReader, Path],
 ) -> None:
     reader, sessions_db = opened_reader_with_seed
     settings = _settings(

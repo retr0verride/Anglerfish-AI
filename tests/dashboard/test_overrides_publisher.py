@@ -57,7 +57,9 @@ def test_publish_records_audit_event(tmp_path: Path) -> None:
     assert len(events) == 1
     assert events[0]["event_type"] == "dashboard.overrides_published"
     assert events[0]["path"] == str(publish_path)
-    assert events[0]["bridge_snapshot"]["wasting_strategy"] == "off"
+    snapshot = events[0]["bridge_snapshot"]
+    assert isinstance(snapshot, dict)
+    assert snapshot["wasting_strategy"] == "off"
 
 
 def test_publish_quiet_skips_audit_event(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from anglerfish.config.models import SessionStoreConfig
 from anglerfish.honeytokens.schema import Honeytoken
@@ -19,7 +19,7 @@ def _token(
     token_id: str = "AAAAAAAAAAAAAAAA",  # noqa: S107 - test fixture, not a credential
     kind: str = "aws",
     source_ip: str | None = "203.0.113.7",
-    session_id=None,
+    session_id: UUID | None = None,
     placed_at: str = "/root/.aws/credentials",
     when: datetime | None = None,
 ) -> Honeytoken:
@@ -201,7 +201,7 @@ async def test_honeytoken_survives_session_delete(tmp_path: Path) -> None:
             _token(token_id="SURVIVOAAAAAAAAA", session_id=sid),
         )
         # Direct SQL delete; the FK-free schema must not cascade.
-        async with store._lock:  # type: ignore[attr-defined]
+        async with store._lock:
             store._conn.execute(  # type: ignore[union-attr]
                 "DELETE FROM sessions WHERE session_id = ?",
                 (str(sid),),

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -63,9 +63,9 @@ def _snapshot() -> SessionSnapshot:
 
 
 def _embedding(
-    session_id,
+    session_id: UUID,
     *,
-    vector,
+    vector: Sequence[float],
     model: str = "embed-test",
 ) -> SessionEmbedding:
     vec = tuple(vector)

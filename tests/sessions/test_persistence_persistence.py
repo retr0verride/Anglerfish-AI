@@ -214,7 +214,7 @@ async def test_persistence_state_survives_session_delete(tmp_path: Path) -> None
         # Direct SQL delete (no session row exists; we never inserted
         # one. The test confirms no FK rejects the persistence insert
         # AND no FK cascades a delete.)
-        async with store._lock:  # type: ignore[attr-defined]
+        async with store._lock:
             store._conn.execute(  # type: ignore[union-attr]
                 "DELETE FROM sessions WHERE session_id = ?",
                 (str(sid),),

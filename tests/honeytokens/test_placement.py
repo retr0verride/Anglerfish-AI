@@ -52,7 +52,8 @@ async def test_placement_audit_carries_full_token_shape() -> None:
         assert fields["kind"] in {"aws", "ssh_key"}
         assert isinstance(fields["payload"], str)
         assert fields["payload"]
-        assert fields["callback_url"].startswith("https://honey.example.com/cb/")  # type: ignore[union-attr]
+        assert isinstance(fields["callback_url"], str)
+        assert fields["callback_url"].startswith("https://honey.example.com/cb/")
         assert isinstance(fields["placed_at"], str)
         assert fields["placed_at"]
         assert fields["source_ip"] == "203.0.113.7"
@@ -129,4 +130,4 @@ async def test_placement_task_set_self_cleans_on_completion() -> None:
     import asyncio
 
     await asyncio.sleep(0)
-    assert task not in service._tasks  # type: ignore[attr-defined]
+    assert task not in service._tasks

@@ -139,10 +139,7 @@ async def test_structured_chat_retries_on_invalid_json() -> None:
     assert len(seen) == 2
     # The retry includes a correction message.
     second_request_msgs = seen[1]["messages"]
-    assert any(
-        "could not be parsed" in m["content"]
-        for m in second_request_msgs  # type: ignore[union-attr]
-    )
+    assert any("could not be parsed" in m["content"] for m in second_request_msgs)
 
 
 async def test_structured_chat_retries_on_validation_error() -> None:
@@ -168,7 +165,7 @@ async def test_structured_chat_retries_on_validation_error() -> None:
     # The second request includes the offending assistant message in
     # context so the model can self-correct.
     msgs = seen[1]["messages"]
-    assert any(m["role"] == "assistant" for m in msgs)  # type: ignore[union-attr]
+    assert any(m["role"] == "assistant" for m in msgs)
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +273,6 @@ async def test_structured_chat_schema_injected_into_system_message() -> None:
     seen = handler.seen  # type: ignore[attr-defined]
     msgs = seen[0]["messages"]
     # Last message is the schema-bearing system instruction.
-    assert msgs[-1]["role"] == "system"  # type: ignore[index]
-    assert "JSON object" in msgs[-1]["content"]  # type: ignore[index]
-    assert "confidence" in msgs[-1]["content"]  # type: ignore[index]
+    assert msgs[-1]["role"] == "system"
+    assert "JSON object" in msgs[-1]["content"]
+    assert "confidence" in msgs[-1]["content"]

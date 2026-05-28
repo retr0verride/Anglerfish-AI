@@ -462,7 +462,9 @@ async def test_streaming_path_writes_chunks_in_order(
         ) as conn:
             result = await conn.run("apt-get install hax", timeout=3.0)
         # Both deltas concatenated, with a trailing newline appended.
-        assert (result.stdout or "").startswith("hello")
+        stdout = result.stdout or ""
+        assert isinstance(stdout, str)
+        assert stdout.startswith("hello")
     finally:
         await server.stop(drain_timeout_s=2.0)
         await server.bridge_client.aclose()

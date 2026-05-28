@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import httpx
@@ -78,7 +78,7 @@ def persona_registry() -> PersonaRegistry:
 
 
 @pytest.fixture
-async def reader(tmp_path: Path) -> Iterator[SessionStoreReader]:
+async def reader(tmp_path: Path) -> AsyncIterator[SessionStoreReader]:
     """Migrate the DB via a writer, then open + yield a read-only handle."""
     config = SessionStoreConfig(database_path=tmp_path / "sessions.db")
     writer = SessionStore(config)
