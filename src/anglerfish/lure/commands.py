@@ -32,14 +32,31 @@ from typing import Final
 from anglerfish.bridge.path import normalise_path
 from anglerfish.lure.config import LureConfig
 from anglerfish.lure.fakefs import listdir, read
+from anglerfish.lure.garble import garble
 from anglerfish.lure.session import LureSessionContext
 
 __all__ = [
     "DispatchResult",
+    "GarbleServed",
     "LatencyJitter",
     "NativeCommands",
     "first_token",
 ]
+
+
+@dataclass(frozen=True)
+class GarbleServed:
+    """Counter-deception garble metadata for one ``cat`` (Stage 12).
+
+    Carried on :class:`DispatchResult` so the server (which holds the
+    AuditLog) can record ``lure.counter_deception_garble_served`` after
+    dispatch. The handler stays free of audit-logging concerns.
+    """
+
+    path: str
+    kind: str
+    original_chars: int
+    garbled_chars: int
 
 
 @dataclass(frozen=True)
@@ -51,11 +68,15 @@ class DispatchResult:
     body the attacker sees, empty for handlers like ``cd`` that have
     no stdout. ``close_after`` is True only for ``exit``: the asyncssh
     channel handler closes the session after delivering ``text``.
+    ``garble`` is set only when the ``cat`` handler corrupted the file
+    for a counter-deception-engaged session (Stage 12); the server
+    records the audit event from it.
     """
 
     handled: bool
     text: str = ""
     close_after: bool = False
+    garble: GarbleServed | None = None
 
 
 def first_token(command: str) -> str:
@@ -283,6 +304,22 @@ async def _cat(session: LureSessionContext, tokens: list[str]) -> DispatchResult
     target = normalise_path(target)
     read_result = read(target, session)
     if read_result.status == "content":
+        # Stage 12: corrupt the served bytes when counter-deception
+        # engaged for this session AND this path is in the allowlist.
+        # garble() is deterministic per (session_id, path) so repeated
+        # cats of the same file return identical corruption.
+        if target in session.counter_deception_garble_paths:
+            result = garble(read_result.content, session_id=session.session_id, path=target)
+            return DispatchResult(
+                handled=True,
+                text=result.content,
+                garble=GarbleServed(
+                    path=target,
+                    kind=result.kind.value,
+                    original_chars=result.original_chars,
+                    garbled_chars=result.garbled_chars,
+                ),
+            )
         return DispatchResult(handled=True, text=read_result.content)
     if read_result.status == "permission_denied":
         return DispatchResult(

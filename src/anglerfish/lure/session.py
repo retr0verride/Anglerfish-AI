@@ -59,6 +59,7 @@ class LureSessionContext:
         history_window: int = 200,
         persona_name: str | None = None,
         persona_overlay: dict[str, str] | None = None,
+        counter_deception_garble_paths: frozenset[str] | None = None,
     ) -> None:
         if history_window < 1:
             raise ValueError(f"history_window must be >= 1, got {history_window}")
@@ -69,6 +70,16 @@ class LureSessionContext:
         self._cwd = normalise_path(cwd)
         self._history: deque[LureCommandRecord] = deque(maxlen=history_window)
         self._opened_at = datetime.now(tz=UTC)
+        # Stage 12: fakefs paths the _cat handler garbles for this session.
+        # Populated at session-open from the bridge's SessionStartResponse
+        # when counter-deception engaged for this source IP on a prior
+        # session (see bridge.AIBridgeService.get_garble_paths_for_source_ip).
+        # Empty frozenset (the default) preserves pre-Stage-12 behaviour.
+        self._counter_deception_garble_paths = (
+            counter_deception_garble_paths
+            if counter_deception_garble_paths is not None
+            else frozenset()
+        )
         # Stage 9: per-persona fakefs overlay. fakefs.read consults
         # this dict before its static base table; fakefs.system_prompt
         # _summary mentions the overlaid paths so the bridge's
@@ -111,6 +122,11 @@ class LureSessionContext:
     def persona_overlay(self) -> dict[str, str]:
         """Per-persona fakefs overlay (path -> content); empty when disabled."""
         return self._persona_overlay
+
+    @property
+    def counter_deception_garble_paths(self) -> frozenset[str]:
+        """Fakefs paths the _cat handler garbles for this session (Stage 12)."""
+        return self._counter_deception_garble_paths
 
     def update_cwd(self, new_cwd: str) -> None:
         """Normalise ``new_cwd`` and store it as the session's current directory."""

@@ -431,11 +431,16 @@ one dashboard-side event (operator action, not tailer-consumed):
   session). Fields: `session_id`, `attacker_ip`, `mode`,
   `garble_paths_count` (count, not full list to bound payload
   size), `timebomb_thresholds`, `threat_score`.
-- `bridge.counter_deception_garble_served`: per `_cat` call that
-  garbled a file. Fields: `session_id`, `path`, `kind` (pem /
-  aws / default), `original_chars`, `garbled_chars`. (Lure-
-  side; recorded via the bridge's AuditLog reference passed
-  to the lure session context.)
+- `lure.counter_deception_garble_served`: per `_cat` call that
+  garbled a file. Fields: `source_ip`, `session_id`, `path`,
+  `kind` (pem / aws / default), `original_chars`,
+  `garbled_chars`. Lure-side event (the lure executes the
+  byte corruption), so it carries the `lure.` prefix per the
+  `<subsystem>.<verb>_<noun>` audit taxonomy rather than the
+  `bridge.` prefix the initial draft used. The `_cat` handler
+  returns the garble metadata on its `DispatchResult`; the
+  lure server records the event from its own AuditLog after
+  dispatch.
 - `bridge.counter_deception_timebomb_applied`: per command that
   hit mild or severe. Fields: `session_id`, `command_count`,
   `intensity` (mild / severe).
@@ -730,14 +735,18 @@ Five slices, each shippable green mid-flight:
 - **12.3** Lure integration: `LureSessionContext.counter_
   deception_garble_paths`, the `_cat` handler garble branch,
   `lure/garble.py` corruption primitives (PEM / AWS / default
-  text kinds). `bridge.counter_deception_garble_served` audit
-  event lands. Tests: lure unit + end-to-end. The bait-loop
+  text kinds). `lure.counter_deception_garble_served` audit
+  event lands (lure-prefixed; the `_cat` handler returns garble
+  metadata on its `DispatchResult` and the lure server records
+  the event). Tests: lure unit + end-to-end. The bait-loop
   fully bites after this slice.
 - **12.4** Dashboard surface: 3 new endpoints
   (`/api/counter_deception/state`, `/api/counter_deception/
   engagements`, `POST /api/counter_deception/pin`), alerts-
-  panel renderer, audit-tailer dispatch for the three
-  `bridge.counter_deception_*` event types, the operator-pin
+  panel renderer, audit-tailer dispatch for the three tailed
+  counter-deception events (`bridge.counter_deception_engaged`,
+  `bridge.counter_deception_timebomb_applied`,
+  `lure.counter_deception_garble_served`), the operator-pin
   `dashboard.counter_deception_pinned` event (audit only, not
   tailer-consumed), settings-changed audit. Operator-facing
   surface lands here.

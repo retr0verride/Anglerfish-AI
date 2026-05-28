@@ -59,6 +59,10 @@ class OpenSessionResult:
     fake_cwd: str
     persona_name: str | None
     persona_overlay: dict[str, str]
+    # Stage 12: fakefs paths the lure should garble for this session.
+    # Non-empty only when the bridge engaged counter-deception for this
+    # source IP on a prior session. Empty tuple for the common case.
+    counter_deception_garble_paths: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -189,6 +193,8 @@ class BridgeClient:
         persona_name = persona_name_raw if isinstance(persona_name_raw, str) else None
         overlay_raw = body.get("persona_overlay", {})
         persona_overlay = _coerce_overlay(overlay_raw)
+        garble_raw = body.get("counter_deception_garble_paths", [])
+        counter_deception_garble_paths = _coerce_str_tuple(garble_raw)
         return OpenSessionResult(
             session_id=session_id,
             fake_hostname=fake_hostname,
@@ -196,6 +202,7 @@ class BridgeClient:
             fake_cwd=fake_cwd,
             persona_name=persona_name,
             persona_overlay=persona_overlay,
+            counter_deception_garble_paths=counter_deception_garble_paths,
         )
 
     async def submit_command(
@@ -390,6 +397,19 @@ def _coerce_overlay(raw: Any) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
     return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def _coerce_str_tuple(raw: Any) -> tuple[str, ...]:
+    """Coerce a JSON array field into a tuple of strings.
+
+    Tolerant by design (same posture as :func:`_coerce_overlay`): a
+    non-list payload or non-string entries yield an empty tuple so a
+    bridge-side schema regression never crashes the lure. Stage 12's
+    counter_deception_garble_paths uses this.
+    """
+    if not isinstance(raw, list):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str))
 
 
 def _parse_stream_chunk(line: str, path: str) -> BridgeStreamChunk:

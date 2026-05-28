@@ -480,6 +480,7 @@ async def _process_handler(
     bridge_cwd: str | None = None
     persona_name: str | None = None
     persona_overlay: dict[str, str] = {}
+    garble_paths: frozenset[str] = frozenset()
     try:
         result = await container.bridge_client.open_session(
             source_ip=state.source_ip,
@@ -490,6 +491,7 @@ async def _process_handler(
         bridge_cwd = result.fake_cwd
         persona_name = result.persona_name
         persona_overlay = result.persona_overlay
+        garble_paths = frozenset(result.counter_deception_garble_paths)
         state.bridge_uuid = bridge_uuid
     except BridgeUnavailableError as exc:
         container.audit.record(
@@ -518,6 +520,7 @@ async def _process_handler(
         history_window=container.config.history_window,
         persona_name=persona_name,
         persona_overlay=persona_overlay,
+        counter_deception_garble_paths=garble_paths,
     )
     state.lure_session = lure_session
     if not state.open_audited:
@@ -615,6 +618,19 @@ async def _handle_one_command(
             command=sanitised[:200],
             session_id=str(session.session_id),
         )
+        # Stage 12: the cat handler corrupted a counter-deception
+        # allowlisted file for this session. Record it so the operator
+        # sees which bait files the attacker actually exfiltrated.
+        if native.garble is not None:
+            container.audit.record(
+                "lure.counter_deception_garble_served",
+                source_ip=session.source_ip,
+                session_id=str(session.session_id),
+                path=native.garble.path,
+                kind=native.garble.kind,
+                original_chars=native.garble.original_chars,
+                garbled_chars=native.garble.garbled_chars,
+            )
         if native.text:
             write(native.text)
         return native.close_after
