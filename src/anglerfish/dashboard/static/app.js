@@ -54,9 +54,19 @@ function formatTimestamp(iso) {
   return d.toLocaleString();
 }
 
+// HTML-escape before interpolating into innerHTML. Several call sites
+// render attacker-controlled text (typed commands, bridge responses,
+// submitted usernames/passwords); without escaping, markup in those
+// fields executes in the operator's authenticated session. There is no
+// CSP backstop, so this function is the boundary.
 function escapeText(value) {
   if (value === null || value === undefined) return "";
-  return String(value);
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function refreshThreats() {
