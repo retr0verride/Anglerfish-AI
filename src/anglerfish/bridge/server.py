@@ -333,6 +333,14 @@ def create_bridge_app(
         # moment (a session whose first command never lands still
         # gets pruned after the cutoff).
         service.record_session_activity(ctx.session_id)
+        # Stage 12: apply an operator counter-deception pin for this
+        # source IP, if any. Done here (before the garble-paths lookup
+        # below) so a garble/both pin takes effect on THIS session
+        # immediately rather than only the next one. A pin also marks
+        # the session engaged so the threat-driven path skips it.
+        pin_mode = await service.load_counter_deception_pin(req.source_ip)
+        if pin_mode is not None:
+            service.apply_counter_deception_pin(ctx.session_id, req.source_ip, pin_mode)
         if selection is not None:
             service.record_persona_selected(
                 session_id=ctx.session_id,
@@ -354,10 +362,11 @@ def create_bridge_app(
         overlay: dict[str, str] = dict(persona.fakefs_overlay) if persona is not None else {}
         for token in honeytokens:
             overlay[token.placed_at] = token.payload
-        # Stage 12: if counter-deception engaged on a prior session from
-        # this source IP (within this bridge process lifetime), ship the
-        # garble allowlist so the lure can corrupt those files. Empty for
-        # the common case. Slice 12.3 wires the lure consumer.
+        # Stage 12: ship the garble allowlist so the lure can corrupt
+        # those files. Populated either by a prior threat-driven
+        # engagement from this source IP (next-session effect) or by the
+        # pin applied just above (this-session effect). Empty for the
+        # common, unengaged case.
         garble_paths = service.get_garble_paths_for_source_ip(req.source_ip)
         return SessionStartResponse(
             session_id=ctx.session_id,

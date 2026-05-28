@@ -9,6 +9,7 @@ Lure-side garbling lands in slice 12.3.
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -362,3 +363,171 @@ async def test_no_strategy_wired_is_inert(
         await service.aclose()
     assert sid not in service._counter_deception_state
     assert not any(e[0] == "bridge.counter_deception_engaged" for e in audit.events)
+
+
+# ---------------------------------------------------------------------------
+# Operator pins (slice 12.4)
+# ---------------------------------------------------------------------------
+
+
+async def test_apply_pin_force_engages_with_pinned_mode(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """A garble/both pin force-engages regardless of threat + audits trigger=pin."""
+    audit = _MockAudit()
+    settings = _settings(session_secret=session_secret, encryption_key_b64=encryption_key_b64)
+    service = _service(settings, audit=audit)
+    sid = uuid4()
+    try:
+        service.apply_counter_deception_pin(sid, "203.0.113.7", CounterDeceptionMode.BOTH)
+    finally:
+        await service.aclose()
+    assert sid in service._counter_deception_state
+    engaged = [e for e in audit.events if e[0] == "bridge.counter_deception_engaged"]
+    assert len(engaged) == 1
+    assert engaged[0][1]["trigger"] == "pin"
+    assert engaged[0][1]["threat_score"] is None
+    # The pin gives the CURRENT session its garble paths immediately.
+    assert service.get_garble_paths_for_source_ip("203.0.113.7") == (
+        "/root/.ssh/id_rsa",
+        "/root/.aws/credentials",
+    )
+
+
+async def test_apply_pin_off_whitelists_session(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """An OFF pin marks the session engaged (so the threat path skips it) but
+    stashes no state and audits nothing - a whitelist."""
+    audit = _MockAudit()
+    settings = _settings(session_secret=session_secret, encryption_key_b64=encryption_key_b64)
+    service = _service(settings, audit=audit)
+    sid = uuid4()
+    service.record_session_source_ip(sid, "203.0.113.7")
+    try:
+        service.apply_counter_deception_pin(sid, "203.0.113.7", CounterDeceptionMode.OFF)
+        # A subsequent high-threat assessment must NOT engage (whitelisted).
+        service.record_threat_assessment(sid, _threat(99))
+    finally:
+        await service.aclose()
+    assert sid not in service._counter_deception_state
+    assert sid in service._counter_deception_engaged_for
+    assert not any(e[0] == "bridge.counter_deception_engaged" for e in audit.events)
+
+
+async def test_pin_takes_precedence_over_threat(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """Once a pin engaged a session, a later threat crossing does not re-engage."""
+    audit = _MockAudit()
+    settings = _settings(session_secret=session_secret, encryption_key_b64=encryption_key_b64)
+    service = _service(settings, audit=audit)
+    sid = uuid4()
+    service.record_session_source_ip(sid, "203.0.113.7")
+    try:
+        service.apply_counter_deception_pin(sid, "203.0.113.7", CounterDeceptionMode.TIMEBOMB)
+        service.record_threat_assessment(sid, _threat(99))
+    finally:
+        await service.aclose()
+    engaged = [e for e in audit.events if e[0] == "bridge.counter_deception_engaged"]
+    assert len(engaged) == 1
+    assert engaged[0][1]["trigger"] == "pin"
+    assert engaged[0][1]["mode"] == "timebomb"
+
+
+async def test_apply_pin_inert_without_strategy(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    service = _service(
+        _settings(session_secret=session_secret, encryption_key_b64=encryption_key_b64),
+        with_strategy=False,
+    )
+    sid = uuid4()
+    try:
+        service.apply_counter_deception_pin(sid, "203.0.113.7", CounterDeceptionMode.BOTH)
+    finally:
+        await service.aclose()
+    assert sid not in service._counter_deception_state
+
+
+async def test_load_pin_reads_via_reader(
+    session_secret: str,
+    encryption_key_b64: str,
+    tmp_path: Path,
+) -> None:
+    """load_counter_deception_pin reads the persisted pin via the store reader."""
+    from anglerfish.config.models import SessionStoreConfig
+    from anglerfish.sessions import SessionStore
+    from anglerfish.sessions.reader import SessionStoreReader
+
+    cfg = SessionStoreConfig(database_path=tmp_path / "sessions.db")
+    writer = SessionStore(cfg)
+    await writer.open()
+    await writer.upsert_counter_deception_pin(
+        source_ip="203.0.113.7",
+        mode=CounterDeceptionMode.GARBLE,
+        created_by="op",
+    )
+    await writer.aclose()
+
+    reader = SessionStoreReader(cfg)
+    await reader.open()
+    settings = _settings(session_secret=session_secret, encryption_key_b64=encryption_key_b64)
+    service = AIBridgeService(
+        settings,
+        client=_mock_client(),
+        counter_deception_strategy=ModeAwareCounterDeceptionStrategy(settings.counter_deception),
+        session_store_reader=reader,
+    )
+    try:
+        mode = await service.load_counter_deception_pin("203.0.113.7")
+        assert mode is CounterDeceptionMode.GARBLE
+        assert await service.load_counter_deception_pin("8.8.8.8") is None
+    finally:
+        await service.aclose()
+        await reader.aclose()
+
+
+async def test_load_pin_none_when_disabled(
+    session_secret: str,
+    encryption_key_b64: str,
+    tmp_path: Path,
+) -> None:
+    """load_counter_deception_pin returns None when CD is globally disabled,
+    even if a pin row exists."""
+    from anglerfish.config.models import SessionStoreConfig
+    from anglerfish.sessions import SessionStore
+    from anglerfish.sessions.reader import SessionStoreReader
+
+    cfg = SessionStoreConfig(database_path=tmp_path / "sessions.db")
+    writer = SessionStore(cfg)
+    await writer.open()
+    await writer.upsert_counter_deception_pin(
+        source_ip="203.0.113.7",
+        mode=CounterDeceptionMode.BOTH,
+        created_by="op",
+    )
+    await writer.aclose()
+
+    reader = SessionStoreReader(cfg)
+    await reader.open()
+    settings = _settings(
+        session_secret=session_secret,
+        encryption_key_b64=encryption_key_b64,
+        cd_enabled=False,
+    )
+    service = AIBridgeService(
+        settings,
+        client=_mock_client(),
+        counter_deception_strategy=ModeAwareCounterDeceptionStrategy(settings.counter_deception),
+        session_store_reader=reader,
+    )
+    try:
+        assert await service.load_counter_deception_pin("203.0.113.7") is None
+    finally:
+        await service.aclose()
+        await reader.aclose()

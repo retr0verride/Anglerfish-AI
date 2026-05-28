@@ -25,7 +25,7 @@ __all__ = [
 ]
 
 
-CURRENT_SCHEMA_VERSION: Final[int] = 6
+CURRENT_SCHEMA_VERSION: Final[int] = 7
 
 
 # Connection-level pragmas applied on every open. WAL gives us
@@ -235,8 +235,29 @@ CREATE INDEX IF NOT EXISTS idx_honeytokens_kind      ON honeytokens(kind);
 """
 
 
-# Migration chain: index = target version. Adding v7 means adding
-# _MIGRATION_7 and appending here; run_migrations walks the chain.
+# v6 -> v7: Stage 12 active counter-deception. Operator-driven
+# per-source-IP pins that force (or, with mode='off', suppress)
+# counter-deception engagement regardless of the threat score. The
+# bridge reads a pin at session-open via SessionStoreReader and
+# applies it before the threat-driven engagement path runs. Mirrors
+# the persona_pins shape: source_ip PK, an operator + timestamp, and
+# the pinned value (here the CounterDeceptionMode string).
+#
+# mode='off' is a whitelist: it suppresses engagement for that IP
+# even above the threat threshold (e.g. a known security researcher
+# the operator does not want to feed wrong data).
+_MIGRATION_7: Final[str] = """
+CREATE TABLE IF NOT EXISTS counter_deception_pins (
+    source_ip   TEXT PRIMARY KEY,
+    mode        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL
+);
+"""
+
+
+# Migration chain: index = target version. Adding v8 means adding
+# _MIGRATION_8 and appending here; run_migrations walks the chain.
 _MIGRATIONS: Final[tuple[str, ...]] = (
     _MIGRATION_1,
     _MIGRATION_2,
@@ -244,6 +265,7 @@ _MIGRATIONS: Final[tuple[str, ...]] = (
     _MIGRATION_4,
     _MIGRATION_5,
     _MIGRATION_6,
+    _MIGRATION_7,
 )
 
 

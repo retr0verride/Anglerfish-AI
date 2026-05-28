@@ -59,6 +59,7 @@ from anglerfish.bridge.strategies.counter_deception import (
     CounterDeceptionState,
     CounterDeceptionStrategyBase,
 )
+from anglerfish.config.models import CounterDeceptionMode
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.honeytokens import Honeytoken, HoneytokenPlacementService
 from anglerfish.intel import EmbeddingGenerator, IntentExtractor
@@ -510,7 +511,79 @@ class AIBridgeService:
             session_id=session_id,
             source_ip=source_ip,
             state=state,
-            threat=threat,
+            trigger="threat",
+            threat_score=threat.score,
+        )
+
+    async def load_counter_deception_pin(self, source_ip: str) -> CounterDeceptionMode | None:
+        """Read the operator counter-deception pin for ``source_ip`` (Stage 12).
+
+        Async read via the session-store reader, called by the bridge
+        HTTP server at session-open. Returns the pinned
+        :class:`CounterDeceptionMode`, or ``None`` when no pin exists,
+        no reader is wired, or counter-deception is globally disabled.
+        A malformed stored value (should not happen; the dashboard
+        validates on write) is treated as no pin.
+        """
+        if not self._settings.counter_deception.enabled:
+            return None
+        if self._session_store_reader is None:
+            return None
+        raw = await self._session_store_reader.get_counter_deception_pin(source_ip)
+        if raw is None:
+            return None
+        try:
+            return CounterDeceptionMode(raw)
+        except ValueError:
+            self._logger.warning(
+                "counter-deception pin for %s has unknown mode %r; ignoring",
+                source_ip,
+                raw,
+            )
+            return None
+
+    def apply_counter_deception_pin(
+        self,
+        session_id: UUID,
+        source_ip: str,
+        pin_mode: CounterDeceptionMode,
+    ) -> None:
+        """Force (or suppress) counter-deception for a pinned session.
+
+        Called by the bridge HTTP server at session-open with the result
+        of :meth:`load_counter_deception_pin`. Because the pin is known
+        before the ``SessionStartResponse`` is built, a garble/both pin
+        takes effect on THIS session immediately (unlike the threat-
+        driven path, which only affects the next session from the IP).
+
+        ``pin_mode == OFF`` is a whitelist: the session is marked engaged
+        (so the later threat-driven path skips it) but NO state is
+        stashed, so neither the time-bomb nor garbling fires. Any other
+        mode force-engages with that mode regardless of threat score.
+
+        No-op when no strategy is wired. Safe to call once per session.
+        """
+        if self._counter_deception_strategy is None:
+            return
+        if session_id in self._counter_deception_engaged_for:
+            return
+        # Mark handled so the threat-driven engage path skips this session.
+        self._counter_deception_engaged_for.add(session_id)
+        state = self._counter_deception_strategy.state_for_mode(pin_mode)
+        if state is None:
+            # OFF pin: whitelist. Session suppressed; nothing to stash or
+            # audit (the dashboard logged dashboard.counter_deception_pinned
+            # when the operator created the pin).
+            return
+        self._counter_deception_state[session_id] = state
+        if state.garble_paths:
+            self._counter_deception_paths_by_source_ip[source_ip] = state.garble_paths
+        self._record_counter_deception_engaged(
+            session_id=session_id,
+            source_ip=source_ip,
+            state=state,
+            trigger="pin",
+            threat_score=None,
         )
 
     def amend_prompt_for_session(
@@ -568,22 +641,26 @@ class AIBridgeService:
         session_id: UUID,
         source_ip: str | None,
         state: CounterDeceptionState,
-        threat: ThreatAssessment,
+        trigger: str,
+        threat_score: int | None,
     ) -> None:
         """Audit a single bridge.counter_deception_engaged event.
 
-        ``garble_paths`` rides as a count (not the full list) to bound
-        the audit-log payload; the dashboard reads the live config for
-        the path list.
+        ``trigger`` is "threat" (score crossed the threshold) or "pin"
+        (operator forced it). ``threat_score`` is the crossing score for
+        the threat path, None for a pin. ``garble_paths`` rides as a
+        count (not the full list) to bound the audit-log payload; the
+        dashboard reads the live config for the path list.
         """
         self._audit_log.record(
             "bridge.counter_deception_engaged",
             session_id=str(session_id),
             attacker_ip=source_ip,
             mode=state.mode.value,
+            trigger=trigger,
             garble_paths_count=len(state.garble_paths),
             timebomb_thresholds=list(state.timebomb_thresholds),
-            threat_score=threat.score,
+            threat_score=threat_score,
         )
 
     def _record_counter_deception_timebomb_applied(

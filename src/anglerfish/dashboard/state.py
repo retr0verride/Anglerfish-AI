@@ -33,7 +33,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anglerfish.config.models import CounterDeceptionMode
 from anglerfish.honeytokens.schema import Honeytoken
+from anglerfish.models.counter_deception_pin import CounterDeceptionPin
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.persistence import PersistenceEvent
@@ -289,6 +291,30 @@ class DashboardState:
 
     async def delete_persona_pin(self, source_ip: str) -> bool:
         return await self._store.delete_persona_pin(source_ip)
+
+    # ------------------------------------------------------------------
+    # Counter-deception pins (Stage 12 slice 12.4)
+    # ------------------------------------------------------------------
+
+    async def upsert_counter_deception_pin(
+        self,
+        *,
+        source_ip: str,
+        mode: CounterDeceptionMode,
+        created_by: str,
+    ) -> CounterDeceptionPin:
+        """Pin ``source_ip`` to ``mode``; returns the persisted record."""
+        return await self._store.upsert_counter_deception_pin(
+            source_ip=source_ip,
+            mode=mode,
+            created_by=created_by,
+        )
+
+    async def list_counter_deception_pins(self) -> list[CounterDeceptionPin]:
+        return await self._store.list_counter_deception_pins()
+
+    async def delete_counter_deception_pin(self, source_ip: str) -> bool:
+        return await self._store.delete_counter_deception_pin(source_ip)
 
     async def update_session_persona(self, session_id: UUID, persona: str) -> bool:
         """Rebound the persona on an already-persisted session row."""

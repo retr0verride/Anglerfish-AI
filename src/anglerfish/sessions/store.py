@@ -35,6 +35,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish.honeytokens.schema import Honeytoken
+from anglerfish.models.counter_deception_pin import CounterDeceptionPin
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.intent import IntentSummary
 from anglerfish.models.persistence import PersistenceEvent
@@ -44,7 +45,7 @@ from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
 from anglerfish.sessions.schema import PRAGMAS, run_migrations
 
 if TYPE_CHECKING:
-    from anglerfish.config.models import SessionStoreConfig
+    from anglerfish.config.models import CounterDeceptionMode, SessionStoreConfig
 
 __all__ = [
     "SessionStore",
@@ -876,6 +877,101 @@ class SessionStore:
         assert self._conn is not None  # noqa: S101
         cur = self._conn.execute(
             "DELETE FROM persona_pins WHERE source_ip = ?",
+            (source_ip,),
+        )
+        return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Stage 12 counter-deception pins
+    # ------------------------------------------------------------------
+
+    async def upsert_counter_deception_pin(
+        self,
+        *,
+        source_ip: str,
+        mode: CounterDeceptionMode,
+        created_by: str,
+    ) -> CounterDeceptionPin:
+        """Pin ``source_ip`` to ``mode``; returns the persisted record.
+
+        ON CONFLICT on source_ip so re-pinning the same IP overwrites
+        with a fresh created_at. The bridge's
+        :class:`SessionStoreReader.get_counter_deception_pin` reads
+        what this writes.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._upsert_counter_deception_pin_locked,
+                source_ip,
+                mode,
+                created_by,
+            )
+
+    def _upsert_counter_deception_pin_locked(
+        self,
+        source_ip: str,
+        mode: CounterDeceptionMode,
+        created_by: str,
+    ) -> CounterDeceptionPin:
+        assert self._conn is not None  # noqa: S101
+        created_at = datetime.now(tz=UTC)
+        self._conn.execute(
+            """
+            INSERT INTO counter_deception_pins (source_ip, mode, created_at, created_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_ip) DO UPDATE SET
+                mode       = excluded.mode,
+                created_at = excluded.created_at,
+                created_by = excluded.created_by
+            """,
+            (source_ip, mode.value, created_at.isoformat(), created_by),
+        )
+        return CounterDeceptionPin(
+            source_ip=source_ip,
+            mode=mode,
+            created_at=created_at,
+            created_by=created_by,
+        )
+
+    async def list_counter_deception_pins(self) -> list[CounterDeceptionPin]:
+        """Return every active counter-deception pin, newest first."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._list_counter_deception_pins_locked)
+
+    def _list_counter_deception_pins_locked(self) -> list[CounterDeceptionPin]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT source_ip, mode, created_at, created_by
+            FROM counter_deception_pins
+            ORDER BY created_at DESC
+            """,
+        )
+        return [
+            CounterDeceptionPin(
+                source_ip=row[0],
+                mode=row[1],
+                created_at=datetime.fromisoformat(row[2]),
+                created_by=row[3],
+            )
+            for row in cur.fetchall()
+        ]
+
+    async def delete_counter_deception_pin(self, source_ip: str) -> bool:
+        """Remove ``source_ip``'s pin if present. True iff a row was deleted."""
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._delete_counter_deception_pin_locked,
+                source_ip,
+            )
+
+    def _delete_counter_deception_pin_locked(self, source_ip: str) -> bool:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            "DELETE FROM counter_deception_pins WHERE source_ip = ?",
             (source_ip,),
         )
         return cur.rowcount > 0

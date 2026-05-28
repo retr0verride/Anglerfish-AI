@@ -60,6 +60,11 @@ _ALERT_EVENT_TYPES: dict[str, str] = {
     # honeytoken_callback_hits:available=false stub flipped here in
     # the same commit.
     "bridge.honeytoken_callback": "honeytoken_callback_hit",
+    # Stage 12 slice 12.4: counter-deception engagement (threat-driven
+    # or operator-pinned) surfaces as an alert. The garble-served +
+    # timebomb-applied events are intentionally NOT alerts - they are
+    # per-command noise; the once-per-session engagement is the signal.
+    "bridge.counter_deception_engaged": "counter_deception_engaged",
 }
 
 ALERT_KINDS: frozenset[str] = frozenset(_ALERT_EVENT_TYPES.values())
@@ -253,6 +258,24 @@ def _summarise_honeytoken_callback(event: dict[str, Any]) -> str:
     return f"{kind} callback from {callback_ip}"
 
 
+def _summarise_counter_deception_engaged(event: dict[str, Any]) -> str:
+    """Render a bridge.counter_deception_engaged event for the alerts panel.
+
+    The bridge emits ``mode`` (off / garble / timebomb / both),
+    ``trigger`` (threat / pin), ``attacker_ip``, and ``threat_score``
+    (null for a pin). The operator value is "which session got the
+    deliberate-falsehood treatment and why": ``both via threat on
+    203.0.113.7 (score 82)`` or ``garble via pin on 198.51.100.7``.
+    """
+    mode = event.get("mode", "unknown")
+    trigger = event.get("trigger", "unknown")
+    attacker_ip = event.get("attacker_ip", "unknown")
+    score = event.get("threat_score")
+    if isinstance(score, int):
+        return f"{mode} via {trigger} on {attacker_ip} (score {score})"
+    return f"{mode} via {trigger} on {attacker_ip}"
+
+
 def _summarise_cluster_match(event: dict[str, Any]) -> str:
     matches = event.get("matches")
     count = len(matches) if isinstance(matches, list) else 0
@@ -283,6 +306,7 @@ _SUMMARISERS: dict[str, Callable[[dict[str, Any]], str]] = {
     "intent_summary": _summarise_intent_summary,
     "cluster_match": _summarise_cluster_match,
     "honeytoken_callback_hit": _summarise_honeytoken_callback,
+    "counter_deception_engaged": _summarise_counter_deception_engaged,
 }
 
 

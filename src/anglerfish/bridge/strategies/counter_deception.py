@@ -84,6 +84,18 @@ class CounterDeceptionStrategyBase(ABC):
         """
 
     @abstractmethod
+    def state_for_mode(self, mode: CounterDeceptionMode) -> CounterDeceptionState | None:
+        """Build a state for an explicit ``mode``, ignoring the threat path.
+
+        Slice 12.4 calls this from
+        ``AIBridgeService.apply_counter_deception_pin`` so an operator
+        pin can force engagement with a chosen mode regardless of the
+        configured default or the threat score. Returns ``None`` for
+        ``CounterDeceptionMode.OFF`` (the whitelist case; the caller
+        suppresses engagement entirely).
+        """
+
+    @abstractmethod
     def amend_prompt(
         self,
         *,
@@ -144,7 +156,9 @@ class ModeAwareCounterDeceptionStrategy(CounterDeceptionStrategyBase):
         session_id: UUID,
     ) -> CounterDeceptionState | None:
         del threat, session_id  # advisory; this strategy reads only config
-        mode = self._config.mode
+        return self.state_for_mode(self._config.mode)
+
+    def state_for_mode(self, mode: CounterDeceptionMode) -> CounterDeceptionState | None:
         if mode is CounterDeceptionMode.OFF:
             return None
         garble_paths: tuple[str, ...] = ()

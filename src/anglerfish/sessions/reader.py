@@ -156,6 +156,28 @@ class SessionStoreReader:
         row = cur.fetchone()
         return row[0] if row is not None else None
 
+    async def get_counter_deception_pin(self, source_ip: str) -> str | None:
+        """Return the operator-pinned counter-deception mode for this IP, or None.
+
+        The bridge reads this at session-open (Stage 12). A returned
+        value is one of the :class:`CounterDeceptionMode` string values
+        (``off`` / ``garble`` / ``timebomb`` / ``both``); the caller
+        maps it back to the enum. ``None`` means no pin (fall through to
+        the threat-driven engagement path).
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._get_counter_deception_pin_locked, source_ip)
+
+    def _get_counter_deception_pin_locked(self, source_ip: str) -> str | None:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            "SELECT mode FROM counter_deception_pins WHERE source_ip = ?",
+            (source_ip,),
+        )
+        row = cur.fetchone()
+        return row[0] if row is not None else None
+
     async def list_persistence_for_source_ip(
         self,
         source_ip: str,

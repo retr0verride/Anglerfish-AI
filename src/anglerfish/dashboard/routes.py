@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from anglerfish import __version__
 from anglerfish.audit import AuditLog
+from anglerfish.config.models import CounterDeceptionMode
 from anglerfish.dashboard.alerts import ALERT_KINDS, ALERT_STUBS, list_alerts
 from anglerfish.dashboard.audit_reader import iter_events_in_range, parse_event_timestamp
 from anglerfish.dashboard.auth import is_open_mode, require_auth
@@ -132,6 +133,21 @@ class _PersonaPinRequest(BaseModel):
         max_length=64,
         pattern=r"^[a-z0-9-]+$",
         description="Persona name; validated against the loaded PersonaRegistry.",
+    )
+
+
+class _CounterDeceptionPinRequest(BaseModel):
+    """POST /api/counter_deception/pin request body (Stage 12)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_ip: str = Field(min_length=1, max_length=64)
+    mode: CounterDeceptionMode = Field(
+        description=(
+            "Forced mode for this source IP. 'off' whitelists the IP "
+            "(no counter-deception even above the threat threshold); "
+            "garble / timebomb / both force-engage with that mode."
+        ),
     )
 
 
@@ -420,6 +436,147 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             "count": len(items),
             "items": items,
         }
+
+    # Stage 12 slice 12.4: active counter-deception surface.
+
+    @router.get(
+        "/api/counter_deception/state",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_counter_deception_state(
+        request: Request,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return the counter-deception config snapshot + active pin count.
+
+        The config (mode, threshold, paths, time-bomb bands) comes from
+        the loaded settings. A live "currently-engaged sessions" count is
+        not available cross-process (engagement state lives in the bridge
+        process); recent engagements are surfaced via
+        ``/api/counter_deception/engagements`` instead. The active-pin
+        count comes from the shared session store.
+        """
+        cfg = request.app.state.settings.counter_deception
+        pins = await state.list_counter_deception_pins()
+        return {
+            "config": {
+                "enabled": cfg.enabled,
+                "mode": cfg.mode.value,
+                "engagement_threshold": cfg.engagement_threshold,
+                "garble_paths": list(cfg.garble_paths),
+                "timebomb_cold_to_mild": cfg.timebomb_cold_to_mild,
+                "timebomb_mild_to_severe": cfg.timebomb_mild_to_severe,
+            },
+            "active_pins": len(pins),
+        }
+
+    @router.get(
+        "/api/counter_deception/engagements",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_counter_deception_engagements(
+        since: str | None = Query(default=None, max_length=64),
+        limit: int = Query(default=100, ge=1, le=1000),
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return recent bridge.counter_deception_engaged events, newest first.
+
+        Reads the audit log directly (the tailer does not persist these;
+        there is no engagement table). ``since`` is an ISO-8601 timestamp
+        defaulting to the unix epoch.
+        """
+        try:
+            start = (
+                datetime.fromisoformat(since)
+                if since is not None
+                else datetime.fromtimestamp(0, tz=UTC)
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"invalid since timestamp: {since!r}",
+            ) from exc
+        end = datetime.now(tz=UTC)
+        items: list[dict[str, Any]] = []
+        for event in iter_events_in_range(audit.path, start=start, end=end):
+            if event.get("event_type") != "bridge.counter_deception_engaged":
+                continue
+            ts = parse_event_timestamp(event)
+            items.append(
+                {
+                    "ts": event.get("ts"),
+                    "ts_ms": int(ts.timestamp() * 1000) if ts is not None else None,
+                    "session_id": event.get("session_id"),
+                    "attacker_ip": event.get("attacker_ip"),
+                    "mode": event.get("mode"),
+                    "trigger": event.get("trigger"),
+                    "threat_score": event.get("threat_score"),
+                },
+            )
+            if len(items) >= limit:
+                break
+        return {
+            "since": start.isoformat(),
+            "count": len(items),
+            "items": items,
+        }
+
+    @router.post(
+        "/api/counter_deception/pin",
+        dependencies=[Depends(require_auth), Depends(require_csrf)],
+    )
+    async def upsert_counter_deception_pin(
+        request: Request,
+        body: _CounterDeceptionPinRequest = Body(...),  # noqa: B008
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        actor = _actor(request)
+        pin = await state.upsert_counter_deception_pin(
+            source_ip=body.source_ip,
+            mode=body.mode,
+            created_by=actor,
+        )
+        audit.record(
+            "dashboard.counter_deception_pinned",
+            source_ip=pin.source_ip,
+            mode=pin.mode.value,
+            actor=actor,
+        )
+        return pin.model_dump(mode="json")
+
+    @router.get(
+        "/api/counter_deception/pin",
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_counter_deception_pins(
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        pins = await state.list_counter_deception_pins()
+        return {
+            "count": len(pins),
+            "items": [p.model_dump(mode="json") for p in pins],
+        }
+
+    @router.delete(
+        "/api/counter_deception/pin/{source_ip}",
+        dependencies=[Depends(require_auth), Depends(require_csrf)],
+    )
+    async def delete_counter_deception_pin(
+        request: Request,
+        source_ip: str,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        deleted = await state.delete_counter_deception_pin(source_ip)
+        if not deleted:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        audit.record(
+            "dashboard.counter_deception_unpinned",
+            source_ip=source_ip,
+            actor=_actor(request),
+        )
+        return {"deleted": True, "source_ip": source_ip}
 
     @router.get("/api/commands", dependencies=[Depends(require_auth)])
     async def recent_commands(
