@@ -1309,9 +1309,18 @@ async def test_handle_command_stream_with_light_strategy_emits_audit(
     # Two non-terminal AI chunks + a terminal done chunk.
     assert sum(1 for c in chunks if not c.done) >= 2
     assert chunks[-1].done is True
-    # At least one inter-chunk sleep recorded (light always pads).
-    assert len(sleeps) >= 1
-    assert all(0.05 <= s <= 0.15 for s in sleeps)
+    # Light strategy contributes sleeps from two sources:
+    #   - between_chunks: random.uniform(0.05, 0.15) per chunk (always)
+    #   - pre_command (5% rate): pre_message_delay_ms=500 (0.5s) +
+    #     pre_delay_ms=300 (0.3s)
+    # Random seed is (session_id, command_count); session_id is uuid4()'d
+    # per test so the pre-message fires on ~5% of runs (was flaky in CI
+    # 2026-05-27 with the original "all sleeps in [0.05, 0.15]" assertion).
+    # Filter the pre-message sleeps out before asserting the inter-chunk
+    # delay range so the test stays deterministic regardless of seed.
+    inter_chunk_sleeps = [s for s in sleeps if s not in (0.5, 0.3)]
+    assert inter_chunk_sleeps, "expected at least one inter-chunk sleep"
+    assert all(0.05 <= s <= 0.15 for s in inter_chunk_sleeps)
     # Wasting audit event fired exactly once with sane fields.
     wasting_events = [e for e in audit.events if e[0] == "bridge.wasting_applied"]
     assert len(wasting_events) == 1
