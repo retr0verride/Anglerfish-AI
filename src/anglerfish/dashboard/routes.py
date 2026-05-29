@@ -99,6 +99,14 @@ def _get_overrides_publisher(request: Request) -> Any:
 # section; mirrors the /api/sessions/{id}/similar k default.
 _DETAIL_SIMILAR_K = 5
 
+# Cluster graph endpoint caps. The node default bounds what a busy
+# honeypot ships to the browser; the max is the hard ceiling a caller
+# may request. _CLUSTER_THREAT_SCAN bounds the recent-threats window
+# scanned to enrich node threat scores.
+_CLUSTER_NODE_DEFAULT = 200
+_CLUSTER_NODE_MAX = 1000
+_CLUSTER_THREAT_SCAN = 200
+
 
 async def _build_similar_items(
     state: DashboardState,
@@ -395,6 +403,76 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             "honeytokens": [token.model_dump(mode="json") for token in honeytokens],
             "counter_deception": counter_deception,
             "similar": similar,
+        }
+
+    @router.get("/api/clusters", dependencies=[Depends(require_auth)])
+    async def get_clusters(
+        request: Request,
+        since: str | None = Query(default=None, max_length=64),
+        min_similarity: float | None = Query(default=None, ge=0.0, le=1.0),
+        limit: int = Query(default=_CLUSTER_NODE_DEFAULT, ge=1, le=_CLUSTER_NODE_MAX),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Cross-session similarity graph for the cluster view.
+
+        Nodes are the newest ``limit`` embeddings with ``generated_at``
+        since ``since`` (default the epoch, i.e. the newest ``limit``
+        overall), each enriched with the session's source IP, persona,
+        threat score, and intent label. Edges are same-model cosine
+        similarities >= ``min_similarity`` (default
+        ``bridge.cluster_similarity_threshold``), each unordered pair
+        emitted once. Nodes beyond the cap drop oldest-first.
+        """
+        try:
+            start = (
+                datetime.fromisoformat(since)
+                if since is not None
+                else datetime.fromtimestamp(0, tz=UTC)
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"invalid since timestamp: {since!r}",
+            ) from exc
+        end = datetime.now(tz=UTC)
+        threshold = (
+            min_similarity
+            if min_similarity is not None
+            else request.app.state.settings.bridge.cluster_similarity_threshold
+        )
+        embeddings, raw_edges = await state.get_cluster_graph(
+            start=start,
+            end=end,
+            min_similarity=threshold,
+            limit=limit,
+        )
+        # Best-effort threat enrichment: newest score per session from the
+        # recent-threats window. Sessions with no recent assessment score 0.
+        threats = await state.get_recent_threats(limit=_CLUSTER_THREAT_SCAN)
+        threat_by_session: dict[str, int] = {}
+        for assessment in threats:
+            threat_by_session.setdefault(str(assessment.session_id), assessment.score)
+        nodes: list[dict[str, Any]] = []
+        for embedding in embeddings:
+            sid = embedding.session_id
+            session = await state.get_session(sid)
+            intent = await state.get_intent(sid)
+            nodes.append(
+                {
+                    "session_id": str(sid),
+                    "source_ip": session.source_ip if session else None,
+                    "persona": session.persona_name if session else None,
+                    "threat_score": threat_by_session.get(str(sid), 0),
+                    "intent_label": intent.intent if intent else None,
+                },
+            )
+        edges = [{"a": str(a), "b": str(b), "similarity": round(sim, 6)} for a, b, sim in raw_edges]
+        return {
+            "generated_at": end.isoformat(),
+            "since": start.isoformat(),
+            "min_similarity": threshold,
+            "nodes": nodes,
+            "edges": edges,
         }
 
     # Stage 9 slice 9.4: operator persona pins. The selector consults

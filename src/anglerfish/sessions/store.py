@@ -1126,6 +1126,69 @@ class SessionStore:
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored[:k]
 
+    async def get_cluster_graph(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        min_similarity: float,
+        limit: int,
+    ) -> tuple[list[SessionEmbedding], list[tuple[UUID, UUID, float]]]:
+        """Cross-session similarity graph for the Stage 13 cluster view.
+
+        Returns the newest ``limit`` embeddings with ``generated_at`` in
+        ``[start, end]`` (oldest dropped beyond the cap) and the pairwise
+        edges among them: same-model cosine >= ``min_similarity``, each
+        unordered pair emitted once. ``find_similar`` answers the
+        neighbours of one session; this returns the whole graph in a
+        single scan so the caller does not issue N neighbour queries.
+        """
+        self._require_open()
+        if limit <= 0 or limit > 10_000:
+            raise ValueError(f"limit must be in 1..10_000, got {limit}")
+        if not 0.0 <= min_similarity <= 1.0:
+            raise ValueError("min_similarity must be in [0, 1]")
+        if end < start:
+            raise ValueError("end must be >= start")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_cluster_graph_locked,
+                start,
+                end,
+                min_similarity,
+                limit,
+            )
+
+    def _get_cluster_graph_locked(
+        self,
+        start: datetime,
+        end: datetime,
+        min_similarity: float,
+        limit: int,
+    ) -> tuple[list[SessionEmbedding], list[tuple[UUID, UUID, float]]]:
+        assert self._conn is not None  # noqa: S101
+        rows = self._conn.execute(
+            """
+            SELECT session_id, vector_blob, dimension, model, generated_at
+            FROM embeddings
+            WHERE generated_at >= ? AND generated_at <= ?
+            ORDER BY generated_at DESC
+            LIMIT ?
+            """,
+            (start.isoformat(), end.isoformat(), limit),
+        ).fetchall()
+        nodes = [_row_to_embedding(UUID(row[0]), row[1:5]) for row in rows]
+        edges: list[tuple[UUID, UUID, float]] = []
+        for i, a in enumerate(nodes):
+            for b in nodes[i + 1 :]:
+                # Never compare across embedding spaces (mirrors find_similar).
+                if a.model != b.model:
+                    continue
+                sim = _cosine_similarity(a.vector, b.vector)
+                if sim >= min_similarity:
+                    edges.append((a.session_id, b.session_id, sim))
+        return nodes, edges
+
     async def get_recent_threats(self, *, limit: int = 50) -> list[ThreatAssessment]:
         """Most-recently-updated threat assessments, newest first."""
         self._require_open()

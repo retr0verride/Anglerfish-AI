@@ -148,7 +148,7 @@ GET /api/clusters?since=<iso>&min_similarity=<float>&limit=<int>
 
 Edges come from cosine similarity over the Stage 8 embeddings table,
 thresholded at `min_similarity` (default from
-`clustering.cluster_similarity_threshold`). The endpoint caps `limit`
+`bridge.cluster_similarity_threshold`). The endpoint caps `limit`
 (default 200 nodes) so a busy honeypot does not ship a 10k-node graph
 to the browser. Nodes beyond the cap drop oldest-first.
 

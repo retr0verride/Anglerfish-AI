@@ -268,6 +268,21 @@ class DashboardState:
             min_similarity=min_similarity,
         )
 
+    async def get_cluster_graph(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        min_similarity: float,
+        limit: int,
+    ) -> tuple[list[SessionEmbedding], list[tuple[UUID, UUID, float]]]:
+        return await self._store.get_cluster_graph(
+            start=start,
+            end=end,
+            min_similarity=min_similarity,
+            limit=limit,
+        )
+
     # ------------------------------------------------------------------
     # Persona pins + rebound (Stage 9 slice 9.4)
     # ------------------------------------------------------------------
