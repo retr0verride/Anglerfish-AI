@@ -21,6 +21,8 @@ const credentialsMeta = $("#credentials-meta");
 const detailPanel = $("#detail-panel");
 const detailBody = $("#detail-body");
 const detailClose = $("#detail-close");
+const clusterCanvas = $("#cluster-canvas");
+const clusterMeta = $("#cluster-meta");
 
 let wsBackoffMs = 1000;
 
@@ -260,6 +262,170 @@ function onSessionLinkClick(ev) {
   }
 }
 
+// --- Session cluster graph (Stage 13.2) ---
+// Dependency-free force-directed layout on <canvas>: node colour encodes
+// the intent label, radius encodes the threat score, clicking a node
+// opens its detail panel. The layout runs a bounded number of cooling
+// ticks then stops to spare CPU. It is a snapshot fetched on boot, not
+// a live poll (re-running the layout would jump every node).
+const CLUSTER_TICKS = 320;
+const clusterState = { nodes: [], edges: [], byId: {}, tick: 0, raf: 0 };
+
+function hashHue(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    h = (h * 31 + text.charCodeAt(i)) % 360;
+  }
+  return h;
+}
+
+function nodeColor(intentLabel) {
+  if (!intentLabel) return "#94a8c0"; // --text-dim for unlabelled sessions
+  return `hsl(${hashHue(intentLabel)}, 70%, 58%)`;
+}
+
+function nodeRadius(score) {
+  const s = Math.max(0, Math.min(100, Number(score) || 0));
+  return 4 + (s / 100) * 11;
+}
+
+function clusterStep(width, height) {
+  const nodes = clusterState.nodes;
+  const n = nodes.length;
+  if (n === 0) return;
+  const k = Math.sqrt((width * height) / n); // ideal edge length
+  for (let i = 0; i < n; i += 1) {
+    const a = nodes[i];
+    a.fx = 0;
+    a.fy = 0;
+    for (let j = 0; j < n; j += 1) {
+      if (i === j) continue;
+      const b = nodes[j];
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const rep = (k * k) / dist;
+      a.fx += (dx / dist) * rep;
+      a.fy += (dy / dist) * rep;
+    }
+  }
+  for (const e of clusterState.edges) {
+    const a = clusterState.byId[e.a];
+    const b = clusterState.byId[e.b];
+    if (!a || !b) continue;
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dist = Math.hypot(dx, dy) || 0.01;
+    const att = (dist * dist) / k;
+    a.fx -= (dx / dist) * att;
+    a.fy -= (dy / dist) * att;
+    b.fx += (dx / dist) * att;
+    b.fy += (dy / dist) * att;
+  }
+  const cx = width / 2;
+  const cy = height / 2;
+  const cool = Math.max(0.05, 1 - clusterState.tick / CLUSTER_TICKS);
+  const maxStep = 12 * cool;
+  for (const a of nodes) {
+    a.fx += (cx - a.x) * 0.02;
+    a.fy += (cy - a.y) * 0.02;
+    const mag = Math.hypot(a.fx, a.fy) || 0.01;
+    const step = Math.min(mag, maxStep);
+    a.x = Math.max(16, Math.min(width - 16, a.x + (a.fx / mag) * step));
+    a.y = Math.max(16, Math.min(height - 16, a.y + (a.fy / mag) * step));
+  }
+}
+
+function clusterRender() {
+  if (!clusterCanvas) return;
+  const ctx = clusterCanvas.getContext("2d");
+  if (!ctx) return;
+  const w = clusterCanvas.width;
+  const h = clusterCanvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.lineWidth = 1;
+  for (const e of clusterState.edges) {
+    const a = clusterState.byId[e.a];
+    const b = clusterState.byId[e.b];
+    if (!a || !b) continue;
+    const alpha = 0.15 + 0.5 * (Number(e.similarity) || 0);
+    ctx.strokeStyle = `rgba(34, 211, 238, ${alpha})`;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  for (const node of clusterState.nodes) {
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
+    ctx.fillStyle = node.color;
+    ctx.fill();
+  }
+}
+
+function clusterLoop(width, height) {
+  clusterStep(width, height);
+  clusterRender();
+  clusterState.tick += 1;
+  if (clusterState.tick < CLUSTER_TICKS) {
+    clusterState.raf = window.requestAnimationFrame(() =>
+      clusterLoop(width, height),
+    );
+  }
+}
+
+async function refreshClusters() {
+  if (!clusterCanvas) return;
+  try {
+    const graph = await fetchJSON("/api/clusters");
+    const w = clusterCanvas.width;
+    const h = clusterCanvas.height;
+    const rawNodes = graph.nodes || [];
+    // Seed positions on a ring so the layout is stable and never starts
+    // with coincident points (which would blow up the repulsion term).
+    clusterState.nodes = rawNodes.map((node, idx) => {
+      const angle = (idx / Math.max(1, rawNodes.length)) * Math.PI * 2;
+      return {
+        id: node.session_id,
+        x: w / 2 + Math.cos(angle) * (w / 4),
+        y: h / 2 + Math.sin(angle) * (h / 4),
+        fx: 0,
+        fy: 0,
+        r: nodeRadius(node.threat_score),
+        color: nodeColor(node.intent_label),
+      };
+    });
+    clusterState.byId = {};
+    for (const node of clusterState.nodes) clusterState.byId[node.id] = node;
+    clusterState.edges = graph.edges || [];
+    clusterState.tick = 0;
+    if (clusterMeta) {
+      clusterMeta.textContent = `${clusterState.nodes.length} sessions · ${clusterState.edges.length} links`;
+    }
+    if (clusterState.raf) window.cancelAnimationFrame(clusterState.raf);
+    if (clusterState.nodes.length) {
+      clusterLoop(w, h);
+    } else {
+      clusterRender();
+    }
+  } catch (err) {
+    console.warn("clusters refresh failed:", err);
+  }
+}
+
+function onClusterClick(ev) {
+  if (!clusterCanvas) return;
+  const rect = clusterCanvas.getBoundingClientRect();
+  const mx = ((ev.clientX - rect.left) * clusterCanvas.width) / rect.width;
+  const my = ((ev.clientY - rect.top) * clusterCanvas.height) / rect.height;
+  for (const node of clusterState.nodes) {
+    if (Math.hypot(node.x - mx, node.y - my) <= node.r + 4) {
+      openDetail(node.id);
+      return;
+    }
+  }
+}
+
 function pushCommandEvent(payload) {
   const li = document.createElement("li");
   const source = payload.source || "ai";
@@ -325,6 +491,7 @@ async function boot() {
   await refreshStats();
   await refreshThreats();
   await refreshCredentials();
+  await refreshClusters();
   setInterval(refreshStats, STATS_POLL_MS);
   setInterval(refreshThreats, TABLE_POLL_MS);
   setInterval(refreshCredentials, TABLE_POLL_MS);
@@ -337,6 +504,7 @@ async function boot() {
   // panel's own "similar sessions" list, both rebuilt on each render.
   if (threatTable) threatTable.addEventListener("click", onSessionLinkClick);
   if (detailBody) detailBody.addEventListener("click", onSessionLinkClick);
+  if (clusterCanvas) clusterCanvas.addEventListener("click", onClusterClick);
   connectWebSocket();
 }
 

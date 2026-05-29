@@ -349,3 +349,14 @@ main {
   color: var(--bioluminescence-soft);
   text-decoration: underline;
 }
+
+/* Stage 13 slice 13.2: cluster graph canvas. */
+.cluster-canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--abyss-2);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  cursor: pointer;
+}

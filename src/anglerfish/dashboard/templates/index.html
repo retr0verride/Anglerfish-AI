@@ -49,6 +49,15 @@
       <div id="detail-body"></div>
     </section>
 
+    <section class="panel" aria-label="Session clusters">
+      <div class="panel__bar">
+        <h2 class="panel__title">Session clusters</h2>
+        <span id="cluster-meta" class="meta"></span>
+      </div>
+      <canvas id="cluster-canvas" class="cluster-canvas" width="900" height="420"
+              aria-label="Force-directed session similarity graph"></canvas>
+    </section>
+
     <section class="panel" aria-label="Live commands">
       <h2 class="panel__title">Live command stream</h2>
       <ol class="stream" id="command-stream" aria-live="polite"></ol>
