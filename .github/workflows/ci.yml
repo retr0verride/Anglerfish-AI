@@ -65,6 +65,35 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
 
+  browser-tests:
+    name: Browser tests (SPA XSS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Install chromium + system deps
+        run: python -m playwright install --with-deps chromium
+
+      - name: Pytest (browser-marked, no coverage gate)
+        # The default suite deselects `-m browser`; this job re-includes it.
+        # --no-cov: a single end-to-end test cannot meet the 90% gate and
+        # covers only Python paths already exercised by the gates job.
+        run: pytest -m browser --no-cov
+
   lockfile:
     name: Lockfile (uv.lock in sync)
     runs-on: ubuntu-latest

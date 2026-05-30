@@ -96,6 +96,10 @@ dev = [
     "mypy>=1.10,<1.11",
     "pre-commit>=3.7,<5",
     "types-PyYAML>=6.0,<7",
+    # Headless-browser driver for the SPA XSS regression test. The test is
+    # marked `browser` and deselected from the default run (see addopts);
+    # only the dedicated CI job installs the chromium binary and runs it.
+    "playwright>=1.49,<2",
     # All runtime extras flattened in for full test coverage.
     "fastapi>=0.110,<1",
     "uvicorn[standard]>=0.29,<1",
@@ -257,6 +261,10 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=xml",
     "--cov-fail-under=90",
+    # Browser tests need a chromium binary that only the dedicated CI job
+    # installs; deselect them from the default run. That job re-includes
+    # them with `-m browser` (a CLI -m overrides this one) and --no-cov.
+    "-m", "not browser",
 ]
 filterwarnings = [
     "error",
@@ -273,6 +281,7 @@ filterwarnings = [
 markers = [
     "slow: tests that take more than a second to run",
     "integration: tests that touch the network or filesystem outside of tmp_path",
+    "browser: tests that drive a headless chromium (deselected by default; CI-only)",
 ]
 
 [tool.coverage.run]

@@ -62,8 +62,9 @@ function formatTimestamp(iso) {
 // HTML-escape before interpolating into innerHTML. Several call sites
 // render attacker-controlled text (typed commands, bridge responses,
 // submitted usernames/passwords); without escaping, markup in those
-// fields executes in the operator's authenticated session. There is no
-// CSP backstop, so this function is the boundary.
+// fields executes in the operator's authenticated session. The CSP
+// (script-src 'self') is the backstop; this function is the primary
+// defence. tests/dashboard/test_spa_xss_browser.py pins the behaviour.
 function escapeText(value) {
   if (value === null || value === undefined) return "";
   return String(value)
