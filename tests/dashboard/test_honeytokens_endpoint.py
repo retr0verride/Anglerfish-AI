@@ -140,6 +140,84 @@ def test_honeytokens_state_rejects_missing_source_ip(client: TestClient) -> None
 
 
 # ---------------------------------------------------------------------------
+# /api/honeytokens  (registry view, slice 13.3)
+# ---------------------------------------------------------------------------
+
+
+def test_registry_empty_when_no_rows(client: TestClient) -> None:
+    assert client.get("/api/honeytokens").json() == {"count": 0, "items": []}
+
+
+async def test_registry_lists_all_tokens_newest_first(
+    client: TestClient,
+    dashboard_state: DashboardState,
+) -> None:
+    # Mixed: a per-session token and a static-base (source_ip None) one.
+    await dashboard_state.register_honeytoken(
+        Honeytoken(
+            id="AAAAAAAAAAAAAAAA",
+            kind="aws",
+            payload="[default]\nsecret=do-not-leak\n",
+            callback_url="https://honey.example.com/cb/AAAAAAAAAAAAAAAA",
+            placed_at="/root/.aws/credentials",
+            source_ip="203.0.113.7",
+            session_id=uuid4(),
+            created_at=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
+        ),
+    )
+    await dashboard_state.register_honeytoken(
+        Honeytoken(
+            id="BBBBBBBBBBBBBBBB",
+            kind="ssh_key",
+            payload="-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n",
+            callback_url="https://honey.example.com/cb/BBBBBBBBBBBBBBBB",
+            placed_at="/root/.ssh/id_rsa",
+            source_ip=None,
+            session_id=None,
+            created_at=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        ),
+    )
+
+    body = client.get("/api/honeytokens").json()
+    assert body["count"] == 2
+    # Newest placement first, and the static token (no source IP) is
+    # included - not just per-source-IP rows.
+    assert [it["id"] for it in body["items"]] == [
+        "BBBBBBBBBBBBBBBB",
+        "AAAAAAAAAAAAAAAA",
+    ]
+    assert body["items"][0]["source_ip"] is None
+    assert body["items"][0]["session_id"] is None
+    assert body["items"][1]["kind"] == "aws"
+
+
+async def test_registry_never_serialises_payload(
+    client: TestClient,
+    dashboard_state: DashboardState,
+) -> None:
+    await dashboard_state.register_honeytoken(
+        Honeytoken(
+            id="CCCCCCCCCCCCCCCC",
+            kind="aws",
+            payload="[default]\nsecret=do-not-leak\n",
+            callback_url="https://honey.example.com/cb/CCCCCCCCCCCCCCCC",
+            placed_at="/root/.aws/credentials",
+            source_ip="203.0.113.7",
+            session_id=uuid4(),
+            created_at=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        ),
+    )
+    r = client.get("/api/honeytokens")
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    # The beacon secret and callback URL are tracking values; the
+    # registry view must surface identifiers only (see THREAT_MODEL).
+    assert "payload" not in item
+    assert "callback_url" not in item
+    assert "do-not-leak" not in r.text
+
+
+# ---------------------------------------------------------------------------
 # /api/honeytokens/callbacks
 # ---------------------------------------------------------------------------
 

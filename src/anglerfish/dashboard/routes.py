@@ -651,6 +651,33 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
     # audit log directly so the operator-shipped callback-receiver
     # lines surface here without an SQL store round-trip.
 
+    @router.get("/api/honeytokens", dependencies=[Depends(require_auth)])
+    async def list_honeytokens(
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return the whole honeytoken registry, newest placement first.
+
+        The registry view (slice 13.3) joins these rows against
+        ``/api/honeytokens/callbacks`` by ``token_id`` to show callback
+        counts. The secret ``payload`` is intentionally not serialised
+        here - the view shows identifiers and kinds, never the beacon
+        value (see THREAT_MODEL).
+        """
+        tokens = await state.list_all_honeytokens()
+        return {
+            "count": len(tokens),
+            "items": [
+                {
+                    "id": t.id,
+                    "kind": t.kind,
+                    "placed_at": t.placed_at,
+                    "source_ip": t.source_ip,
+                    "session_id": str(t.session_id) if t.session_id else None,
+                }
+                for t in tokens
+            ],
+        }
+
     @router.get(
         "/api/honeytokens/state",
         dependencies=[Depends(require_auth)],

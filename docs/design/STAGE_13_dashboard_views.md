@@ -160,11 +160,14 @@ the 13.1 detail panel for that session. No graphing library is added.
 
 ### Honeytoken registry view (slice 13.3)
 
-Surfaces the existing `/api/honeytokens/state` and
-`/api/honeytokens/callbacks`. No new endpoint. A registry table:
+Adds `GET /api/honeytokens` (the whole registry, newest first; the
+existing `/api/honeytokens/state` is per-source-IP and cannot enumerate
+the registry) and joins it against the existing
+`/api/honeytokens/callbacks` by `token_id` in the SPA. A registry table:
 token id, kind (aws/ssh/db/api), placed-at, source session, callback
 count, last-callback timestamp. Rows with a callback hit are
-highlighted (a fired honeytoken is the highest-value signal).
+highlighted (a fired honeytoken is the highest-value signal). The new
+endpoint serialises identifiers only, never the beacon `payload`.
 
 This slice also pays off the long-standing `honeytoken_report` export
 stub (`{"available": False, "stage": 11}`), routing it through the new

@@ -685,6 +685,30 @@ class SessionStore:
         )
         return [_row_to_honeytoken(row) for row in cur.fetchall()]
 
+    async def list_all_honeytokens(self) -> list[Honeytoken]:
+        """Return every registered honeytoken, newest placement first.
+
+        The whole registry regardless of ``source_ip`` (static-base and
+        per-session alike). Feeds the dashboard registry view (slice
+        13.3); the per-source-IP and static-only queries above feed the
+        bridge's session-open overlay seeding.
+        """
+        self._require_open()
+        async with self._lock:
+            return await asyncio.to_thread(self._list_all_honeytokens_locked)
+
+    def _list_all_honeytokens_locked(self) -> list[Honeytoken]:
+        assert self._conn is not None  # noqa: S101
+        cur = self._conn.execute(
+            """
+            SELECT id, kind, payload, callback_url, placed_at,
+                   source_ip, session_id, created_at
+            FROM honeytokens
+            ORDER BY created_at DESC, id ASC
+            """,
+        )
+        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+
     # ------------------------------------------------------------------
     # Fake persistence state (Stage 10 slice 10.2)
     # ------------------------------------------------------------------
