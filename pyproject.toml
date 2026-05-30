@@ -93,7 +93,7 @@ dev = [
     # annotation drift, accumulated unused-type:ignore comments); pinning
     # keeps the failure surface deterministic across environments while
     # the fix is scoped as a dedicated tech-debt sweep.
-    "mypy>=1.10,<1.11",
+    "mypy>=1.10,<2.2",
     "pre-commit>=3.7,<5",
     "types-PyYAML>=6.0,<7",
     # Headless-browser driver for the SPA XSS regression test. The test is
