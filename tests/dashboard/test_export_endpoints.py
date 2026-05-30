@@ -131,7 +131,10 @@ def test_session_export_json_returns_in_range_sessions(
     body = r.json()
     assert body["format"] == "json"
     assert body["count"] == 1  # only the recent one falls within the last 24h
-    assert body["stubs"]["stix2"]["available"] is False
+    # Stage 13.4 made the STIX/MISP exporters live; honeytoken_report
+    # is still a stub until slice 13.3.
+    assert body["stubs"]["stix2"]["available"] is True
+    assert body["stubs"]["honeytoken_report"]["available"] is False
 
 
 def test_session_export_json_explicit_range(

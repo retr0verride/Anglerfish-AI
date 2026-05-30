@@ -36,13 +36,16 @@ from anglerfish.dashboard.export import (
     session_csv_rows,
     session_export_payload,
 )
+from anglerfish.dashboard.exporters import build_misp_event, build_stix_bundle
 from anglerfish.dashboard.health import (
     ollama_health,
     sessions_health,
 )
 from anglerfish.dashboard.overrides import RuntimeOverrides, WastingStrategy
 from anglerfish.dashboard.state import DashboardState
+from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.credentials import CredentialRecord, CredentialStats
+from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 
@@ -182,6 +185,35 @@ def _read_session_audit_facts(
                 "garble_paths_count": count if isinstance(count, int) else None,
             }
     return time_wasted_ms, counter_deception
+
+
+async def _gather_export_window(
+    state: DashboardState,
+    *,
+    start: datetime,
+    end: datetime,
+) -> tuple[list[SessionSnapshot], dict[str, IntentSummary], list[Honeytoken]]:
+    """Collect a window's sessions, intents, and honeytokens for export.
+
+    Shared by the STIX and MISP endpoints so both summarise the same
+    data. Honeytokens are gathered per unique source IP and de-duplicated
+    by token id.
+    """
+    sessions = await state.store.get_sessions_in_range(start=start, end=end)
+    intents = await state.get_intents_in_range(start=start, end=end)
+    intents_by_session = {str(item.session_id): item for item in intents}
+    honeytokens: list[Honeytoken] = []
+    seen_tokens: set[str] = set()
+    seen_ips: set[str] = set()
+    for session in sessions:
+        if session.source_ip in seen_ips:
+            continue
+        seen_ips.add(session.source_ip)
+        for token in await state.list_honeytokens_for_source_ip(session.source_ip):
+            if token.id not in seen_tokens:
+                seen_tokens.add(token.id)
+                honeytokens.append(token)
+    return sessions, intents_by_session, honeytokens
 
 
 # ---------------------------------------------------------------------------
@@ -983,6 +1015,81 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
                 },
             )
         return await session_export_payload(state, start=start, end=end)
+
+    @router.get("/api/export/stix", dependencies=[Depends(require_auth)])
+    async def export_stix(
+        request: Request,
+        from_: str | None = Query(default=None, alias="from"),
+        to: str | None = Query(default=None),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Export the window as a hand-built STIX 2.1 bundle."""
+        try:
+            start, end = parse_range(from_=from_, to_=to)
+        except ExportRangeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        sessions, intents_by_session, honeytokens = await _gather_export_window(
+            state,
+            start=start,
+            end=end,
+        )
+        audit.record(
+            "dashboard.export_served",
+            kind="stix",
+            export_format="stix2",
+            from_=start.isoformat(),
+            to=end.isoformat(),
+            item_count=len(sessions),
+            actor=_actor(request),
+        )
+        return build_stix_bundle(
+            sessions,
+            intents_by_session,
+            honeytokens,
+            generated=end,
+        )
+
+    @router.get("/api/export/misp", dependencies=[Depends(require_auth)])
+    async def export_misp(
+        request: Request,
+        from_: str | None = Query(default=None, alias="from"),
+        to: str | None = Query(default=None),
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Export the window as a hand-built MISP Event."""
+        try:
+            start, end = parse_range(from_=from_, to_=to)
+        except ExportRangeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        sessions, intents_by_session, honeytokens = await _gather_export_window(
+            state,
+            start=start,
+            end=end,
+        )
+        audit.record(
+            "dashboard.export_served",
+            kind="misp",
+            export_format="misp_json",
+            from_=start.isoformat(),
+            to=end.isoformat(),
+            item_count=len(sessions),
+            actor=_actor(request),
+        )
+        return build_misp_event(
+            sessions,
+            intents_by_session,
+            honeytokens,
+            start=start,
+            end=end,
+        )
 
     @router.get("/api/export/audit", dependencies=[Depends(require_auth)])
     async def export_audit(

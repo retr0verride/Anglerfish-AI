@@ -48,11 +48,13 @@ __all__ = [
 
 MAX_EXPORT_WINDOW_DAYS = 7
 
-# Future-stage exports the panel will eventually offer. Returned in
-# every export response so the SPA can grey-disable buttons.
+# Export formats and their availability, returned in every export
+# response so the SPA can enable or grey-disable buttons. Stage 13
+# slice 13.4 made the STIX 2.1 and MISP exporters live; honeytoken_report
+# is still a stub until slice 13.3.
 EXPORT_STUBS: dict[str, dict[str, Any]] = {
-    "stix2": {"available": False, "stage": 13},
-    "misp_json": {"available": False, "stage": 13},
+    "stix2": {"available": True, "stage": 13},
+    "misp_json": {"available": True, "stage": 13},
     "honeytoken_report": {"available": False, "stage": 11},
 }
 
