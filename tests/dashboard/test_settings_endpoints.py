@@ -303,3 +303,17 @@ def test_feature_toggle_emits_audit_event(
     events = audit_path.read_text(encoding="utf-8")
     assert "dashboard.feature_toggled" in events
     assert "counter_deception" in events
+
+
+def test_narrator_feature_toggle(
+    authed_client_and_audit: tuple[TestClient, Path],
+) -> None:
+    # Stage 13 slice 13.5: the narrator flag rides the existing features
+    # endpoint and surfaces in the snapshot the narrator task reads.
+    client, audit_path = authed_client_and_audit
+    assert client.get("/api/settings").json()["features"]["narrator"] is False
+    r = client.post("/api/settings/features", json={"narrator": True})
+    assert r.status_code == 200
+    assert r.json()["features"]["narrator"] is True
+    assert r.json()["changed_fields"] == ["narrator"]
+    assert "narrator" in audit_path.read_text(encoding="utf-8")

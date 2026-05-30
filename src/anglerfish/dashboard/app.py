@@ -21,16 +21,19 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from anglerfish import __version__
 from anglerfish.audit import AuditLog
+from anglerfish.bridge.defense import OutputFilter
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.dashboard.audit_tailer import AuditTailer
 from anglerfish.dashboard.auth import build_auth_router
 from anglerfish.dashboard.headers import SecurityHeadersMiddleware
+from anglerfish.dashboard.narrator import NarratorService
 from anglerfish.dashboard.overrides import build_runtime_overrides
 from anglerfish.dashboard.overrides_publisher import RuntimeOverridesPublisher
 from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.dashboard.routes import build_router
 from anglerfish.dashboard.state import DashboardState
 from anglerfish.dashboard.websocket import build_websocket_router
+from anglerfish.llm import LLMClient
 from anglerfish.persona import PersonaLoadError, PersonaRegistry
 from anglerfish.sessions import SessionStore
 
@@ -80,6 +83,7 @@ def create_app(
     audit_tailer: AuditTailer | None = None,
     login_rate_limiter: LoginRateLimiter | None = None,
     persona_registry: PersonaRegistry | None = None,
+    narrator: NarratorService | None = None,
     templates_dir: Path | None = None,
     static_dir: Path | None = None,
 ) -> FastAPI:
@@ -144,14 +148,42 @@ def create_app(
         )
     )
 
+    # Stage 3: in-process mutable overrides the settings endpoints update.
+    # Built here (before the lifespan closure) so the Stage 13 narrator can
+    # read its runtime feature flag. Reset on restart back to env values.
+    runtime_overrides = build_runtime_overrides(settings)
+
+    # Stage 13 slice 13.5: the live narrator. Default-off; the task starts
+    # but every tick no-ops until the operator flips the feature flag.
+    # When create_app constructs it (narrator=None) it owns the LLMClient
+    # and closes it on shutdown; an injected narrator brings its own.
+    narrator_owns_client = narrator is None
+    if narrator is not None:
+        narrator_instance = narrator
+        narrator_client: LLMClient | None = None
+    else:
+        narrator_client = LLMClient(settings.ollama)
+        narrator_instance = NarratorService(
+            state=state_instance,
+            client=narrator_client,
+            output_filter=OutputFilter(settings.defense),
+            audit=audit_log,
+            config=settings.narrator,
+            is_enabled=lambda: runtime_overrides.features.narrator,
+        )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if owns_session_store:
             await store_instance.open()
         await tailer_instance.start()
+        await narrator_instance.start()
         try:
             yield
         finally:
+            await narrator_instance.stop()
+            if narrator_owns_client and narrator_client is not None:
+                await narrator_client.aclose()
             await tailer_instance.stop()
             if owns_session_store:
                 await store_instance.aclose()
@@ -194,9 +226,10 @@ def create_app(
     # case so the SPA can grey-disable the pin UI cleanly.
     app.state.persona_registry = persona_registry_instance
     # Stage 3: in-process mutable overrides the settings endpoints
-    # update. Reset on dashboard restart back to env-file values; see
+    # update (built above so the narrator can read its flag). Reset on
+    # dashboard restart back to env-file values; see
     # docs/design/STAGE_3_dashboard_control_plane.md for the boundary.
-    app.state.runtime_overrides = build_runtime_overrides(settings)
+    app.state.runtime_overrides = runtime_overrides
     # Stage 6: publish snapshot to a tmpfs JSON so the bridge process
     # can pick up operator-driven changes between restarts. ensure_writable
     # validates the parent dir; if it cannot create or write the dir (the

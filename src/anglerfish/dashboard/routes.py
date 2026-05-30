@@ -300,6 +300,7 @@ class _FeatureFlagsUpdate(BaseModel):
     engaged_persistence: bool | None = None
     decoy_poisoning: bool | None = None
     counter_deception: bool | None = None
+    narrator: bool | None = None
 
 
 class _PersonaPinRequest(BaseModel):
@@ -1011,6 +1012,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             engaged_persistence=body.engaged_persistence,
             decoy_poisoning=body.decoy_poisoning,
             counter_deception=body.counter_deception,
+            narrator=body.narrator,
         )
         for flag, (old, new) in diff.items():
             audit.record(

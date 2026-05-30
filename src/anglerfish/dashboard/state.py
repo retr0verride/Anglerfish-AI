@@ -64,6 +64,7 @@ class DashboardEventKind(StrEnum):
     COMMAND = "command"
     THREAT = "threat"
     INTENT = "intent"
+    NARRATOR = "narrator"
 
 
 class DashboardEvent(BaseModel):

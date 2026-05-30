@@ -37,6 +37,7 @@ from anglerfish.config.models import (
     GeoConfig,
     HoneytokensConfig,
     LogLevel,
+    NarratorConfig,
     OllamaConfig,
     PersonaConfig,
     RateLimitConfig,
@@ -84,6 +85,7 @@ class AnglerfishSettings(BaseSettings):
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     honeytokens: HoneytokensConfig = Field(default_factory=HoneytokensConfig)
     counter_deception: CounterDeceptionConfig = Field(default_factory=CounterDeceptionConfig)
+    narrator: NarratorConfig = Field(default_factory=NarratorConfig)
     credentials: CredentialsConfig
 
     @model_validator(mode="after")

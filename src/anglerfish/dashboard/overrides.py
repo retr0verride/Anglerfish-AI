@@ -67,6 +67,10 @@ class FeatureFlagOverrides:
     engaged_persistence: bool = False
     decoy_poisoning: bool = False
     counter_deception: bool = False
+    # Stage 13 slice 13.5: the live narrator. Unlike the others this flag
+    # is honoured in-process (the narrator task runs inside the dashboard,
+    # not the bridge), so flipping it takes effect on the next tick.
+    narrator: bool = False
 
 
 @dataclass
@@ -95,6 +99,7 @@ class RuntimeOverrides:
                 "engaged_persistence": self.features.engaged_persistence,
                 "decoy_poisoning": self.features.decoy_poisoning,
                 "counter_deception": self.features.counter_deception,
+                "narrator": self.features.narrator,
             },
             "applied_at": self.applied_at.isoformat(),
             "applies_to": "dashboard_process_and_bridge",
@@ -154,6 +159,7 @@ class RuntimeOverrides:
         engaged_persistence: bool | None = None,
         decoy_poisoning: bool | None = None,
         counter_deception: bool | None = None,
+        narrator: bool | None = None,
     ) -> dict[str, tuple[bool, bool]]:
         """Mutate feature flags; return a per-flag diff."""
         diff: dict[str, tuple[bool, bool]] = {}
@@ -181,6 +187,9 @@ class RuntimeOverrides:
                 counter_deception,
             )
             self.features.counter_deception = counter_deception
+        if narrator is not None and narrator != self.features.narrator:
+            diff["narrator"] = (self.features.narrator, narrator)
+            self.features.narrator = narrator
         if diff:
             self.applied_at = datetime.now(tz=UTC)
         return diff
@@ -209,5 +218,8 @@ def build_runtime_overrides(settings: AnglerfishSettings) -> RuntimeOverrides:
             requests_per_session_per_minute=(settings.rate_limit.requests_per_session_per_minute),
             wasting_strategy=cast("WastingStrategy", settings.bridge.wasting_strategy),
         ),
-        features=FeatureFlagOverrides(),
+        # Stage 13 slice 13.5: seed the narrator flag from its env-file
+        # default so the dashboard advertises the operator's configured
+        # state until the first POST /api/settings/features.
+        features=FeatureFlagOverrides(narrator=settings.narrator.enabled),
     )

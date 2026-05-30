@@ -57,6 +57,10 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   but the alerts panel surfaces it the moment it lands).
 * Geo: ``geo.update_succeeded``, ``geo.update_failed``.
 * LLM: ``llm.warmup_succeeded``, ``llm.warmup_failed``.
+* Narrator: ``narrator.commentary_generated`` (one per tick that
+  broadcast text), ``narrator.defense_fired`` (the OutputFilter caught
+  the narrator's own output; text dropped, never broadcast),
+  ``narrator.generation_failed`` (LLM unreachable or returned garbage).
 
 The Stage 4.2 audit-log tailer in
 :mod:`anglerfish.dashboard.audit_tailer` consumes the per-session
