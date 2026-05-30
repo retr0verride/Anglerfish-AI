@@ -15,6 +15,8 @@ Things only a real DOM exercises:
   ``/api/honeytokens`` against ``/api/honeytokens/callbacks`` by
   ``token_id`` client-side; a fired token must render with its callback
   count and the ``row--fired`` highlight.
+* The narrator panel (slice 13.5b): default-off, the SPA reads
+  ``/api/settings`` and greys the panel with a "disabled" meta state.
 
 All serve the real dashboard on a live uvicorn port and drive it with
 headless chromium. Marked ``browser``: deselected from the default suite
@@ -301,3 +303,22 @@ def test_honeytoken_registry_joins_callbacks_and_highlights_fired(
 
     # The beacon payload is never serialised to the page.
     assert "do-not-leak" not in page.content()
+
+
+def test_narrator_panel_renders_disabled_state(
+    page: Page,
+    live_server: _LiveServer,
+) -> None:
+    page.goto(live_server.base_url)
+
+    meta = page.locator("#narrator-meta")
+    meta.wait_for(state="visible", timeout=10_000)
+    # The narrator is default-off; refreshNarratorMeta reads /api/settings
+    # and greys the panel rather than leaving it silently empty.
+    page.wait_for_function(
+        "() => document.querySelector('#narrator-meta').classList.contains('is-disabled')",
+        timeout=10_000,
+    )
+    assert "disabled" in meta.inner_text().lower()
+    # The narrator stream container exists and is empty (nothing broadcast).
+    assert page.locator("#narrator-stream li").count() == 0

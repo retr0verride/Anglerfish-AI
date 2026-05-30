@@ -212,6 +212,9 @@ main {
 .stream li.is-ai       { border-left-color: var(--bioluminescence); }
 .stream li.is-fallback { border-left-color: var(--warning); }
 .stream li.is-rejected { border-left-color: var(--alert); }
+.stream li.is-narrator { border-left-color: var(--text-dim); font-style: italic; }
+
+.meta.is-disabled { opacity: 0.55; font-style: italic; }
 
 .stream__cmd      { color: var(--bioluminescence-soft); }
 .stream__response { color: var(--text-dim); font-size: 0.8rem; margin-top: 0.25rem; }

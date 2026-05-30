@@ -25,6 +25,8 @@ const detailBody = $("#detail-body");
 const detailClose = $("#detail-close");
 const clusterCanvas = $("#cluster-canvas");
 const clusterMeta = $("#cluster-meta");
+const narratorMeta = $("#narrator-meta");
+const narratorStream = $("#narrator-stream");
 
 let wsBackoffMs = 1000;
 
@@ -499,6 +501,47 @@ function pushCommandEvent(payload) {
   }
 }
 
+// Narrator text is LLM output whose prompt embeds attacker command text.
+// It is rendered with textContent only (never innerHTML) so any markup an
+// attacker steers into the commentary cannot execute. This DOM boundary
+// is the SPA half of the narrator threat model (see THREAT_MODEL.md).
+function pushNarratorEvent(payload) {
+  if (!narratorStream) return;
+  const li = document.createElement("li");
+  li.className = "is-narrator";
+  const meta = document.createElement("div");
+  meta.className = "stream__meta";
+  const sid = document.createElement("code");
+  sid.textContent = (payload.session_id || "").slice(0, 8);
+  meta.appendChild(sid);
+  meta.appendChild(document.createTextNode(` · ${payload.model || "llm"}`));
+  const body = document.createElement("div");
+  body.className = "stream__response";
+  body.textContent = payload.text || "";
+  li.appendChild(meta);
+  li.appendChild(body);
+  narratorStream.insertBefore(li, narratorStream.firstChild);
+  while (narratorStream.children.length > COMMAND_STREAM_CAP) {
+    narratorStream.removeChild(narratorStream.lastChild);
+  }
+}
+
+// The narrator is opt-in; learn its state from /api/settings so the panel
+// greys out when disabled rather than silently sitting empty.
+async function refreshNarratorMeta() {
+  if (!narratorMeta) return;
+  try {
+    const settings = await fetchJSON("/api/settings");
+    const on = Boolean(settings.features && settings.features.narrator);
+    narratorMeta.textContent = on
+      ? "LLM commentary. Not evidence."
+      : "Narrator disabled. Enable it in settings to see commentary.";
+    narratorMeta.classList.toggle("is-disabled", !on);
+  } catch {
+    /* leave the default meta text on a fetch error */
+  }
+}
+
 function connectWebSocket() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${window.location.host}/ws/events`);
@@ -518,6 +561,8 @@ function connectWebSocket() {
     }
     if (event.kind === "command") {
       pushCommandEvent(event.payload || {});
+    } else if (event.kind === "narrator") {
+      pushNarratorEvent(event.payload || {});
     } else if (event.kind === "threat") {
       refreshThreats();
     } else if (event.kind === "session_started" || event.kind === "session_ended") {
@@ -547,10 +592,12 @@ async function boot() {
   await refreshCredentials();
   await refreshHoneytokens();
   await refreshClusters();
+  await refreshNarratorMeta();
   setInterval(refreshStats, STATS_POLL_MS);
   setInterval(refreshThreats, TABLE_POLL_MS);
   setInterval(refreshCredentials, TABLE_POLL_MS);
   setInterval(refreshHoneytokens, TABLE_POLL_MS);
+  setInterval(refreshNarratorMeta, TABLE_POLL_MS);
   if (detailClose && detailPanel) {
     detailClose.addEventListener("click", () => {
       detailPanel.hidden = true;
