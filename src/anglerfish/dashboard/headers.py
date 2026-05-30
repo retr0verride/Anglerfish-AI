@@ -42,6 +42,13 @@ _CSP = "; ".join(
     ],
 )
 
+# Strict-Transport-Security is deliberately absent. The dashboard supports
+# running without TLS on an isolated internal net - SessionMiddleware sets
+# https_only=False for the same reason (see create_app) - so an operator
+# may legitimately serve over plain HTTP. HSTS would pin the operator's
+# browser to HTTPS for this host after a single visit and lock them out of
+# an HTTP deployment. A TLS-fronted deployment should set HSTS at the
+# reverse proxy, where the TLS decision actually lives.
 _SECURITY_HEADERS = {
     "content-security-policy": _CSP,
     "x-content-type-options": "nosniff",

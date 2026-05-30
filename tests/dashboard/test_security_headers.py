@@ -39,6 +39,13 @@ def test_companion_security_headers(client: TestClient) -> None:
     assert headers.get("referrer-policy") == "no-referrer"
 
 
+def test_hsts_is_deliberately_absent(client: TestClient) -> None:
+    # The dashboard may run over plain HTTP on an isolated net, so HSTS is
+    # not set here; a TLS-fronted deployment adds it at the reverse proxy.
+    # See the rationale in headers.py.
+    assert "strict-transport-security" not in client.get("/").headers
+
+
 def test_csp_rides_every_response(client: TestClient) -> None:
     # Not just the HTML route; the policy is on API responses too.
     assert "content-security-policy" in client.get("/api/stats").headers
