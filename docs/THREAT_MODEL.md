@@ -388,6 +388,25 @@ operator signal.
 
 ---
 
+## Dashboard exports (Stage 13)
+
+Stage 13 adds threat-intel export paths (STIX 2.1, MISP, per-session
+PDF) on top of the operator dashboard. All sit behind ``require_auth``
+and transform data the operator can already fetch over REST, so they
+add no attacker-facing surface. Two notes:
+
+* **Honeytoken payload disclosure** is handled in the Decoy data
+  poisoning (Stage 11) section above: the shareable formats and the
+  registry view emit identifiers only, while the operator-only
+  ``honeytoken_report`` CSV is the sole path that carries the secret
+  payload.
+
+| Threat | Mitigation | Residual risk |
+|---|---|---|
+| **PDF generation parses attacker-controlled text (reportlab).** The per-session PDF (``GET /api/export/report``) embeds attacker command + response text. reportlab's ``Paragraph`` has a markup mini-language; raw ``<``/``&`` would be interpreted (or crash the parser), and a crafted payload could target a rendering bug. | Attacker text is XML-escaped (``xml.sax.saxutils.escape``) before it reaches a ``Paragraph``, so it renders as a literal run, never as markup; a covering test asserts tag-shaped input renders as data. Per-turn text is length-capped on top of the session store's own caps. The endpoint is auth-gated and operator-triggered; the PDF is generated on the operator's host, not the honeypot's attack surface. | A reportlab 0-day in plain-text rendering would affect the operator generating the report, not the honeypot host. reportlab is pinned (``>=4.0,<5``) and tracked by Dependabot. |
+
+---
+
 ## Known limitations (acknowledged, not yet mitigated)
 
 1. **Audit log is not write-once at the FS layer.** A root attacker can `cat /dev/null > audit.jsonl`. Operators wanting WORM should layer `chattr +a` or write to an external WORM target.

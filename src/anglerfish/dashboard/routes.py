@@ -11,6 +11,7 @@ balancers and service probes), and ``/api/login``/``/api/logout``
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from anglerfish.dashboard.export import (
 from anglerfish.dashboard.exporters import (
     build_honeytoken_report_rows,
     build_misp_event,
+    build_pdf_report,
     build_stix_bundle,
 )
 from anglerfish.dashboard.health import (
@@ -196,6 +198,51 @@ def _read_session_audit_facts(
                 "garble_paths_count": count if isinstance(count, int) else None,
             }
     return time_wasted_ms, counter_deception
+
+
+async def _gather_session_detail(
+    state: DashboardState,
+    audit: AuditLog,
+    session_id: UUID,
+    request: Request,
+) -> dict[str, Any] | None:
+    """Compose the per-session detail aggregate, or ``None`` if unknown.
+
+    Shared by ``/api/sessions/{id}/detail`` (serialised to JSON) and the
+    PDF report endpoint (rendered to a document) so both surface an
+    identical snapshot from one gather path.
+    """
+    session = await state.get_session(session_id)
+    if session is None:
+        return None
+
+    intent = await state.get_intent(session_id)
+    honeytokens = await state.list_honeytokens_for_source_ip(session.source_ip)
+
+    # Cluster neighbours render empty (not 404) when the session has no
+    # embedding yet, so the panel still opens for fresh sessions.
+    similar: list[dict[str, Any]] = []
+    if await state.get_embedding(session_id) is not None:
+        threshold = request.app.state.settings.bridge.cluster_similarity_threshold
+        similar = await _build_similar_items(
+            state,
+            session_id,
+            k=_DETAIL_SIMILAR_K,
+            min_similarity=threshold,
+        )
+
+    time_wasted_ms, counter_deception = _read_session_audit_facts(audit.path, session_id)
+
+    return {
+        "session": session.model_dump(mode="json"),
+        "turns": [turn.model_dump(mode="json") for turn in session.turns],
+        "intent": intent.model_dump(mode="json") if intent else None,
+        "persona": session.persona_name,
+        "time_wasted_ms": time_wasted_ms,
+        "honeytokens": [token.model_dump(mode="json") for token in honeytokens],
+        "counter_deception": counter_deception,
+        "similar": similar,
+    }
 
 
 async def _gather_export_window(
@@ -413,40 +460,10 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         path the engagements and health endpoints use. Returns 404 for an
         unknown session id. No LLM call.
         """
-        session = await state.get_session(session_id)
-        if session is None:
+        detail = await _gather_session_detail(state, audit, session_id, request)
+        if detail is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-
-        intent = await state.get_intent(session_id)
-        honeytokens = await state.list_honeytokens_for_source_ip(session.source_ip)
-
-        # Cluster neighbours render empty (not 404) when the session has
-        # no embedding yet, so the panel still opens for fresh sessions.
-        similar: list[dict[str, Any]] = []
-        if await state.get_embedding(session_id) is not None:
-            threshold = request.app.state.settings.bridge.cluster_similarity_threshold
-            similar = await _build_similar_items(
-                state,
-                session_id,
-                k=_DETAIL_SIMILAR_K,
-                min_similarity=threshold,
-            )
-
-        time_wasted_ms, counter_deception = _read_session_audit_facts(
-            audit.path,
-            session_id,
-        )
-
-        return {
-            "session": session.model_dump(mode="json"),
-            "turns": [turn.model_dump(mode="json") for turn in session.turns],
-            "intent": intent.model_dump(mode="json") if intent else None,
-            "persona": session.persona_name,
-            "time_wasted_ms": time_wasted_ms,
-            "honeytokens": [token.model_dump(mode="json") for token in honeytokens],
-            "counter_deception": counter_deception,
-            "similar": similar,
-        }
+        return detail
 
     @router.get("/api/clusters", dependencies=[Depends(require_auth)])
     async def get_clusters(
@@ -1266,6 +1283,42 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             media_type="text/csv; charset=utf-8",
             headers={
                 "Content-Disposition": ('attachment; filename="honeytoken-report.csv"'),
+            },
+        )
+
+    @router.get("/api/export/report", dependencies=[Depends(require_auth)])
+    async def export_report(
+        request: Request,
+        session_id: UUID,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> Response:
+        """Render one session's detail view to a PDF for sharing with a SOC.
+
+        Per-session (no date range): a multi-session PDF is a report-
+        builder, out of scope. Gathers the same aggregate as
+        ``/api/sessions/{id}/detail`` and hands it to the PDF builder.
+        Honeytoken payloads are not rendered (a PDF may be shared); only
+        identifiers travel. 404 when the session id is unknown.
+        """
+        detail = await _gather_session_detail(state, audit, session_id, request)
+        if detail is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        # reportlab rendering is CPU-bound; offload so a concurrent
+        # request does not stall the event loop while the PDF builds.
+        pdf = await asyncio.to_thread(build_pdf_report, detail)
+        audit.record(
+            "dashboard.export_served",
+            kind="report",
+            export_format="report_pdf",
+            session_id=str(session_id),
+            actor=_actor(request),
+        )
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="session-{session_id}.pdf"',
             },
         )
 

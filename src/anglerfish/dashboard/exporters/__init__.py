@@ -16,11 +16,13 @@ from anglerfish.dashboard.exporters.honeytoken_report import (
     build_honeytoken_report_rows,
 )
 from anglerfish.dashboard.exporters.misp import build_misp_event
+from anglerfish.dashboard.exporters.report import build_pdf_report
 from anglerfish.dashboard.exporters.stix import build_stix_bundle
 
 __all__ = [
     "HONEYTOKEN_REPORT_COLUMNS",
     "build_honeytoken_report_rows",
     "build_misp_event",
+    "build_pdf_report",
     "build_stix_bundle",
 ]

@@ -50,12 +50,14 @@ MAX_EXPORT_WINDOW_DAYS = 7
 
 # Export formats and their availability, returned in every export
 # response so the SPA can enable or grey-disable buttons. Stage 13
-# slice 13.4 made the STIX 2.1 and MISP exporters live; slice 13.3
-# makes the honeytoken_report CSV live.
+# made every reserved format live: STIX 2.1 + MISP (slice 13.4),
+# honeytoken_report CSV (slice 13.3), and the per-session PDF report
+# (slice 13.4). No Stage 13 format is a stub anymore.
 EXPORT_STUBS: dict[str, dict[str, Any]] = {
     "stix2": {"available": True, "stage": 13},
     "misp_json": {"available": True, "stage": 13},
     "honeytoken_report": {"available": True, "stage": 13},
+    "report_pdf": {"available": True, "stage": 13},
 }
 
 
