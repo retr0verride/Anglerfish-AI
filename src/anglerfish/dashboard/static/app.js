@@ -18,6 +18,8 @@ const commandStream = $("#command-stream");
 const threatTable = $("#threat-table");
 const credentialsTable = $("#credentials-table");
 const credentialsMeta = $("#credentials-meta");
+const honeytokensTable = $("#honeytokens-table");
+const honeytokensMeta = $("#honeytokens-meta");
 const detailPanel = $("#detail-panel");
 const detailBody = $("#detail-body");
 const detailClose = $("#detail-close");
@@ -134,6 +136,53 @@ async function refreshCredentials() {
     }
   } catch (err) {
     console.warn("credentials refresh failed:", err);
+  }
+}
+
+// The registry endpoint lists tokens (identifiers only, never payloads);
+// the callbacks endpoint lists hits. Join them by token_id so each row
+// shows its callback count and most recent hit. A fired token is the
+// highest-value signal, so its row is highlighted.
+async function refreshHoneytokens() {
+  if (!honeytokensTable) return;
+  try {
+    const [registry, callbacks] = await Promise.all([
+      fetchJSON("/api/honeytokens"),
+      fetchJSON("/api/honeytokens/callbacks?limit=1000"),
+    ]);
+    const hits = new Map();
+    for (const cb of callbacks.items || []) {
+      const prev = hits.get(cb.token_id) || { count: 0, last: null };
+      prev.count += 1;
+      // callbacks arrive newest-first, so the first one seen is the last.
+      if (prev.last === null) prev.last = cb.ts;
+      hits.set(cb.token_id, prev);
+    }
+
+    const fired = [...hits.values()].filter((h) => h.count > 0).length;
+    honeytokensMeta.textContent =
+      `${registry.count} tokens · ${fired} fired`;
+
+    honeytokensTable.innerHTML = "";
+    for (const t of registry.items || []) {
+      const hit = hits.get(t.id) || { count: 0, last: null };
+      const tr = document.createElement("tr");
+      if (hit.count > 0) tr.classList.add("row--fired");
+      const session = t.session_id
+        ? escapeText(t.session_id).slice(0, 8)
+        : "static";
+      tr.innerHTML = `
+        <td><code>${escapeText(t.id)}</code></td>
+        <td>${escapeText(t.kind)}</td>
+        <td><code>${escapeText(t.placed_at)}</code></td>
+        <td><code>${session}</code></td>
+        <td>${escapeText(hit.count)}</td>
+        <td>${escapeText(hit.last ? formatTimestamp(hit.last) : "")}</td>
+      `;
+      honeytokensTable.appendChild(tr);
+    }
+  } catch (err) {
+    console.warn("honeytokens refresh failed:", err);
   }
 }
 
@@ -496,10 +545,12 @@ async function boot() {
   await refreshStats();
   await refreshThreats();
   await refreshCredentials();
+  await refreshHoneytokens();
   await refreshClusters();
   setInterval(refreshStats, STATS_POLL_MS);
   setInterval(refreshThreats, TABLE_POLL_MS);
   setInterval(refreshCredentials, TABLE_POLL_MS);
+  setInterval(refreshHoneytokens, TABLE_POLL_MS);
   if (detailClose && detailPanel) {
     detailClose.addEventListener("click", () => {
       detailPanel.hidden = true;

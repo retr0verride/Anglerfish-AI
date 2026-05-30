@@ -242,6 +242,15 @@ main {
   background: rgba(34, 211, 238, 0.04);
 }
 
+/* A honeytoken that fired a callback is the highest-value signal. */
+.table tbody tr.row--fired {
+  background: rgba(244, 63, 94, 0.12);
+  box-shadow: inset 3px 0 0 var(--alert);
+}
+.table tbody tr.row--fired:hover {
+  background: rgba(244, 63, 94, 0.18);
+}
+
 .score-bar {
   display: inline-block;
   height: 0.5rem;

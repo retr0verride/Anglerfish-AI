@@ -1,6 +1,6 @@
-"""Browser-driven tests for the dashboard SPA's client-side hardening.
+"""Browser-driven tests for the dashboard SPA, against a live server.
 
-Two regression guards that only a real DOM can exercise:
+Things only a real DOM exercises:
 
 * The stored-XSS defence: a captured credential whose username is an
   ``<img onerror>`` payload must render as inert text - no element is
@@ -11,8 +11,12 @@ Two regression guards that only a real DOM can exercise:
   ``'unsafe-inline'``, the score-bar width (set through the CSSOM, which
   CSP does not govern) must still apply, and the real page must raise no
   ``securitypolicyviolation`` at all.
+* The honeytoken registry view (slice 13.3): the SPA joins
+  ``/api/honeytokens`` against ``/api/honeytokens/callbacks`` by
+  ``token_id`` client-side; a fired token must render with its callback
+  count and the ``row--fired`` highlight.
 
-Both serve the real dashboard on a live uvicorn port and drive it with
+All serve the real dashboard on a live uvicorn port and drive it with
 headless chromium. Marked ``browser``: deselected from the default suite
 (see addopts) and run only by the dedicated CI job that installs chromium.
 """
@@ -33,15 +37,22 @@ import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 from pydantic import SecretStr
 
+from anglerfish.audit import AuditLog
 from anglerfish.config import AnglerfishSettings
 from anglerfish.config.models import CredentialsConfig, SessionStoreConfig
 from anglerfish.credentials import CredentialStore
 from anglerfish.dashboard import DashboardState, create_app
+from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.session import SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 from anglerfish.sessions import SessionStore
 
 pytestmark = pytest.mark.browser
+
+# A fired honeytoken (has a callback event) and a quiet one (none), so the
+# registry test can assert the row--fired highlight lands on the right row.
+_FIRED_TOKEN_ID = "AAAAAAAAAAAAAAAA"
+_QUIET_TOKEN_ID = "BBBBBBBBBBBBBBBB"
 
 # Attacker-controlled username. If escapeText is bypassed at the credentials
 # call site, chromium parses this as an <img> whose failed load fires
@@ -103,13 +114,33 @@ class _LiveServer:
         )
         self._state = DashboardState(self._session_store)
         self._snapshot = _snapshot()
+        # A real audit log on disk so /api/honeytokens/callbacks has a file
+        # to read; the callback event below seeds one fired token.
+        self._audit = AuditLog(tmp_path / "audit.jsonl")
 
         port = _free_port()
         self.base_url = f"http://127.0.0.1:{port}"
-        app = create_app(settings, state=self._state, credential_store=self._cred_store)
+        app = create_app(
+            settings,
+            state=self._state,
+            credential_store=self._cred_store,
+            audit=self._audit,
+        )
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
         self._server = uvicorn.Server(config)
         self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _honeytoken(self, token_id: str, *, with_session: bool) -> Honeytoken:
+        return Honeytoken(
+            id=token_id,
+            kind="aws",
+            payload="[default]\naws_secret_access_key=do-not-leak\n",
+            callback_url=f"https://honey.example.com/cb/{token_id}",
+            placed_at="/root/.aws/credentials",
+            source_ip="203.0.113.9" if with_session else None,
+            session_id=self._snapshot.session_id if with_session else None,
+            created_at=datetime(2026, 5, 22, tzinfo=UTC),
+        )
 
     def _run(self) -> None:
         async def _main() -> None:
@@ -125,6 +156,21 @@ class _LiveServer:
                 password="correct horse",
                 session_id=self._snapshot.session_id,
                 timestamp=datetime(2026, 5, 22, tzinfo=UTC),
+            )
+            await self._state.register_honeytoken(
+                self._honeytoken(_FIRED_TOKEN_ID, with_session=True)
+            )
+            await self._state.register_honeytoken(
+                self._honeytoken(_QUIET_TOKEN_ID, with_session=False)
+            )
+            self._audit.record(
+                "bridge.honeytoken_callback",
+                token_id=_FIRED_TOKEN_ID,
+                kind="aws",
+                registered_source_ip="203.0.113.9",
+                callback_source_ip="198.51.100.1",
+                user_agent="aws-cli/2.13",
+                request_path=f"/cb/{_FIRED_TOKEN_ID}",
             )
             try:
                 # The app lifespan aclose()s the credential store on
@@ -228,3 +274,30 @@ def test_score_bar_width_renders_under_tightened_csp(
 
     # The real page, served with the tightened CSP, raised no violation.
     assert page.evaluate("() => window.__cspViolations") == []
+
+
+def test_honeytoken_registry_joins_callbacks_and_highlights_fired(
+    page: Page,
+    live_server: _LiveServer,
+) -> None:
+    page.goto(live_server.base_url)
+
+    rows = page.locator("#honeytokens-table tr")
+    rows.first.wait_for(state="visible", timeout=10_000)
+    assert rows.count() == 2
+
+    fired = page.locator(f"#honeytokens-table tr:has-text('{_FIRED_TOKEN_ID}')")
+    quiet = page.locator(f"#honeytokens-table tr:has-text('{_QUIET_TOKEN_ID}')")
+
+    # The fired token (one callback in the audit log) is highlighted and
+    # shows its callback count; the quiet token is neither.
+    assert "row--fired" in (fired.get_attribute("class") or "")
+    assert "row--fired" not in (quiet.get_attribute("class") or "")
+    # Client-side join produced the count cell (5th column).
+    assert fired.locator("td").nth(4).inner_text().strip() == "1"
+    assert quiet.locator("td").nth(4).inner_text().strip() == "0"
+    # Static token (no session) renders the "static" label, not a UUID slice.
+    assert "static" in quiet.inner_text()
+
+    # The beacon payload is never serialised to the page.
+    assert "do-not-leak" not in page.content()
