@@ -2,7 +2,9 @@
 
 A pure-ASGI middleware (not ``BaseHTTPMiddleware``) so it does not buffer
 the CSV export's ``StreamingResponse``. It injects a Content-Security-
-Policy plus the standard companion headers on every HTTP response.
+Policy plus the standard companion headers on every HTTP response. The CSP
+carries a ``report-uri`` so violations are recorded as a tripwire (see
+``/api/csp-report`` in ``routes.py``).
 
 The CSP is the defence-in-depth backstop for the SPA: ``script-src
 'self'`` means an injected inline ``<script>`` or event-handler attribute
@@ -34,6 +36,9 @@ _CSP = "; ".join(
         "object-src 'none'",
         "base-uri 'self'",
         "frame-ancestors 'none'",
+        # Violations POST to the auth-gated /api/csp-report tripwire, which
+        # records them as dashboard.csp_violation audit events.
+        "report-uri /api/csp-report",
     ],
 )
 

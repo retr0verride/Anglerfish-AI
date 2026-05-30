@@ -28,6 +28,8 @@ def test_csp_blocks_inline_script(client: TestClient) -> None:
     # No directive carries 'unsafe-inline': script never did, and the
     # score-bar width is set via the CSSOM rather than an inline style.
     assert "unsafe-inline" not in csp
+    # Violations report to the auth-gated tripwire endpoint.
+    assert "report-uri /api/csp-report" in csp
 
 
 def test_companion_security_headers(client: TestClient) -> None:

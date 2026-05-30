@@ -11,13 +11,14 @@ balancers and service probes), and ``/api/login``/``/api/logout``
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,6 +51,12 @@ from anglerfish.models.session import SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 
 __all__ = ["build_router"]
+
+# A CSP violation report is a small JSON object. Cap the body so the
+# auth-gated endpoint cannot be used to write large blobs into the audit
+# log, and truncate each recorded field for the same reason.
+_CSP_REPORT_MAX_BYTES = 8192
+_CSP_REPORT_FIELD_MAX = 512
 
 
 def _get_state(request: Request) -> DashboardState:
@@ -555,6 +562,46 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             "count": len(pins),
             "items": [pin.model_dump(mode="json") for pin in pins],
         }
+
+    @router.post("/api/csp-report", dependencies=[Depends(require_auth)])
+    async def csp_report(
+        request: Request,
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> Response:
+        """Record a Content-Security-Policy violation as a tripwire.
+
+        The CSP ``report-uri`` points here. A violation while the operator
+        views attacker-controlled data signals that something reached the
+        DOM in a way the policy had to block - a candidate output-encoding
+        gap. Auth-gated: the same-origin report carries the session cookie,
+        so this is not an unauthenticated write path into the audit log.
+        The body is size-capped and only a fixed set of fields is recorded,
+        each truncated, so a violation cannot bloat or inject the log.
+        """
+        raw = await request.body()
+        if len(raw) > _CSP_REPORT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="CSP report too large")
+        try:
+            payload = json.loads(raw)
+            report = payload["csp-report"]
+        except (json.JSONDecodeError, TypeError, KeyError):
+            raise HTTPException(status_code=400, detail="malformed CSP report") from None
+        if not isinstance(report, dict):
+            raise HTTPException(status_code=400, detail="malformed CSP report")
+
+        def _field(name: str) -> str:
+            return str(report.get(name, ""))[:_CSP_REPORT_FIELD_MAX]
+
+        audit.record(
+            "dashboard.csp_violation",
+            operator=_actor(request),
+            violated_directive=(_field("violated-directive") or _field("effective-directive")),
+            blocked_uri=_field("blocked-uri"),
+            document_uri=_field("document-uri"),
+            source_file=_field("source-file"),
+            line_number=_field("line-number"),
+        )
+        return Response(status_code=204)
 
     @router.delete(
         "/api/persona/pin/{source_ip}",
