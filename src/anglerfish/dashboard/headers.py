@@ -1,0 +1,65 @@
+"""Security response headers for the dashboard.
+
+A pure-ASGI middleware (not ``BaseHTTPMiddleware``) so it does not buffer
+the CSV export's ``StreamingResponse``. It injects a Content-Security-
+Policy plus the standard companion headers on every HTTP response.
+
+The CSP is the defence-in-depth backstop for the SPA: ``script-src
+'self'`` means an injected inline ``<script>`` or event-handler attribute
+cannot execute even if some value reached the DOM unescaped, complementing
+the ``escapeText`` output encoding. ``style-src`` allows ``'unsafe-inline'``
+only because the score bar sets an inline ``width`` style; inline styles
+cannot run script, so the script protection is unaffected.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from starlette.datastructures import MutableHeaders
+
+if TYPE_CHECKING:
+    from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+__all__ = ["SecurityHeadersMiddleware"]
+
+_CSP = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self'",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+    ],
+)
+
+_SECURITY_HEADERS = {
+    "content-security-policy": _CSP,
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+}
+
+
+class SecurityHeadersMiddleware:
+    """Inject CSP + companion security headers on every HTTP response."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in _SECURITY_HEADERS.items():
+                    headers.setdefault(name, value)
+            await send(message)
+
+        await self._app(scope, receive, send_wrapper)

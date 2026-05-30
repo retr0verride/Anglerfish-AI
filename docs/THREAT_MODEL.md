@@ -98,6 +98,7 @@ PR, the PR template references the model.
 | Attacker rewrites the env file to redirect Ollama to attacker-controlled host | `/etc/anglerfish/anglerfish.env` | Mode 0600; only `root` can write. Even with write access, the loopback / trusted-IP validator at load time blocks the swap. |
 | Attacker injects keys into the operator's authorized_keys via wizard input | `WizardAnswers.operator_ssh_pubkey` | `parse_ssh_pubkey` rejects any input containing `\n` or `\r`; whitelisted key types; bounded base64 length. |
 | Attacker tampers with the audit log | `/var/log/anglerfish/audit.jsonl` | Append-only by convention. Operators wanting WORM should layer `chattr +a` or an external store. (Acknowledged limitation - we do not enforce write-once at the FS layer.) |
+| Attacker injects markup into the operator's authenticated dashboard via session data rendered into `innerHTML` (typed commands, bridge responses, captured usernames/passwords) | Dashboard SPA (`app.js`) | (1) `escapeText` HTML-escapes `& < > " '` at every interpolation; (2) `SecurityHeadersMiddleware` sets `Content-Security-Policy: script-src 'self'` (no `'unsafe-inline'`) as the backstop so an injected script cannot execute even if a value reaches the DOM unescaped, plus `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`. |
 
 ### Repudiation
 

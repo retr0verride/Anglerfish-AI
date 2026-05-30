@@ -24,6 +24,7 @@ from anglerfish.audit import AuditLog
 from anglerfish.config.settings import AnglerfishSettings
 from anglerfish.dashboard.audit_tailer import AuditTailer
 from anglerfish.dashboard.auth import build_auth_router
+from anglerfish.dashboard.headers import SecurityHeadersMiddleware
 from anglerfish.dashboard.overrides import build_runtime_overrides
 from anglerfish.dashboard.overrides_publisher import RuntimeOverridesPublisher
 from anglerfish.dashboard.rate_limit import LoginRateLimiter
@@ -177,6 +178,11 @@ def create_app(
         same_site="strict",
         https_only=False,  # operator may run without TLS on internal nets
     )
+
+    # Defence-in-depth response headers (CSP backstop for the SPA's
+    # escapeText output encoding). Pure-ASGI so the CSV export stream is
+    # not buffered.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     app.state.settings = settings
     app.state.dashboard_state = state_instance
