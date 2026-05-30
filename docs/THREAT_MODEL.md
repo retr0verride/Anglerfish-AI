@@ -127,7 +127,7 @@ PR, the PR template references the model.
 | Attacker floods the lure with commands to exhaust the LLM | Bridge command path | Two-layer rate limit: per-session token bucket + global concurrency semaphore in `BridgeRateLimiter`. When either trips, the attacker receives a scripted fallback response - the limiter is invisible. |
 | Attacker pumps long commands to exhaust prompt budget | Bridge sanitiser | `sanitize_command` caps input at `bridge.max_input_chars` (4096 by default). |
 | Attacker pumps long lines to fill disk via captured commands | SessionStore SQLite | Per-turn `command` and `response` are bounded at the Pydantic model layer. Session history bounded by `bridge.history_window` (20 by default). |
-| Attacker DoSes the dashboard via repeated logins | `/api/login` | bcrypt cost factor itself rate-limits credential checks. (Phase 4 wiring will add a per-IP token bucket as defence-in-depth.) |
+| Attacker DoSes the dashboard via repeated logins | `/api/login` | `LoginRateLimiter` token-buckets login attempts per source IP (429 `too many login attempts`, audited as `dashboard.login_rate_limited`); bcrypt's cost factor adds a second, intrinsic limit on credential-check throughput. |
 | Attacker exhausts file descriptors via WebSocket connections | `/ws/events` | Per-subscriber bounded queue; slow consumers drop oldest events; max-active-session cap on `DashboardState`. |
 
 ### Elevation of privilege
@@ -390,10 +390,9 @@ operator signal.
 ## Known limitations (acknowledged, not yet mitigated)
 
 1. **Audit log is not write-once at the FS layer.** A root attacker can `cat /dev/null > audit.jsonl`. Operators wanting WORM should layer `chattr +a` or write to an external WORM target.
-2. **No dashboard CSRF tokens.** Current state is read-only; when state-changing endpoints land, CSRF tokens will too. Tracked in Phase 4.
-3. **Per-IP login rate limiting** falls back on bcrypt cost. A dedicated bucket lands in Phase 4.
-4. **LLM-targeted attacks beyond the Stage 1 corpus.** Stage 1 ships explicit-signature regex detection. Paraphrased jailbreaks, novel chat-template formats, and steganographic encoding may bypass. The corpus is the living source of truth, each bypass observed in the wild becomes a new corpus case. Stage 3+ adds semantic-similarity defense via embeddings.
-5. **No supply-chain attestation on Python deps.** `pip install` is trusted to deliver upstream-published artefacts. Renovate / pip-audit are the current defence.
+2. **Per-IP login rate limiting does not stop a distributed attacker.** `LoginRateLimiter` token-buckets `/api/login` per source IP (429 plus a `dashboard.login_rate_limited` audit event), and bcrypt's cost factor caps credential-check throughput, but an attacker spread across many source IPs bypasses a per-IP bucket. nftables is the next layer.
+3. **LLM-targeted attacks beyond the Stage 1 corpus.** Stage 1 ships explicit-signature regex detection. Paraphrased jailbreaks, novel chat-template formats, and steganographic encoding may bypass. The corpus is the living source of truth, each bypass observed in the wild becomes a new corpus case. Stage 3+ adds semantic-similarity defense via embeddings.
+4. **No supply-chain attestation on Python deps.** `pip install` is trusted to deliver upstream-published artefacts. Renovate / pip-audit are the current defence.
 
 ---
 
