@@ -90,12 +90,16 @@ async function refreshThreats() {
           </button>
         </td>
         <td>
-          <span class="score-bar"><span class="score-bar__fill" style="width:${score}%"></span></span>
+          <span class="score-bar"><span class="score-bar__fill"></span></span>
           ${score}
         </td>
         <td>${t.persistence_attempted ? "yes" : "no"}</td>
         <td>${escapeText(techIds)}</td>
       `;
+      // Width is set via the CSSOM, not an inline style attribute, so the
+      // CSP can keep style-src 'self' without 'unsafe-inline'. score is a
+      // clamped number, never attacker text.
+      tr.querySelector(".score-bar__fill").style.width = `${score}%`;
       threatTable.appendChild(tr);
     }
   } catch (err) {

@@ -7,9 +7,10 @@ Policy plus the standard companion headers on every HTTP response.
 The CSP is the defence-in-depth backstop for the SPA: ``script-src
 'self'`` means an injected inline ``<script>`` or event-handler attribute
 cannot execute even if some value reached the DOM unescaped, complementing
-the ``escapeText`` output encoding. ``style-src`` allows ``'unsafe-inline'``
-only because the score bar sets an inline ``width`` style; inline styles
-cannot run script, so the script protection is unaffected.
+the ``escapeText`` output encoding. ``style-src 'self'`` carries no
+``'unsafe-inline'``: the only dynamic style, the score-bar width, is set
+through the CSSOM (``element.style.width``), which CSP does not govern, so
+no inline ``style`` attribute or ``<style>`` block appears on the page.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ _CSP = "; ".join(
     [
         "default-src 'self'",
         "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
+        "style-src 'self'",
         "img-src 'self'",
         "connect-src 'self'",
         "object-src 'none'",
