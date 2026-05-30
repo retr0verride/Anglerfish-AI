@@ -1,0 +1,1 @@
+Attacker is enumerating cron and systemd, consistent with a persistence sweep.

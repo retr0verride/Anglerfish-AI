@@ -44,6 +44,7 @@ from anglerfish.config import AnglerfishSettings
 from anglerfish.config.models import CredentialsConfig, SessionStoreConfig
 from anglerfish.credentials import CredentialStore
 from anglerfish.dashboard import DashboardState, create_app
+from anglerfish.dashboard.state import DashboardEvent, DashboardEventKind
 from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.session import SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
@@ -122,15 +123,32 @@ class _LiveServer:
 
         port = _free_port()
         self.base_url = f"http://127.0.0.1:{port}"
+        # Bind the dashboard's advertised port + WS-allowed origin to the
+        # real port so the SPA's /ws/events connection passes the origin
+        # check (the narrator test drives a live WebSocket).
+        dashboard_cfg = settings.dashboard.model_copy(
+            update={"port": port, "allowed_origins": (self.base_url,)}
+        )
+        settings = settings.model_copy(update={"dashboard": dashboard_cfg})
         app = create_app(
             settings,
             state=self._state,
             credential_store=self._cred_store,
             audit=self._audit,
         )
-        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+        # Bound graceful shutdown: the SPA holds a long-lived /ws/events
+        # connection, which would otherwise stall the server's exit (and
+        # the per-test thread join) until the ping interval elapsed.
+        config = uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            timeout_graceful_shutdown=1,
+        )
         self._server = uvicorn.Server(config)
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _honeytoken(self, token_id: str, *, with_session: bool) -> Honeytoken:
         return Honeytoken(
@@ -144,8 +162,15 @@ class _LiveServer:
             created_at=datetime(2026, 5, 22, tzinfo=UTC),
         )
 
+    def publish_event(self, event: DashboardEvent) -> None:
+        """Publish a DashboardEvent onto the server's loop from the test thread."""
+        assert self._loop is not None
+        future = asyncio.run_coroutine_threadsafe(self._state.publish(event), self._loop)
+        future.result(timeout=5)
+
     def _run(self) -> None:
         async def _main() -> None:
+            self._loop = asyncio.get_running_loop()
             await self._session_store.open()
             await self._cred_store.open()
             await self._state.update_session(self._snapshot)
@@ -322,3 +347,41 @@ def test_narrator_panel_renders_disabled_state(
     assert "disabled" in meta.inner_text().lower()
     # The narrator stream container exists and is empty (nothing broadcast).
     assert page.locator("#narrator-stream li").count() == 0
+
+
+def test_narrator_markup_renders_inert(
+    page: Page,
+    live_server: _LiveServer,
+) -> None:
+    # The narrator prompt embeds attacker text, so its output can carry
+    # attacker-steered markup. The SPA renders narrator text as textContent;
+    # a pushed event with an <img onerror> payload must stay inert.
+    page.goto(live_server.base_url)
+    # Wait for the SPA's WebSocket to connect before publishing.
+    page.wait_for_function(
+        "() => document.querySelector('#ws-status').textContent === 'live'", timeout=10_000
+    )
+
+    payload = '<img src=x onerror="window.__narratorXss = true">'
+    live_server.publish_event(
+        DashboardEvent(
+            kind=DashboardEventKind.NARRATOR,
+            timestamp=datetime(2026, 5, 22, tzinfo=UTC),
+            payload={
+                "session_id": "7f3a1b2c",
+                "text": payload,
+                "ts": "2026-05-22T00:00:00Z",
+                "model": "qwen3:14b",
+            },
+        )
+    )
+
+    li = page.locator("#narrator-stream li").first
+    li.wait_for(state="visible", timeout=10_000)
+    page.wait_for_timeout(250)  # give any (regression-case) onerror time to fire
+
+    # Decisive: the injected <img onerror> never executed and no element was made.
+    assert page.evaluate("() => window.__narratorXss") is None
+    assert page.locator("#narrator-stream img").count() == 0
+    # The markup survives as inert text, proving it reached the render path.
+    assert "<img" in li.inner_text()
