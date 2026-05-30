@@ -37,7 +37,11 @@ from anglerfish.dashboard.export import (
     session_csv_rows,
     session_export_payload,
 )
-from anglerfish.dashboard.exporters import build_misp_event, build_stix_bundle
+from anglerfish.dashboard.exporters import (
+    build_honeytoken_report_rows,
+    build_misp_event,
+    build_stix_bundle,
+)
 from anglerfish.dashboard.health import (
     ollama_health,
     sessions_health,
@@ -1218,6 +1222,52 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             actor=_actor(request),
         )
         return payload
+
+    @router.get(
+        "/api/export/honeytoken_report",
+        dependencies=[Depends(require_auth)],
+    )
+    async def export_honeytoken_report(
+        request: Request,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> StreamingResponse:
+        """Export the whole honeytoken registry as an operator-only CSV.
+
+        Unlike the STIX/MISP exports this is registry-scoped (every token
+        ever placed), not date-ranged, and carries the secret ``payload``.
+        It is the operator's canonical record, an authenticated file
+        download that is never pushed to a shared feed (THREAT_MODEL).
+        Each registry row is joined against the full
+        ``bridge.honeytoken_callback`` history for its callback count and
+        most-recent hit.
+        """
+        tokens = await state.list_all_honeytokens()
+        start = datetime.fromtimestamp(0, tz=UTC)
+        end = datetime.now(tz=UTC)
+        callbacks = [
+            {
+                "token_id": event.get("token_id"),
+                "ts": event.get("ts"),
+                "callback_source_ip": event.get("callback_source_ip"),
+            }
+            for event in iter_events_in_range(audit.path, start=start, end=end)
+            if event.get("event_type") == "bridge.honeytoken_callback"
+        ]
+        audit.record(
+            "dashboard.export_served",
+            kind="honeytoken_report",
+            export_format="honeytoken_report",
+            item_count=len(tokens),
+            actor=_actor(request),
+        )
+        return StreamingResponse(
+            build_honeytoken_report_rows(tokens, callbacks),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": ('attachment; filename="honeytoken-report.csv"'),
+            },
+        )
 
     return router
 
