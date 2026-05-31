@@ -23,12 +23,12 @@ Lanes:
 
 | ID | Finding | Sev | Reachability | Lane | Status |
 |----|---------|-----|--------------|------|--------|
-| H1 | Per-IP limiter `_recent` map grows unbounded (memory DoS) | high | remote, unauth, **default-on** | hotfix | open |
-| H2 | Zero-width / homoglyph bypass of the defense filters | high | remote, defense-in-depth layer | fix (zero-width) / accept (homoglyph) | open |
-| H3 | HASSH fingerprint is a constant for every attacker | high (efficacy) | not a vuln; broken feature | spike | open |
-| M1 | CSV formula injection in both CSV exports | medium | operator opens the file | fix | open |
+| H1 | Per-IP limiter `_recent` map grows unbounded (memory DoS) | high | remote, unauth, **default-on** | hotfix | **closed** `f4610f0` |
+| H2 | Zero-width / homoglyph bypass of the defense filters | high | remote, defense-in-depth layer | fix (zero-width+combining) / accept (homoglyph) | **closed** `da8c9cf` |
+| H3 | HASSH fingerprint is a constant for every attacker | high (efficacy) | not a vuln; broken feature | spike done -> fix | **spike done, impl pending** |
+| M1 | CSV formula injection in both CSV exports | medium | operator opens the file | fix | **closed** `cf8c673` |
 | M2 | Per-session token-budget TOCTOU (concurrent overshoot) | medium | attacker pipelining; local GPU cost | fix-or-accept | open |
-| M3 | Audit-tailer poison-pill (non-finite latency wedges sync) | medium | log replay / corruption, not live traffic | fix | open |
+| M3 | Audit-tailer poison-pill (non-finite latency wedges sync) | medium | log replay / corruption, not live traffic | fix | **closed** `3ea0dac` |
 | M4 | `X-Forwarded-For` spoofs audited `callback_source_ip` | medium | only with the public callback receiver deployed | feature-gated | open |
 | M5 | Naive ISO `since` 500s three dashboard endpoints | medium | authed operator | fix | open |
 | M6 | Bridge does not fail-closed on unexpected exceptions | medium | defense-in-depth robustness | fix | open |
@@ -47,16 +47,20 @@ Lanes:
 These are not engineering calls; they need an operator sign-off and are
 recorded here when made:
 
-- **H2 homoglyph half.** NFKC normalization closes the zero-width /
-  format-character class. Cyrillic-style homoglyphs are not covered by
-  NFKC and need a confusables map. Proposed: close zero-width now,
-  accept homoglyph as a documented residual (a sophisticated attacker
-  injecting homoglyphs has likely already concluded it is a honeypot).
-  _Decision: pending._
-- **H3 HASSH.** Confirm whether asyncssh 2.23 can surface the peer's
-  offered KEXINIT algorithm lists. If not, remove HASSH or document it
-  as unsupported rather than emit a misleading constant. _Decision:
-  pending spike._
+- **H2 homoglyph half.** NFKD + combining-mark/format stripping closes
+  the zero-width, compatibility-form, combining-mark, and Latin-accent
+  classes. Cross-script Cyrillic homoglyphs are not decomposable to
+  Latin and need a confusables map. _Decision: accepted as a documented
+  residual (THREAT_MODEL "Unicode evasion" row), closed in `da8c9cf`._
+- **H3 HASSH.** Spike verdict: real data IS obtainable in asyncssh
+  2.23.0 via the private `conn._client_kexinit` attribute (the raw
+  KEXINIT payload), parsed with asyncssh's own `SSHPacket`; verified
+  live against OpenSSH 10.0. Degrades gracefully (guarded -> no-HASSH on
+  a future asyncssh change, never a crash). Effort small. _Decision
+  pending: implement the private-attr fix (couples to an asyncssh
+  internal) vs document HASSH unsupported and keep only `client_version`._
+  The `hashes.py` separator-injection + non-ASCII-crash hardening is
+  independent and should land regardless.
 - **M2 budget race.** On a local single-GPU Ollama the "cost" is
   inference time, already bounded by the session rate limiter. Fix
   (reserve-then-reconcile) or accept-and-document the soft cap.
