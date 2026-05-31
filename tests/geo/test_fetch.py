@@ -170,3 +170,22 @@ def test_fetch_rejects_archive_without_mmdb(tmp_path: Path) -> None:
     )
     with pytest.raises(FetchError, match=r"did not contain a \.mmdb"):
         fetch_geolite_databases(cfg, http_client=client)
+
+
+def test_extract_refuses_decompression_bomb(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An archive that extracts past the uncompressed cap is refused (L6)."""
+    from anglerfish.geo import fetch
+
+    archive = tmp_path / "GeoLite2-City.tar.gz"
+    archive.write_bytes(_build_archive("GeoLite2-City", b"X" * 2000))
+    # Lower the cap below the member size so a small archive trips it.
+    monkeypatch.setattr(fetch, "_MAX_EXTRACTED_BYTES", 100)
+
+    with pytest.raises(FetchError, match="decompression bomb"):
+        fetch._extract_mmdb(archive, edition="GeoLite2-City")
+    # Nothing was extracted past the cap.
+    extracted = archive.parent / "extracted"
+    assert not list(extracted.rglob("*.mmdb"))
