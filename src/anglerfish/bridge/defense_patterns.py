@@ -401,12 +401,12 @@ INJECTION_PATTERNS: Final[list[PatternSpec]] = [
         "severity": 1.0,
     },
     {
-        # Deepseek's Unicode-pipe-lookalike variant: U+FF5C instead of
-        # U+007C. Designed to bypass naive ASCII-pipe regexes - we
-        # explicitly catch it. The fullwidth-pipe characters in the
-        # regex string are INTENTIONAL; suppress the ruff ambiguity
-        # check.
-        "pattern": r"<｜\s*(?:begin▁of▁sentence|end▁of▁sentence|user|assistant)\s*｜>",  # noqa: RUF001
+        # Deepseek format. The fullwidth pipe (U+FF5C) the attacker uses
+        # to dodge naive ASCII-pipe regexes is folded to U+007C by the H2
+        # scan-normalisation (normalise_for_scan), so this pattern matches
+        # the canonical ASCII-pipe form. The U+2581 word delimiter is
+        # NFKC-invariant and stays literal in the token names.
+        "pattern": r"<\s*\|\s*(?:begin▁of▁sentence|end▁of▁sentence|user|assistant)\s*\|\s*>",
         "category": "special_token_injection",
         "severity": 1.0,
     },

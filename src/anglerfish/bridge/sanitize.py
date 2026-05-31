@@ -13,12 +13,47 @@ operations are applied:
 
 from __future__ import annotations
 
-__all__ = ["TRUNCATION_MARKER", "cap_output", "sanitize_command"]
+import unicodedata
+
+__all__ = ["TRUNCATION_MARKER", "cap_output", "normalise_for_scan", "sanitize_command"]
 
 
 TRUNCATION_MARKER = "\n[input truncated]"
 
 _ALLOWED_CONTROL_CHARS = frozenset({"\t", "\n"})
+
+
+def normalise_for_scan(text: str) -> str:
+    """Canonicalise text for the Stage 1 defense regex scan (audit H2).
+
+    The defense patterns are ASCII literals with ``\\b`` word boundaries,
+    so a single invisible, compatibility-form, or combining character
+    spliced into a token defeats a match. Three steps close that:
+
+    * **NFKD** decomposition folds compatibility forms (fullwidth Latin,
+      ligatures, circled/super/subscript letters) onto their ASCII
+      equivalents and splits precomposed accented letters into a base
+      letter plus combining marks.
+    * All Unicode combining marks (categories ``Mn`` / ``Mc`` / ``Me``)
+      are then removed, so both a precomposed accent (``ignòre``) and a
+      free combining mark spliced under a letter (``ig`` + U+0300 +
+      ``nore``) fold back to the bare ASCII token.
+    * All Unicode ``Cf`` (format) characters are removed: the zero-width
+      space / joiner / non-joiner (U+200B/C/D), word joiner (U+2060),
+      BOM (U+FEFF), soft hyphen (U+00AD), and the bidi marks.
+
+    Used only to build the scan target; the original attacker bytes are
+    preserved in the prompt and the captured session record. This folds
+    Latin diacritics but NOT cross-script confusable homoglyphs (Cyrillic
+    small-a U+0430 stays distinct from Latin ``a``); that residual is
+    documented in ``docs/THREAT_MODEL.md``.
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(
+        ch
+        for ch in decomposed
+        if unicodedata.category(ch)[0] != "M" and unicodedata.category(ch) != "Cf"
+    )
 
 
 def sanitize_command(raw: str, *, max_chars: int) -> str:
