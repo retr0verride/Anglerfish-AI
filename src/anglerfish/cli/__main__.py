@@ -492,10 +492,17 @@ def callback_serve(
         raise typer.Exit(code=2)
 
     application = create_callback_app(settings)
+    # proxy_headers lets uvicorn derive request.client from a validated
+    # X-Forwarded-For when the connection comes from a trusted proxy
+    # (forwarded_allow_ips, default 127.0.0.1; override via the
+    # FORWARDED_ALLOW_IPS env var for a non-local proxy). The app reads
+    # only request.client, never the raw header, so a non-trusted client
+    # cannot spoof the audited callback_source_ip (audit M4).
     uvicorn.run(
         application,
         host=host,
         port=port,
+        proxy_headers=True,
         log_level=settings.log_level.value.lower(),
     )
 
