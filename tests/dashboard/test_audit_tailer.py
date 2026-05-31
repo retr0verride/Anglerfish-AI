@@ -317,6 +317,64 @@ async def test_non_lure_events_are_ignored(
     assert (await dashboard_state.get_active_sessions()) == []
 
 
+async def test_non_finite_latency_does_not_wedge_the_tailer(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """A NaN / inf / negative latency_ms must not wedge audit->store sync.
+
+    ``CommandTurn.latency_ms`` is ``Field(ge=0.0)``, which rejects NaN
+    and negatives (and json.dumps emits literal ``NaN``/``Infinity`` that
+    json.loads reads back). Without a guard the ValidationError propagates
+    out of the batch dispatch, the offset is never advanced, and the
+    poison line is re-read forever (audit finding M3).
+    """
+    sid = uuid4()
+    sid_s = str(sid)
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.7",
+            username="root",
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.7",
+            command="whoami",
+            latency_ms=float("nan"),
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.7",
+            command="uname -a",
+            latency_ms=float("inf"),
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_native",
+            source_ip="203.0.113.7",
+            command="id",
+            latency_ms=-5.0,
+            session_id=sid_s,
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+
+    # Offset advances past the poison lines (not wedged at 0).
+    assert tailer.offset > 0
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    # All three commands are captured; the non-finite/negative latencies
+    # are sanitised to 0.0 rather than dropping the command.
+    assert [t.command for t in snap.turns] == ["whoami", "uname -a", "id"]
+    assert all(t.latency_ms == 0.0 for t in snap.turns)
+
+
 async def test_malformed_lines_are_skipped(
     dashboard_state: DashboardState,
     tmp_path: Path,

@@ -44,11 +44,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
+
+from pydantic import ValidationError
 
 from anglerfish.audit import AuditLog
 from anglerfish.honeytokens.schema import Honeytoken
@@ -388,14 +391,31 @@ class AuditTailer:
             return
         latency_raw = event.get("latency_ms")
         latency_ms = float(latency_raw) if isinstance(latency_raw, (int, float)) else 0.0
+        # Audit M3: CommandTurn.latency_ms is Field(ge=0.0). A replayed,
+        # forwarded, or corrupt audit line can carry NaN / inf / negative
+        # (json.dumps emits literal NaN/Infinity that json.loads accepts).
+        # Uncaught, the ValidationError would propagate out of the batch
+        # dispatch, leave the offset unadvanced, and re-read the poison
+        # line forever. Clamp to a finite non-negative value so the
+        # command is still captured rather than wedging audit->store sync.
+        if not math.isfinite(latency_ms) or latency_ms < 0.0:
+            latency_ms = 0.0
 
-        turn = CommandTurn(
-            command=command,
-            response="",  # not in audit; design accepts this
-            source=source,
-            timestamp=ts,
-            latency_ms=latency_ms,
-        )
+        try:
+            turn = CommandTurn(
+                command=command,
+                response="",  # not in audit; design accepts this
+                source=source,
+                timestamp=ts,
+                latency_ms=latency_ms,
+            )
+        except ValidationError:  # pragma: no cover - defence-in-depth backstop
+            # No field can fail today (command is unconstrained, latency is
+            # clamped above), but a future CommandTurn constraint must skip
+            # the line, not re-wedge the tailer - matching the log-and-skip
+            # discipline of the _parse_* helpers.
+            _logger.warning("audit_tailer: skipping command event that failed validation")
+            return
         snapshot = self._accumulators.get(session_id)
         if snapshot is None:
             # Command-before-open: synthesize a placeholder session
