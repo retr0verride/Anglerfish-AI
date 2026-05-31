@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import struct
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import asyncssh
@@ -23,12 +24,13 @@ from pydantic import HttpUrl, SecretStr
 from anglerfish.audit import AuditLog
 from anglerfish.config.models import CredentialsConfig, FingerprintConfig
 from anglerfish.credentials.storage import CredentialStore
+from anglerfish.fingerprint.hashes import compute_hassh
 from anglerfish.fingerprint.service import Fingerprinter
 from anglerfish.fingerprint.tor import TorExitList
 from anglerfish.lure.bridge_client import BridgeClient
 from anglerfish.lure.config import LureConfig
 from anglerfish.lure.keys import ensure_host_keys, load_host_keys
-from anglerfish.lure.server import LureServer
+from anglerfish.lure.server import LureServer, _client_offered_algorithms
 
 # Skip integration tests on Windows. asyncssh.listen needs POSIX
 # signal-handler plumbing that nt does not provide, and CI for this
@@ -261,6 +263,116 @@ async def test_audit_records_fingerprint(
     import re
 
     assert re.search(r'"hassh":"[0-9a-f]{32}"', events)
+
+
+def _kexinit_payload(
+    kex: list[str],
+    hostkey: list[str],
+    enc_cs: list[str],
+    enc_sc: list[str],
+    mac_cs: list[str],
+    mac_sc: list[str],
+    cmp_cs: list[str],
+) -> bytes:
+    """Build a minimal SSH_MSG_KEXINIT payload (type byte + cookie + lists)."""
+
+    def _nl(items: list[str]) -> bytes:
+        body = ",".join(items).encode("ascii")
+        return struct.pack(">I", len(body)) + body
+
+    return (
+        bytes([0x14])
+        + b"\x00" * 16
+        + _nl(kex)
+        + _nl(hostkey)
+        + _nl(enc_cs)
+        + _nl(enc_sc)
+        + _nl(mac_cs)
+        + _nl(mac_sc)
+        + _nl(cmp_cs)
+    )
+
+
+def test_client_offered_algorithms_parses_kexinit() -> None:
+    payload = _kexinit_payload(
+        ["kex1", "kex2"],
+        ["ssh-ed25519"],
+        ["aes128", "aes256"],
+        ["aes128"],
+        ["hmac-sha2-256"],
+        ["hmac-sha2-256"],
+        ["none", "zlib"],
+    )
+    conn = cast("asyncssh.SSHServerConnection", type("C", (), {"_client_kexinit": payload})())
+    kex, enc, mac, comp = _client_offered_algorithms(conn)
+    assert kex == ["kex1", "kex2"]
+    assert enc == ["aes128", "aes256"]  # client->server only
+    assert mac == ["hmac-sha2-256"]
+    assert comp == ["none", "zlib"]
+
+
+def test_client_offered_algorithms_missing_attribute_returns_empty() -> None:
+    conn = cast("asyncssh.SSHServerConnection", object())
+    assert _client_offered_algorithms(conn) == ([], [], [], [])
+
+
+def test_client_offered_algorithms_malformed_payload_degrades_to_empty() -> None:
+    # A truncated payload (a future asyncssh change, or a corrupt buffer)
+    # must degrade to no HASSH, not raise into the post-kex auth hook.
+    conn = cast(
+        "asyncssh.SSHServerConnection", type("C", (), {"_client_kexinit": b"\x14\x00\x00"})()
+    )
+    assert _client_offered_algorithms(conn) == ([], [], [], [])
+
+
+async def test_distinct_clients_get_distinct_hassh(
+    lure: LureServer,
+    audit_log: AuditLog,
+) -> None:
+    """Two clients with different algorithm offers get different HASSH.
+
+    Audit H3: asyncssh does not expose the offered algorithm lists via
+    get_extra_info, so the lure previously hashed four empty lists into
+    one constant for every attacker, defeating re-identification. With
+    the offered lists recovered from the client KEXINIT, distinct offers
+    must hash distinctly.
+    """
+    import re
+
+    c1 = await asyncio.wait_for(
+        asyncssh.connect(
+            "127.0.0.1",
+            port=lure.get_port(),
+            username="alice",
+            password="hunter2",
+            known_hosts=None,
+            kex_algs=["curve25519-sha256"],
+        ),
+        timeout=5.0,
+    )
+    c1.close()
+    await c1.wait_closed()
+    c2 = await asyncio.wait_for(
+        asyncssh.connect(
+            "127.0.0.1",
+            port=lure.get_port(),
+            username="alice",
+            password="hunter2",
+            known_hosts=None,
+            kex_algs=["ecdh-sha2-nistp256"],
+        ),
+        timeout=5.0,
+    )
+    c2.close()
+    await c2.wait_closed()
+    await asyncio.sleep(0.15)
+
+    hasshes = re.findall(r'"hassh":"([0-9a-f]{32})"', audit_log.path.read_text(encoding="utf-8"))
+    assert len(hasshes) == 2
+    # Distinct offers -> distinct fingerprints (not one constant).
+    assert hasshes[0] != hasshes[1]
+    # And neither is the all-empty-lists constant the bug produced.
+    assert compute_hassh([], [], [], []) not in hasshes
 
 
 async def test_per_session_events_carry_session_id(
