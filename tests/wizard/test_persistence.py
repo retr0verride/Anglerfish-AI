@@ -190,3 +190,34 @@ def test_secret_fields_length_bounds_enforced() -> None:
         _answers(dashboard_admin_password_hash=SecretStr(""))
     with pytest.raises(ValidationError, match="dashboard_admin_password_hash length"):
         _answers(dashboard_admin_password_hash=SecretStr("x" * 257))
+
+
+def test_atomic_write_private_never_world_readable_temp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The secret-bearing temp file is created tight, no 0644 window (L1)."""
+    import os
+    import stat
+
+    from anglerfish.wizard import persistence
+
+    seen: dict[str, int] = {}
+    real_chmod = os.chmod
+
+    def _spy_chmod(target: object, mode: int, *args: object, **kwargs: object) -> None:
+        # The mode the file already had when chmod fired == its creation mode.
+        seen.setdefault("creation_mode", stat.S_IMODE(os.stat(target).st_mode))  # type: ignore[arg-type]
+        real_chmod(target, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(persistence.os, "chmod", _spy_chmod)
+
+    target = tmp_path / "cfg" / "anglerfish.env"
+    persistence.atomic_write_private(target, "SESSION_SECRET=topsecret\n", mode=0o600)
+
+    # The temp file carried no group/other bits at creation (no window).
+    assert not (seen["creation_mode"] & 0o077), oct(seen["creation_mode"])
+    # Final file is 0600 with the content; dir is 0750.
+    assert target.read_text() == "SESSION_SECRET=topsecret\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o750

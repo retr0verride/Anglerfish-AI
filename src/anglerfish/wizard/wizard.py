@@ -19,10 +19,8 @@ wraps :func:`prompt_for_answers` around it for interactive use.
 
 from __future__ import annotations
 
-import contextlib
 import ipaddress
 import logging
-import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -35,7 +33,7 @@ from anglerfish.wizard.answers import NetworkConfig, WizardAnswers, WizardOutput
 from anglerfish.wizard.counter_deception import COUNTER_DECEPTION_TERMS
 from anglerfish.wizard.honeytokens import HONEYTOKENS_TERMS
 from anglerfish.wizard.network import list_interfaces
-from anglerfish.wizard.persistence import save_answers
+from anglerfish.wizard.persistence import atomic_write_private, save_answers
 from anglerfish.wizard.preflight import PreflightChecker
 from anglerfish.wizard.render import (
     render_authorized_keys,
@@ -215,14 +213,13 @@ def run_wizard(
 
 
 def _atomic_write(path: Path, content: str, *, mode: int) -> None:
-    """Write ``content`` to ``path`` atomically with the requested mode."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(content, encoding="utf-8")
-    # Windows: chmod is a partial no-op; suppress without warning.
-    with contextlib.suppress(OSError):
-        os.chmod(tmp_path, mode)
-    os.replace(tmp_path, path)
+    """Write ``content`` to ``path`` atomically with the requested mode.
+
+    Delegates to :func:`anglerfish.wizard.persistence.atomic_write_private`
+    so the secret-bearing temp file is created with ``mode`` from the
+    start, never briefly world-readable (audit L1).
+    """
+    atomic_write_private(path, content, mode=mode)
 
 
 # ---------------------------------------------------------------------------
