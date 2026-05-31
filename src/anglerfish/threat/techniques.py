@@ -172,11 +172,16 @@ TECHNIQUES: tuple[TechniqueRule, ...] = (
         description="Inline shell pipelines or reverse-shell patterns.",
         commands=("bash", "sh", "zsh", "dash", "ksh"),
         command_patterns=(
+            # Audit L5: the gap quantifiers are bounded so neither pattern
+            # re-anchors quadratically on attacker-controlled command text.
+            # `[^|]*?` cannot cross a pipe (so each pipe segment is scanned
+            # once), and `.{0,200}?` caps the reverse-shell gap to a line-
+            # local window. Both stay match-equivalent on real pipelines.
             re.compile(
-                r"\|.*?\b(?:bash|sh|nc|netcat|ncat|python\d?|perl|ruby)\b",
+                r"\|[^|]*?\b(?:bash|sh|nc|netcat|ncat|python\d?|perl|ruby)\b",
             ),
             re.compile(
-                r"\b(?:bash|sh)\s+-[ic].*?(?:exec|/dev/tcp|/dev/udp)",
+                r"\b(?:bash|sh)\s+-[ic].{0,200}?(?:exec|/dev/tcp|/dev/udp)",
             ),
         ),
         weight=6,

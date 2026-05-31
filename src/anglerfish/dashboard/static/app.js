@@ -18,11 +18,15 @@ const commandStream = $("#command-stream");
 const threatTable = $("#threat-table");
 const credentialsTable = $("#credentials-table");
 const credentialsMeta = $("#credentials-meta");
+const honeytokensTable = $("#honeytokens-table");
+const honeytokensMeta = $("#honeytokens-meta");
 const detailPanel = $("#detail-panel");
 const detailBody = $("#detail-body");
 const detailClose = $("#detail-close");
 const clusterCanvas = $("#cluster-canvas");
 const clusterMeta = $("#cluster-meta");
+const narratorMeta = $("#narrator-meta");
+const narratorStream = $("#narrator-stream");
 
 let wsBackoffMs = 1000;
 
@@ -134,6 +138,53 @@ async function refreshCredentials() {
     }
   } catch (err) {
     console.warn("credentials refresh failed:", err);
+  }
+}
+
+// The registry endpoint lists tokens (identifiers only, never payloads);
+// the callbacks endpoint lists hits. Join them by token_id so each row
+// shows its callback count and most recent hit. A fired token is the
+// highest-value signal, so its row is highlighted.
+async function refreshHoneytokens() {
+  if (!honeytokensTable) return;
+  try {
+    const [registry, callbacks] = await Promise.all([
+      fetchJSON("/api/honeytokens"),
+      fetchJSON("/api/honeytokens/callbacks?limit=1000"),
+    ]);
+    const hits = new Map();
+    for (const cb of callbacks.items || []) {
+      const prev = hits.get(cb.token_id) || { count: 0, last: null };
+      prev.count += 1;
+      // callbacks arrive newest-first, so the first one seen is the last.
+      if (prev.last === null) prev.last = cb.ts;
+      hits.set(cb.token_id, prev);
+    }
+
+    const fired = [...hits.values()].filter((h) => h.count > 0).length;
+    honeytokensMeta.textContent =
+      `${registry.count} tokens · ${fired} fired`;
+
+    honeytokensTable.innerHTML = "";
+    for (const t of registry.items || []) {
+      const hit = hits.get(t.id) || { count: 0, last: null };
+      const tr = document.createElement("tr");
+      if (hit.count > 0) tr.classList.add("row--fired");
+      const session = t.session_id
+        ? escapeText(t.session_id).slice(0, 8)
+        : "static";
+      tr.innerHTML = `
+        <td><code>${escapeText(t.id)}</code></td>
+        <td>${escapeText(t.kind)}</td>
+        <td><code>${escapeText(t.placed_at)}</code></td>
+        <td><code>${session}</code></td>
+        <td>${escapeText(hit.count)}</td>
+        <td>${escapeText(hit.last ? formatTimestamp(hit.last) : "")}</td>
+      `;
+      honeytokensTable.appendChild(tr);
+    }
+  } catch (err) {
+    console.warn("honeytokens refresh failed:", err);
   }
 }
 
@@ -450,6 +501,47 @@ function pushCommandEvent(payload) {
   }
 }
 
+// Narrator text is LLM output whose prompt embeds attacker command text.
+// It is rendered with textContent only (never innerHTML) so any markup an
+// attacker steers into the commentary cannot execute. This DOM boundary
+// is the SPA half of the narrator threat model (see THREAT_MODEL.md).
+function pushNarratorEvent(payload) {
+  if (!narratorStream) return;
+  const li = document.createElement("li");
+  li.className = "is-narrator";
+  const meta = document.createElement("div");
+  meta.className = "stream__meta";
+  const sid = document.createElement("code");
+  sid.textContent = (payload.session_id || "").slice(0, 8);
+  meta.appendChild(sid);
+  meta.appendChild(document.createTextNode(` · ${payload.model || "llm"}`));
+  const body = document.createElement("div");
+  body.className = "stream__response";
+  body.textContent = payload.text || "";
+  li.appendChild(meta);
+  li.appendChild(body);
+  narratorStream.insertBefore(li, narratorStream.firstChild);
+  while (narratorStream.children.length > COMMAND_STREAM_CAP) {
+    narratorStream.removeChild(narratorStream.lastChild);
+  }
+}
+
+// The narrator is opt-in; learn its state from /api/settings so the panel
+// greys out when disabled rather than silently sitting empty.
+async function refreshNarratorMeta() {
+  if (!narratorMeta) return;
+  try {
+    const settings = await fetchJSON("/api/settings");
+    const on = Boolean(settings.features && settings.features.narrator);
+    narratorMeta.textContent = on
+      ? "LLM commentary. Not evidence."
+      : "Narrator disabled. Enable it in settings to see commentary.";
+    narratorMeta.classList.toggle("is-disabled", !on);
+  } catch {
+    /* leave the default meta text on a fetch error */
+  }
+}
+
 function connectWebSocket() {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${window.location.host}/ws/events`);
@@ -469,6 +561,8 @@ function connectWebSocket() {
     }
     if (event.kind === "command") {
       pushCommandEvent(event.payload || {});
+    } else if (event.kind === "narrator") {
+      pushNarratorEvent(event.payload || {});
     } else if (event.kind === "threat") {
       refreshThreats();
     } else if (event.kind === "session_started" || event.kind === "session_ended") {
@@ -496,10 +590,14 @@ async function boot() {
   await refreshStats();
   await refreshThreats();
   await refreshCredentials();
+  await refreshHoneytokens();
   await refreshClusters();
+  await refreshNarratorMeta();
   setInterval(refreshStats, STATS_POLL_MS);
   setInterval(refreshThreats, TABLE_POLL_MS);
   setInterval(refreshCredentials, TABLE_POLL_MS);
+  setInterval(refreshHoneytokens, TABLE_POLL_MS);
+  setInterval(refreshNarratorMeta, TABLE_POLL_MS);
   if (detailClose && detailPanel) {
     detailClose.addEventListener("click", () => {
       detailPanel.hidden = true;

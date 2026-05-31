@@ -75,18 +75,20 @@ def _get_audit(request: Request) -> AuditLog:
 
 
 def _callback_source_ip(request: Request) -> str:
-    """Best-effort source IP of the callback request.
+    """Source IP of the callback request: the trusted connection peer.
 
-    Honours ``X-Forwarded-For`` when present (operators front the
-    receiver with a reverse proxy that TLS-terminates); falls back
-    to the connecting socket peer otherwise. The header's leftmost
-    entry is the original client per the X-Forwarded-For convention.
+    The audited ``callback_source_ip`` is the attacker's exfil node, so
+    it must be trustworthy. The receiver does NOT parse ``X-Forwarded-For``
+    itself (audit M4): a standards-compliant reverse proxy *appends* the
+    real peer to any client-supplied ``X-Forwarded-For``, so trusting the
+    leftmost entry let the attacker who triggered the callback spoof the
+    recorded source IP (frame a third party, or blank out their own
+    node). Behind a proxy, the operator configures uvicorn's
+    ``--proxy-headers`` + ``forwarded_allow_ips`` so ``request.client`` is
+    the real client uvicorn has already validated against the trusted
+    proxy; directly exposed, it is the socket peer. Either way it is the
+    connection peer, never an attacker-supplied header.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        leftmost = forwarded.split(",", 1)[0].strip()
-        if leftmost:
-            return leftmost
     client = request.client
     return client.host if client is not None else "unknown"
 

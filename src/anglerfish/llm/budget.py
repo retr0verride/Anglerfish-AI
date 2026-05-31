@@ -22,6 +22,7 @@ inference layer (the LLMClient is what enforces them).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from anglerfish.llm.errors import LLMError
@@ -54,6 +55,13 @@ class TokenBudget:
     consumed_fast: int = field(default=0)
     consumed_deep: int = field(default=0)
     consumed_embed: int = field(default=0)
+    # Audit M2: serialises the check..(LLM call)..consume span across
+    # concurrent calls that share one budget (a session's pipelined
+    # commands). Without it they all pass check() before any consume()
+    # and overshoot the cap. Per-budget, so distinct sessions (distinct
+    # budgets, and the fresh per-call budgets intent/embeddings use)
+    # never contend. Excluded from eq/repr.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.fast_token_cap < 0:

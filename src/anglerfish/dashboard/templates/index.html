@@ -63,6 +63,12 @@
       <ol class="stream" id="command-stream" aria-live="polite"></ol>
     </section>
 
+    <section class="panel" aria-label="Narrator">
+      <h2 class="panel__title">Narrator</h2>
+      <div id="narrator-meta" class="meta">LLM commentary. Not evidence.</div>
+      <ol class="stream" id="narrator-stream" aria-live="polite"></ol>
+    </section>
+
     <section class="panel" aria-label="Recent threats">
       <h2 class="panel__title">Recent threat assessments</h2>
       <table class="table">
@@ -92,6 +98,24 @@
           </tr>
         </thead>
         <tbody id="credentials-table"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" aria-label="Honeytoken registry">
+      <h2 class="panel__title">Honeytoken registry</h2>
+      <div id="honeytokens-meta" class="meta"></div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Token</th>
+            <th>Kind</th>
+            <th>Placed at</th>
+            <th>Source session</th>
+            <th>Callbacks</th>
+            <th>Last callback</th>
+          </tr>
+        </thead>
+        <tbody id="honeytokens-table"></tbody>
       </table>
     </section>
   </main>

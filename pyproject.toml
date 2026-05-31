@@ -58,6 +58,8 @@ dashboard = [
     "jinja2>=3.1,<4",
     "itsdangerous>=2.0,<3",
     "bcrypt>=4.0,<6",
+    # Stage 13 slice 13.4: per-session PDF export (the only PDF path).
+    "reportlab>=4.0,<5",
 ]
 geo = [
     "maxminddb>=2.6,<3",
@@ -109,6 +111,7 @@ dev = [
     "bcrypt>=4.0,<6",
     "maxminddb>=2.6,<3",
     "cryptography>=46.0.7,<47",
+    "reportlab>=4.0,<5",
 ]
 
 [project.scripts]
@@ -237,6 +240,7 @@ module = [
     "maxminddb",
     "maxminddb.*",
     "uvicorn",
+    "reportlab.*",
 ]
 ignore_missing_imports = true
 

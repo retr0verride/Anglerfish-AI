@@ -11,6 +11,7 @@ balancers and service probes), and ``/api/login``/``/api/logout``
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,7 +38,12 @@ from anglerfish.dashboard.export import (
     session_csv_rows,
     session_export_payload,
 )
-from anglerfish.dashboard.exporters import build_misp_event, build_stix_bundle
+from anglerfish.dashboard.exporters import (
+    build_honeytoken_report_rows,
+    build_misp_event,
+    build_pdf_report,
+    build_stix_bundle,
+)
 from anglerfish.dashboard.health import (
     ollama_health,
     sessions_health,
@@ -118,6 +124,23 @@ _CLUSTER_NODE_MAX = 1000
 _CLUSTER_THREAT_SCAN = 200
 
 
+def _parse_since(since: str | None) -> datetime:
+    """Parse a ``since`` query param into a tz-aware UTC datetime.
+
+    Absent yields the unix epoch. A tz-less but valid ISO-8601 string
+    (e.g. ``2020-01-01T00:00:00``) is treated as UTC rather than left
+    naive, which would otherwise raise ``TypeError`` against the
+    tz-aware range bound downstream and 500 the endpoint (audit M5).
+    Raises ``ValueError`` on a malformed string.
+    """
+    if since is None:
+        return datetime.fromtimestamp(0, tz=UTC)
+    parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 async def _build_similar_items(
     state: DashboardState,
     session_id: UUID,
@@ -194,6 +217,51 @@ def _read_session_audit_facts(
     return time_wasted_ms, counter_deception
 
 
+async def _gather_session_detail(
+    state: DashboardState,
+    audit: AuditLog,
+    session_id: UUID,
+    request: Request,
+) -> dict[str, Any] | None:
+    """Compose the per-session detail aggregate, or ``None`` if unknown.
+
+    Shared by ``/api/sessions/{id}/detail`` (serialised to JSON) and the
+    PDF report endpoint (rendered to a document) so both surface an
+    identical snapshot from one gather path.
+    """
+    session = await state.get_session(session_id)
+    if session is None:
+        return None
+
+    intent = await state.get_intent(session_id)
+    honeytokens = await state.list_honeytokens_for_source_ip(session.source_ip)
+
+    # Cluster neighbours render empty (not 404) when the session has no
+    # embedding yet, so the panel still opens for fresh sessions.
+    similar: list[dict[str, Any]] = []
+    if await state.get_embedding(session_id) is not None:
+        threshold = request.app.state.settings.bridge.cluster_similarity_threshold
+        similar = await _build_similar_items(
+            state,
+            session_id,
+            k=_DETAIL_SIMILAR_K,
+            min_similarity=threshold,
+        )
+
+    time_wasted_ms, counter_deception = _read_session_audit_facts(audit.path, session_id)
+
+    return {
+        "session": session.model_dump(mode="json"),
+        "turns": [turn.model_dump(mode="json") for turn in session.turns],
+        "intent": intent.model_dump(mode="json") if intent else None,
+        "persona": session.persona_name,
+        "time_wasted_ms": time_wasted_ms,
+        "honeytokens": [token.model_dump(mode="json") for token in honeytokens],
+        "counter_deception": counter_deception,
+        "similar": similar,
+    }
+
+
 async def _gather_export_window(
     state: DashboardState,
     *,
@@ -249,6 +317,7 @@ class _FeatureFlagsUpdate(BaseModel):
     engaged_persistence: bool | None = None
     decoy_poisoning: bool | None = None
     counter_deception: bool | None = None
+    narrator: bool | None = None
 
 
 class _PersonaPinRequest(BaseModel):
@@ -409,40 +478,10 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         path the engagements and health endpoints use. Returns 404 for an
         unknown session id. No LLM call.
         """
-        session = await state.get_session(session_id)
-        if session is None:
+        detail = await _gather_session_detail(state, audit, session_id, request)
+        if detail is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-
-        intent = await state.get_intent(session_id)
-        honeytokens = await state.list_honeytokens_for_source_ip(session.source_ip)
-
-        # Cluster neighbours render empty (not 404) when the session has
-        # no embedding yet, so the panel still opens for fresh sessions.
-        similar: list[dict[str, Any]] = []
-        if await state.get_embedding(session_id) is not None:
-            threshold = request.app.state.settings.bridge.cluster_similarity_threshold
-            similar = await _build_similar_items(
-                state,
-                session_id,
-                k=_DETAIL_SIMILAR_K,
-                min_similarity=threshold,
-            )
-
-        time_wasted_ms, counter_deception = _read_session_audit_facts(
-            audit.path,
-            session_id,
-        )
-
-        return {
-            "session": session.model_dump(mode="json"),
-            "turns": [turn.model_dump(mode="json") for turn in session.turns],
-            "intent": intent.model_dump(mode="json") if intent else None,
-            "persona": session.persona_name,
-            "time_wasted_ms": time_wasted_ms,
-            "honeytokens": [token.model_dump(mode="json") for token in honeytokens],
-            "counter_deception": counter_deception,
-            "similar": similar,
-        }
+        return detail
 
     @router.get("/api/clusters", dependencies=[Depends(require_auth)])
     async def get_clusters(
@@ -463,11 +502,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         emitted once. Nodes beyond the cap drop oldest-first.
         """
         try:
-            start = (
-                datetime.fromisoformat(since)
-                if since is not None
-                else datetime.fromtimestamp(0, tz=UTC)
-            )
+            start = _parse_since(since)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -577,6 +612,16 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         so this is not an unauthenticated write path into the audit log.
         The body is size-capped and only a fixed set of fields is recorded,
         each truncated, so a violation cannot bloat or inject the log.
+
+        Audit L7 (accepted residual): unlike the other state-changing
+        endpoints this one omits ``require_csrf`` by design. The browser
+        emits CSP reports automatically and cannot attach the
+        ``X-Anglerfish-CSRF`` header, so requiring the token would disable
+        the tripwire. The exposure is bounded: ``SameSite=Strict`` keeps a
+        cross-site page from sending the session cookie, the worst a forged
+        same-origin POST can do is append one capped, fixed-field
+        ``dashboard.csp_violation`` row, and that row is itself a tripwire -
+        spurious entries are visible to the operator rather than silent.
         """
         raw = await request.body()
         if len(raw) > _CSP_REPORT_MAX_BYTES:
@@ -651,6 +696,33 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
     # audit log directly so the operator-shipped callback-receiver
     # lines surface here without an SQL store round-trip.
 
+    @router.get("/api/honeytokens", dependencies=[Depends(require_auth)])
+    async def list_honeytokens(
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Return the whole honeytoken registry, newest placement first.
+
+        The registry view (slice 13.3) joins these rows against
+        ``/api/honeytokens/callbacks`` by ``token_id`` to show callback
+        counts. The secret ``payload`` is intentionally not serialised
+        here - the view shows identifiers and kinds, never the beacon
+        value (see THREAT_MODEL).
+        """
+        tokens = await state.list_all_honeytokens()
+        return {
+            "count": len(tokens),
+            "items": [
+                {
+                    "id": t.id,
+                    "kind": t.kind,
+                    "placed_at": t.placed_at,
+                    "source_ip": t.source_ip,
+                    "session_id": str(t.session_id) if t.session_id else None,
+                }
+                for t in tokens
+            ],
+        }
+
     @router.get(
         "/api/honeytokens/state",
         dependencies=[Depends(require_auth)],
@@ -685,11 +757,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         events have actually landed on disk.
         """
         try:
-            start = (
-                datetime.fromisoformat(since)
-                if since is not None
-                else datetime.fromtimestamp(0, tz=UTC)
-            )
+            start = _parse_since(since)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -770,11 +838,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         defaulting to the unix epoch.
         """
         try:
-            start = (
-                datetime.fromisoformat(since)
-                if since is not None
-                else datetime.fromtimestamp(0, tz=UTC)
-            )
+            start = _parse_since(since)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -963,6 +1027,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             engaged_persistence=body.engaged_persistence,
             decoy_poisoning=body.decoy_poisoning,
             counter_deception=body.counter_deception,
+            narrator=body.narrator,
         )
         for flag, (old, new) in diff.items():
             audit.record(
@@ -1191,6 +1256,88 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
             actor=_actor(request),
         )
         return payload
+
+    @router.get(
+        "/api/export/honeytoken_report",
+        dependencies=[Depends(require_auth)],
+    )
+    async def export_honeytoken_report(
+        request: Request,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> StreamingResponse:
+        """Export the whole honeytoken registry as an operator-only CSV.
+
+        Unlike the STIX/MISP exports this is registry-scoped (every token
+        ever placed), not date-ranged, and carries the secret ``payload``.
+        It is the operator's canonical record, an authenticated file
+        download that is never pushed to a shared feed (THREAT_MODEL).
+        Each registry row is joined against the full
+        ``bridge.honeytoken_callback`` history for its callback count and
+        most-recent hit.
+        """
+        tokens = await state.list_all_honeytokens()
+        start = datetime.fromtimestamp(0, tz=UTC)
+        end = datetime.now(tz=UTC)
+        callbacks = [
+            {
+                "token_id": event.get("token_id"),
+                "ts": event.get("ts"),
+                "callback_source_ip": event.get("callback_source_ip"),
+            }
+            for event in iter_events_in_range(audit.path, start=start, end=end)
+            if event.get("event_type") == "bridge.honeytoken_callback"
+        ]
+        audit.record(
+            "dashboard.export_served",
+            kind="honeytoken_report",
+            export_format="honeytoken_report",
+            item_count=len(tokens),
+            actor=_actor(request),
+        )
+        return StreamingResponse(
+            build_honeytoken_report_rows(tokens, callbacks),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": ('attachment; filename="honeytoken-report.csv"'),
+            },
+        )
+
+    @router.get("/api/export/report", dependencies=[Depends(require_auth)])
+    async def export_report(
+        request: Request,
+        session_id: UUID,
+        state: DashboardState = Depends(_get_state),  # noqa: B008
+        audit: AuditLog = Depends(_get_audit),  # noqa: B008
+    ) -> Response:
+        """Render one session's detail view to a PDF for sharing with a SOC.
+
+        Per-session (no date range): a multi-session PDF is a report-
+        builder, out of scope. Gathers the same aggregate as
+        ``/api/sessions/{id}/detail`` and hands it to the PDF builder.
+        Honeytoken payloads are not rendered (a PDF may be shared); only
+        identifiers travel. 404 when the session id is unknown.
+        """
+        detail = await _gather_session_detail(state, audit, session_id, request)
+        if detail is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        # reportlab rendering is CPU-bound; offload so a concurrent
+        # request does not stall the event loop while the PDF builds.
+        pdf = await asyncio.to_thread(build_pdf_report, detail)
+        audit.record(
+            "dashboard.export_served",
+            kind="report",
+            export_format="report_pdf",
+            session_id=str(session_id),
+            actor=_actor(request),
+        )
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="session-{session_id}.pdf"',
+            },
+        )
 
     return router
 

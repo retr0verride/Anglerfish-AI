@@ -24,22 +24,49 @@ from pathlib import Path
 
 from anglerfish.wizard.answers import WizardAnswers
 
-__all__ = ["DEFAULT_ANSWERS_PATH", "load_answers", "save_answers"]
+__all__ = ["DEFAULT_ANSWERS_PATH", "atomic_write_private", "load_answers", "save_answers"]
 
 
 DEFAULT_ANSWERS_PATH = Path("/etc/anglerfish/wizard.json")
 
 
+def atomic_write_private(path: Path, content: str, *, mode: int) -> None:
+    """Atomically write ``content`` to ``path`` with ``mode`` from creation.
+
+    Audit L1: the wizard writes secret-bearing files (the .env with the
+    session secret, AES key, bearer token, admin hash; wizard.json). The
+    previous ``write_text`` + ``chmod`` left the temp file at the umask
+    default (0644 under umask 022) for the window between creation and the
+    chmod, so a local user could read the secrets before they were
+    tightened. The temp file is now created with ``mode`` directly via
+    ``os.open`` (never world-readable), ``O_EXCL`` so a pre-existing
+    file/symlink at the temp path is not followed, and the parent dir is
+    created ``0750``.
+    """
+    path.parent.mkdir(parents=True, mode=0o750, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    # Clear a stale temp from a crashed prior run so O_EXCL can succeed;
+    # O_EXCL then refuses to follow any file/symlink at the temp path.
+    with contextlib.suppress(FileNotFoundError):
+        tmp_path.unlink()
+    fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_EXCL, mode)
+    try:
+        os.write(fd, content.encode("utf-8"))
+    finally:
+        os.close(fd)
+    # umask may have cleared bits at creation; pin the exact mode (and
+    # restore on Windows where O_EXCL mode is partial). Suppress on
+    # platforms where chmod is a no-op.
+    with contextlib.suppress(OSError):
+        os.chmod(tmp_path, mode)
+    os.replace(tmp_path, path)
+
+
 def save_answers(answers: WizardAnswers, path: Path) -> None:
     """Write ``answers`` to ``path`` atomically with mode 0600."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = answers.model_dump(mode="json")
     serialised = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(serialised, encoding="utf-8")
-    with contextlib.suppress(OSError):
-        os.chmod(tmp_path, 0o600)
-    os.replace(tmp_path, path)
+    atomic_write_private(path, serialised, mode=0o600)
 
 
 def load_answers(path: Path) -> WizardAnswers | None:

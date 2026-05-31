@@ -43,7 +43,9 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   ``bridge.honeytoken_placed``, ``bridge.honeytoken_callback``,
   ``bridge.honeytoken_placement_error``,
   ``bridge.counter_deception_engaged``,
-  ``bridge.counter_deception_timebomb_applied``.
+  ``bridge.counter_deception_timebomb_applied``,
+  ``bridge.handler_error`` (an unexpected error a command handler caught
+  and degraded to fallback, so the attacker never saw an exception).
 * Lure: ``lure.server_started``, ``lure.server_stopped``,
   ``lure.session_opened``, ``lure.session_closed``,
   ``lure.command_native``, ``lure.command_bridge``,
@@ -57,6 +59,10 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   but the alerts panel surfaces it the moment it lands).
 * Geo: ``geo.update_succeeded``, ``geo.update_failed``.
 * LLM: ``llm.warmup_succeeded``, ``llm.warmup_failed``.
+* Narrator: ``narrator.commentary_generated`` (one per tick that
+  broadcast text), ``narrator.defense_fired`` (the OutputFilter caught
+  the narrator's own output; text dropped, never broadcast),
+  ``narrator.generation_failed`` (LLM unreachable or returned garbage).
 
 The Stage 4.2 audit-log tailer in
 :mod:`anglerfish.dashboard.audit_tailer` consumes the per-session
@@ -127,6 +133,16 @@ class AuditLog:
                 with self._path.open("ab") as fp:
                     fp.write(line)
                     fp.flush()
+                    # Audit L8 (accepted residual): fsync is a blocking
+                    # syscall and most callers are coroutines, so this stalls
+                    # the event loop for the flush. Kept deliberately: the
+                    # per-event durability + strict append ordering is the
+                    # module's contract (chattr +a tamper-evidence relies on
+                    # records hitting disk in order, not being batched or
+                    # reordered by a writer thread). Audit volume is
+                    # security events, not per-packet, so the stall is bounded
+                    # and rare. Offloading to a thread/queue would trade that
+                    # guarantee for throughput we do not need.
                     os.fsync(fp.fileno())
             except OSError as exc:
                 _logger.warning(

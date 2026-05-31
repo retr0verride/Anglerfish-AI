@@ -24,7 +24,7 @@ import ipaddress
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -46,6 +46,7 @@ __all__ = [
     "FingerprintConfig",
     "GeoConfig",
     "LogLevel",
+    "NarratorConfig",
     "OllamaConfig",
     "RateLimitConfig",
     "SessionStoreConfig",
@@ -1219,3 +1220,72 @@ class CounterDeceptionConfig(BaseModel):
                 "otherwise collapse and the severe instruction would "
                 "fire before the mild one had effect.",
             )
+
+
+class NarratorConfig(BaseModel):
+    """Live-narrator settings (Stage 13 slice 13.5). See
+    ``docs/design/STAGE_13_dashboard_views.md``.
+
+    The narrator is the only operator-facing LLM call in the product.
+    It runs as a background task inside the dashboard process, polling
+    active sessions on a fixed cadence and broadcasting short prose
+    commentary on the ``/ws/events`` bus. ``enabled=False`` is the
+    load-bearing default: no task work happens and no LLM call is made.
+    Flippable at runtime via ``POST /api/settings/features`` (the task
+    reads the in-process feature flag each tick).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "When True, the dashboard narrator task generates LLM "
+            "commentary for active sessions. Default False: no task work, "
+            "no LLM call, no new prompt surface. The rollback switch."
+        ),
+    )
+    model_role: Literal["fast", "deep"] = Field(
+        default="fast",
+        description=(
+            "Which LLM role the narrator calls. FAST by default so "
+            "narrator inference does not contend with the DEEP model the "
+            "bridge reserves for intent analysis."
+        ),
+    )
+    tick_interval_s: int = Field(
+        default=30,
+        ge=5,
+        le=3600,
+        description="Seconds between narrator polls of the active sessions.",
+    )
+    max_sessions_per_tick: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description=(
+            "Upper bound on sessions narrated per tick; bounds per-tick "
+            "LLM call count so a burst of active sessions cannot starve "
+            "bridge inference."
+        ),
+    )
+    token_budget_per_tick: int = Field(
+        default=256,
+        ge=32,
+        le=4096,
+        description=(
+            "Per-session FAST-role token budget for one narration. The "
+            "narrator is colour commentary, not analysis; the cap keeps "
+            "each call cheap."
+        ),
+    )
+    max_turns_in_prompt: int = Field(
+        default=12,
+        ge=1,
+        le=100,
+        description=(
+            "Most recent attacker turns embedded in the narrator prompt. "
+            "Oldest turns drop first so the prompt stays bounded on a "
+            "long session."
+        ),
+    )

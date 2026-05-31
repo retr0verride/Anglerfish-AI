@@ -126,3 +126,21 @@ def test_stix_ids_are_deterministic() -> None:
     b1 = build_stix_bundle([s], {}, [], generated=_NOW)
     b2 = build_stix_bundle([s], {}, [], generated=_NOW)
     assert _by_type(b1, "observed-data")[0]["id"] == _by_type(b2, "observed-data")[0]["id"]
+
+
+def test_stix_pattern_escapes_single_quote_in_source_ip() -> None:
+    """A quote in an attacker-influenced value must not break the STIX pattern (L3)."""
+    s = _session(source_ip="1.2.3.4' OR x='")
+    bundle = build_stix_bundle(
+        [s],
+        {str(s.session_id): _intent(s.session_id, techniques=("T1078",))},
+        [],
+        generated=_NOW,
+    )
+    indicators = [o for o in bundle["objects"] if o["type"] == "indicator"]
+    pattern = next(o["pattern"] for o in indicators if "ipv4-addr" in o["pattern"])
+    # The injected quote is escaped per STIX 2.1 string-literal rules.
+    assert "\\'" in pattern
+    assert "' OR x='" not in pattern  # the raw unescaped quote is gone
+    # The bundle is still valid JSON.
+    assert json.loads(json.dumps(bundle))

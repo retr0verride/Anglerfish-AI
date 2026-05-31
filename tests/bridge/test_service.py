@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from uuid import uuid4
 
@@ -657,49 +658,41 @@ async def test_handle_command_audits_injection_scan_truncation(
 async def test_handle_command_audits_output_scan_truncation(
     settings: AnglerfishSettings,
 ) -> None:
-    """Stage 1.8.5: when the output filter reports truncated=True the
-    service emits ``bridge.defense_scan_truncated`` with kind=output.
+    """An over-long model response audits ``bridge.defense_scan_truncated``
+    with kind=output.
 
-    Trigger via a stub OutputFilter that unconditionally reports
-    truncated=True. In production the cross-field validator
-    ``scan_max_chars >= max_response_chars`` keeps the normal flow
-    from hitting this, but the wiring still needs to fire when the
-    verdict says so (model misbehaviour, future refactor, etc.)."""
-    from anglerfish.bridge.defense import DefenseVerdict, OutputFilter
-
-    class _AlwaysTruncatedFilter(OutputFilter):
-        def check(self, _llm_response: str) -> DefenseVerdict:
-            return DefenseVerdict(
-                fired=False,
-                detector="output_filter:no_match",
-                snippet="",
-                score=0.0,
-                truncated=True,
-            )
+    Audit L4: the output path keys this off the RAW content length, not
+    ``verdict.truncated`` - ``cap_output`` already bounds the scanned
+    text to <= scan_max_chars, so the verdict flag could never fire here.
+    A response longer than ``max_response_chars`` had its tail discarded
+    before scanning (model misbehaviour, or an attacker steering toward a
+    long response to smuggle a leak past the scan window)."""
+    big = "A" * (settings.ollama.max_response_chars + 500)
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"message": {"content": "ok"}})
+        return httpx.Response(200, json={"message": {"content": big}})
 
     audit = _MockAudit()
     service = AIBridgeService(
         settings,
         client=_mock_ollama_client(handler),
-        output_filter=_AlwaysTruncatedFilter(settings.defense),
         audit_log=audit,  # type: ignore[arg-type]
     )
     session = _make_session()
     try:
-        response = await service.handle_command(session, "whoami")
+        response = await service.handle_command(session, "cat bigfile")
     finally:
         await service.aclose()
 
-    # Clean response flows through (truncated does NOT block the path).
+    # Clean (capped) response flows through; truncation does not block it.
     assert response.source == ResponseSource.AI
-    # Exactly one truncation event recorded, on the output side.
+    # Exactly one truncation event recorded, on the output side, with the
+    # raw (over-cap) length.
     trunc_events = [e for e in audit.events if e[0] == "bridge.defense_scan_truncated"]
     assert len(trunc_events) == 1
     _, fields = trunc_events[0]
     assert fields["kind"] == "output"
+    assert int(fields["input_length"]) > settings.ollama.max_response_chars  # type: ignore[call-overload]
     assert fields["scan_max_chars"] == settings.defense.scan_max_chars
     assert fields["session_id"] == str(session.session_id)
     assert fields["attacker_ip"] == session.source_ip
@@ -1639,3 +1632,97 @@ async def test_end_session_budget_clears_wasting_state(
         "total_wasted_ms": 0,
     }
     await service.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed on unexpected errors (audit M6)
+# ---------------------------------------------------------------------------
+
+
+class _BoomScorer:
+    """An injection scorer that raises an unmapped error (pre-try surface)."""
+
+    def score(self, _attacker_input: str) -> object:
+        raise RuntimeError("boom")
+
+
+async def test_handle_command_fails_closed_on_unexpected_error(
+    settings: AnglerfishSettings,
+) -> None:
+    """An unexpected error from the pre-try surface degrades to fallback."""
+    ollama_calls: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ollama_calls.append(request.read())
+        return httpx.Response(200, json={"message": {"content": "x"}})
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    service._injection_scorer = _BoomScorer()  # type: ignore[assignment]
+    session = _make_session()
+    try:
+        response = await service.handle_command(session, "ls")
+    finally:
+        await service.aclose()
+
+    # Did not raise; degraded to a scripted fallback, Ollama never reached.
+    assert response.source in (ResponseSource.FALLBACK, ResponseSource.REJECTED)
+    assert ollama_calls == []
+    assert any(e[0] == "bridge.handler_error" for e in audit.events)
+
+
+async def test_handle_command_stream_fails_closed_on_unexpected_error(
+    settings: AnglerfishSettings,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"message":{"content":"x"},"done":true}\n')
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    service._injection_scorer = _BoomScorer()  # type: ignore[assignment]
+    session = _make_session()
+    try:
+        chunks = [c async for c in service.handle_command_stream(session, "ls")]
+    finally:
+        await service.aclose()
+
+    # Did not raise; a terminal chunk closed the stream.
+    assert chunks
+    assert chunks[-1].done is True
+    assert any(e[0] == "bridge.handler_error" for e in audit.events)
+
+
+async def test_stream_partial_error_runs_output_filter(
+    settings: AnglerfishSettings,
+) -> None:
+    """A leak streamed before a mid-stream error is still audited (M6)."""
+    ndjson = (
+        json.dumps({"message": {"content": "I am an AI assistant"}, "done": False})
+        + "\n"
+        + "not json\n"  # malformed -> OllamaUnavailableError mid-stream
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=ndjson.encode("utf-8"))
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        _ = [c async for c in service.handle_command_stream(session, "whoami")]
+    finally:
+        await service.aclose()
+
+    assert any(e[0] == "bridge.defense_fired" for e in audit.events)

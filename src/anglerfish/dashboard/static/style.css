@@ -212,6 +212,9 @@ main {
 .stream li.is-ai       { border-left-color: var(--bioluminescence); }
 .stream li.is-fallback { border-left-color: var(--warning); }
 .stream li.is-rejected { border-left-color: var(--alert); }
+.stream li.is-narrator { border-left-color: var(--text-dim); font-style: italic; }
+
+.meta.is-disabled { opacity: 0.55; font-style: italic; }
 
 .stream__cmd      { color: var(--bioluminescence-soft); }
 .stream__response { color: var(--text-dim); font-size: 0.8rem; margin-top: 0.25rem; }
@@ -240,6 +243,15 @@ main {
 
 .table tbody tr:hover {
   background: rgba(34, 211, 238, 0.04);
+}
+
+/* A honeytoken that fired a callback is the highest-value signal. */
+.table tbody tr.row--fired {
+  background: rgba(244, 63, 94, 0.12);
+  box-shadow: inset 3px 0 0 var(--alert);
+}
+.table tbody tr.row--fired:hover {
+  background: rgba(244, 63, 94, 0.18);
 }
 
 .score-bar {

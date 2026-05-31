@@ -195,3 +195,36 @@ def test_first_match_wins_authorized_keys_over_crontab() -> None:
     event = extract_event(command)
     assert event is not None
     assert event.kind == "authorized_keys"
+
+
+# ---------------------------------------------------------------------------
+# ReDoS hardening (audit M7)
+# ---------------------------------------------------------------------------
+
+
+def test_crontab_pipe_pattern_is_not_redos() -> None:
+    """A crafted 'echo ...' + long space run must not pin the matcher.
+
+    The _CRONTAB_PIPE pattern had two adjacent whitespace-matching
+    quantifiers (\\s*[);\\s]*) that backtracked quadratically; ~1.1s at
+    the 32 KB command cap, on the bridge event loop.
+    """
+    import time
+
+    pathological = "echo 'x'" + " " * 32768
+    start = time.perf_counter()
+    result = extract_event(pathological)
+    elapsed = time.perf_counter() - start
+    assert result is None  # not a crontab install
+    assert elapsed < 0.1, f"extract_event took {elapsed * 1000:.0f}ms (ReDoS)"
+
+
+def test_crontab_pipe_legit_forms_still_match() -> None:
+    for cmd in [
+        "echo 'PAYLOAD' | crontab -",
+        'echo "PAYLOAD" | crontab -',
+        "(crontab -l; echo 'PAYLOAD') | crontab -",
+    ]:
+        event = extract_event(cmd)
+        assert event is not None, cmd
+        assert event.kind == "crontab"

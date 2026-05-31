@@ -45,6 +45,12 @@ _USER_AGENT = "anglerfish-ai/geolite-fetcher"
 _DEFAULT_TIMEOUT = 60.0
 _CHUNK = 1 << 16
 _MAX_BYTES = 200 * 1024 * 1024  # 200 MB ceiling; current dbs are ~70 MB combined
+# Audit L6: _MAX_BYTES bounds the COMPRESSED download only; a poisoned
+# mirror could ship a small tar.gz that extracts to many GB (a
+# decompression bomb fills the disk). Bound the total UNCOMPRESSED size
+# declared by the archive members before extracting. A single GeoLite2
+# edition is ~80 MB; 500 MB is generous headroom for the db + sidecars.
+_MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
 
 
 class FetchError(RuntimeError):
@@ -194,10 +200,19 @@ def _extract_mmdb(archive_path: Path, *, edition: str) -> Path | None:
     extract_root = archive_path.parent / "extracted"
     extract_root.mkdir(exist_ok=True)
     with tarfile.open(archive_path, "r:gz") as tar:
+        total_size = 0
         for member in tar.getmembers():
             name = member.name
             if name.startswith("/") or ".." in Path(name).parts:
                 raise FetchError(f"{edition}: archive contains unsafe path {name!r}")
+            # member.size is the uncompressed size tarfile will write, so
+            # summing it bounds the extraction without unpacking first.
+            total_size += max(0, member.size)
+            if total_size > _MAX_EXTRACTED_BYTES:
+                raise FetchError(
+                    f"{edition}: archive extracts to over {_MAX_EXTRACTED_BYTES} bytes; "
+                    "refusing (possible decompression bomb)",
+                )
         # tarfile.data_filter is available on Python 3.12+; on older it's a no-op
         tar.extractall(extract_root, filter="data")
 

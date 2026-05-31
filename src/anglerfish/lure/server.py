@@ -35,7 +35,7 @@ import logging
 import socket
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Self
@@ -66,6 +66,68 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 _RATE_WINDOW_SECONDS = 60.0
+
+# Audit finding H1: ``_PerIPLimiter.release`` cleans the concurrent
+# counter but never the sliding-window ``_recent`` map, so a rotation of
+# distinct source IPs (botnet / Tor / proxy, the norm for an
+# internet-facing honeypot) would grow it without bound and OOM the
+# listener. ``admit`` sweeps fully-expired entries once the map crosses
+# this high-water mark. If the live set alone still exceeds it (a
+# sustained high-distinct-rate flood), the least-recently-active windows
+# are evicted down to ``_RECENT_EVICT_TARGET`` so the map stays a hard
+# constant, not bounded by the live set. The low-water gap also amortises
+# the O(n) maintenance: it cannot re-fire until the map grows back over
+# the high-water mark.
+_RECENT_SWEEP_THRESHOLD = 10_000
+_RECENT_EVICT_TARGET = 7_500
+
+
+def _client_offered_algorithms(
+    conn: asyncssh.SSHServerConnection,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Recover the client's offered (kex, enc_cs, mac_cs, cmp_cs) name-lists.
+
+    Audit H3: asyncssh 2.23 does not expose the client's offered
+    algorithm lists via ``get_extra_info`` (only the single negotiated
+    algorithm), so HASSH would hash four empty lists into a constant for
+    every attacker. The full client KEXINIT payload is retained on the
+    server connection as the private ``_client_kexinit`` attribute (it is
+    structurally load-bearing - reused for rekey hashing). Parse it with
+    asyncssh's own packet reader.
+
+    Guarded end-to-end: a missing attribute or any change to that
+    asyncssh internal degrades to empty lists (HASSH unavailable, the
+    pre-fix behaviour) rather than raising into the post-kex auth hook.
+    Algorithm names are attacker-controlled bytes, decoded leniently;
+    :func:`compute_hassh` sanitises and UTF-8-encodes them.
+    """
+    raw = getattr(conn, "_client_kexinit", None)
+    if not raw:
+        return [], [], [], []
+    try:
+        # Imported inside the guard: SSHPacket is a private asyncssh
+        # module, so a future rename/removal degrades to no-HASSH here
+        # rather than hard-failing the whole lure at import time.
+        from asyncssh.packet import SSHPacket
+
+        packet = SSHPacket(raw)
+        packet.get_byte()  # MSG_KEXINIT type byte (included in the payload)
+        packet.get_bytes(16)  # cookie
+        kex = packet.get_namelist()
+        packet.get_namelist()  # server host-key algorithms (not in HASSH)
+        enc_cs = packet.get_namelist()
+        packet.get_namelist()  # encryption server->client
+        mac_cs = packet.get_namelist()
+        packet.get_namelist()  # MAC server->client
+        cmp_cs = packet.get_namelist()
+    except Exception:  # noqa: BLE001 - asyncssh internal; degrade to no HASSH
+        _logger.debug("lure: client KEXINIT parse failed; HASSH unavailable")
+        return [], [], [], []
+
+    def _decode(names: Sequence[bytes]) -> list[str]:
+        return [name.decode("ascii", "replace") for name in names]
+
+    return _decode(kex), _decode(enc_cs), _decode(mac_cs), _decode(cmp_cs)
 
 
 class BaitNicError(RuntimeError):
@@ -168,8 +230,13 @@ class _PerIPLimiter:
             return False, "per_ip_concurrent"
 
         ts = now if now is not None else time.monotonic()
-        recent = self._recent.setdefault(source_ip, deque())
         cutoff = ts - _RATE_WINDOW_SECONDS
+        # Drop fully-expired per-IP windows before they accumulate. Gated
+        # on a high-water mark so the O(n) sweep is amortised away under
+        # normal load (see _RECENT_SWEEP_THRESHOLD).
+        if len(self._recent) > _RECENT_SWEEP_THRESHOLD:
+            self._sweep_recent(cutoff)
+        recent = self._recent.setdefault(source_ip, deque())
         while recent and recent[0] < cutoff:
             recent.popleft()
         if len(recent) >= self._max_rpm:
@@ -188,6 +255,32 @@ class _PerIPLimiter:
             self._concurrent.pop(source_ip, None)
         else:
             self._concurrent[source_ip] = current - 1
+
+    def _sweep_recent(self, cutoff: float) -> None:
+        """Bound the ``_recent`` map: drop expired windows, then hard-cap.
+
+        Step 1 evicts per-IP rate windows whose newest timestamp predates
+        ``cutoff``. ``release`` cannot do this: it has no clock, and an IP
+        can disconnect while its rpm window is still live (the window must
+        outlast the connection so reconnect-spam is still throttled). A
+        whole deque is stale iff its newest entry (``dq[-1]``) is already
+        outside the window, so the check is O(1) per key.
+
+        Step 2 is the hard cap. When the live set itself exceeds the
+        high-water mark (a sustained high-distinct-rate flood, where
+        step 1 frees nothing), evict the least-recently-active windows
+        (smallest ``dq[-1]``, i.e. closest to expiry) down to the
+        low-water target. This drops only rate state for the most-idle
+        IPs, who then start a fresh window, in exchange for a hard memory
+        ceiling regardless of attack rate.
+        """
+        stale = [ip for ip, dq in self._recent.items() if not dq or dq[-1] < cutoff]
+        for ip in stale:
+            del self._recent[ip]
+        if len(self._recent) > _RECENT_SWEEP_THRESHOLD:
+            by_recency = sorted(self._recent.items(), key=lambda kv: kv[1][-1])
+            for ip, _dq in by_recency[: len(self._recent) - _RECENT_EVICT_TARGET]:
+                del self._recent[ip]
 
     def concurrent_for(self, source_ip: str) -> int:
         return self._concurrent.get(source_ip, 0)
@@ -313,20 +406,18 @@ class _LureSSHServer(asyncssh.SSHServer):
         conn: asyncssh.SSHServerConnection,
         source_ip: str,
     ) -> None:
-        """Read kex extras + record HASSH. Idempotent per connection.
+        """Read the client KEXINIT + record HASSH. Idempotent per connection.
 
-        Called from begin_auth (first post-kex hook). asyncssh's
-        ``get_extra_info`` returns ``None`` when the field is not
-        populated yet; the empty-fallback keeps the call total.
+        Called from begin_auth (first post-kex hook), so the client's
+        offered algorithm lists are available. Recovered from the
+        connection's retained KEXINIT payload (audit H3) since asyncssh
+        does not expose them via ``get_extra_info``.
         """
         state = self._state
         if state is None or state.fingerprint_audited:
             return
         client_version = conn.get_extra_info("client_version")
-        kex_algs = conn.get_extra_info("client_kex_algs") or []
-        enc_algs = conn.get_extra_info("client_encryption_algs_cs") or []
-        mac_algs = conn.get_extra_info("client_mac_algs_cs") or []
-        comp_algs = conn.get_extra_info("client_compression_algs_cs") or []
+        kex_algs, enc_algs, mac_algs, comp_algs = _client_offered_algorithms(conn)
         hassh = compute_hassh(kex_algs, enc_algs, mac_algs, comp_algs)
         self._container.audit.record(
             "lure.fingerprint_observed",

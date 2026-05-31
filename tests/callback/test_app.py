@@ -120,7 +120,7 @@ def test_callback_known_token_audits_with_registered_fields(
 ) -> None:
     r = client.get(
         "/cb/AAAAAAAAAAAAAAAA",
-        headers={"User-Agent": "aws-cli/2.13", "X-Forwarded-For": "198.51.100.42"},
+        headers={"User-Agent": "aws-cli/2.13"},
     )
     assert r.status_code == 403
     assert "AKIAAAAAAAAAAAAAAAAA" in r.text
@@ -131,7 +131,9 @@ def test_callback_known_token_audits_with_registered_fields(
     assert event["token_id"] == "AAAAAAAAAAAAAAAA"
     assert event["kind"] == "aws"
     assert event["registered_source_ip"] == "203.0.113.7"
-    assert event["callback_source_ip"] == "198.51.100.42"
+    # callback_source_ip is the connection peer (TestClient's "testclient"),
+    # never an attacker-supplied header (audit M4).
+    assert event["callback_source_ip"] == "testclient"
     assert event["user_agent"] == "aws-cli/2.13"
     assert event["request_path"] == "/cb/AAAAAAAAAAAAAAAA"
 
@@ -176,16 +178,25 @@ def test_callback_missing_token_id_path_component_returns_404(
     assert r.status_code == 404
 
 
-def test_callback_x_forwarded_for_picks_leftmost_entry(
+def test_callback_ignores_forged_x_forwarded_for(
     client: TestClient,
     audit_path: Path,
 ) -> None:
+    """A forged X-Forwarded-For must not become callback_source_ip (M4).
+
+    The receiver no longer parses the header. The attacker who triggers
+    the callback controls it; a non-overwriting proxy would append the
+    real peer to the right, so trusting the leftmost entry let the
+    attacker spoof the audited exfil-node IP. The recorded value is the
+    connection peer instead.
+    """
     client.get(
         "/cb/AAAAAAAAAAAAAAAA",
-        headers={"X-Forwarded-For": "198.51.100.7, 10.0.0.1"},
+        headers={"X-Forwarded-For": "8.8.8.8, 203.0.113.99"},
     )
     events = _audit_events(audit_path)
-    assert events[0]["callback_source_ip"] == "198.51.100.7"
+    assert events[0]["callback_source_ip"] == "testclient"
+    assert events[0]["callback_source_ip"] not in {"8.8.8.8", "203.0.113.99"}
 
 
 def test_callback_hit_and_miss_responses_are_byte_identical(

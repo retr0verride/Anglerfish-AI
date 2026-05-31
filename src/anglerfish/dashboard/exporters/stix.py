@@ -39,6 +39,18 @@ def _oid(stix_type: str, name: str) -> str:
     return f"{stix_type}--{uuid5(_NAMESPACE, name)}"
 
 
+def _stix_str(value: str) -> str:
+    """Escape a value for a STIX 2.1 single-quoted string literal (audit L3).
+
+    Attacker-influenced values (source IPs, callback URLs) are
+    interpolated into a STIX ``pattern`` whose grammar is not protected
+    by JSON escaping. A ``'`` would break the pattern (or inject an
+    extra comparison) for a downstream TIP. Per STIX 2.1 string-literal
+    rules, escape backslash first, then the single quote.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def _technique_indicator(
     session: SessionSnapshot,
     tech: str,
@@ -54,7 +66,7 @@ def _technique_indicator(
         "created_by_ref": _IDENTITY_ID,
         "name": f"ATT&CK {tech} observed from {session.source_ip}",
         "indicator_types": ["malicious-activity"],
-        "pattern": f"[ipv4-addr:value = '{session.source_ip}']",
+        "pattern": f"[ipv4-addr:value = '{_stix_str(session.source_ip)}']",
         "pattern_type": "stix",
         "valid_from": _ts(session.started_at),
         "external_references": [
@@ -74,7 +86,7 @@ def _honeytoken_indicator(token: Honeytoken, now: str) -> dict[str, Any]:
         "created_by_ref": _IDENTITY_ID,
         "name": f"Honeytoken {token.id} ({token.kind})",
         "indicator_types": ["attribution"],
-        "pattern": f"[url:value = '{token.callback_url}']",
+        "pattern": f"[url:value = '{_stix_str(token.callback_url)}']",
         "pattern_type": "stix",
         "valid_from": _ts(token.created_at),
         "external_references": [

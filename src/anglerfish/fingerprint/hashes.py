@@ -29,6 +29,20 @@ def _join_ints(values: Sequence[int]) -> str:
     return "-".join(str(v) for v in values)
 
 
+# Audit H3: in a honeypot the SSH client is the adversary and the offered
+# algorithm name-lists are fully attacker-controlled. A name containing
+# the HASSH record (``;``) or field (``,``) separator would shift the
+# canonical-string layout. Real SSH algorithm names never contain either
+# (RFC 4251 name-lists are comma-delimited on the wire, and the
+# ``name@domain`` form has no ``;``), so stripping them is a no-op for
+# legitimate clients and keeps standard-HASSH compatibility.
+_HASSH_NAME_SEPARATORS = str.maketrans({",": None, ";": None})
+
+
+def _sanitise_hassh_name(name: str) -> str:
+    return name.translate(_HASSH_NAME_SEPARATORS)
+
+
 def compute_ja3_string(
     version: int,
     ciphers: Sequence[int],
@@ -72,13 +86,21 @@ def compute_hassh_string(
     mac_algorithms: Sequence[str],
     compression_algorithms: Sequence[str],
 ) -> str:
-    """Return the canonical HASSH input string (pre-hash)."""
+    """Return the canonical HASSH input string (pre-hash).
+
+    Each algorithm name is sanitised of the field/record separators so an
+    attacker-controlled name cannot inject a boundary (audit H3).
+    """
+
+    def _field(names: Sequence[str]) -> str:
+        return ",".join(_sanitise_hassh_name(n) for n in names)
+
     return ";".join(
         [
-            ",".join(kex_algorithms),
-            ",".join(encryption_algorithms),
-            ",".join(mac_algorithms),
-            ",".join(compression_algorithms),
+            _field(kex_algorithms),
+            _field(encryption_algorithms),
+            _field(mac_algorithms),
+            _field(compression_algorithms),
         ],
     )
 
@@ -96,4 +118,8 @@ def compute_hassh(
         mac_algorithms,
         compression_algorithms,
     )
-    return hashlib.md5(canonical.encode("ascii"), usedforsecurity=False).hexdigest()
+    # Audit H3: encode UTF-8, not ASCII - an attacker can offer a
+    # non-ASCII algorithm name and ``.encode("ascii")`` would raise
+    # UnicodeEncodeError inside the post-kex hook. UTF-8 is identical to
+    # ASCII for legitimate names, so standard-HASSH values are unchanged.
+    return hashlib.md5(canonical.encode("utf-8"), usedforsecurity=False).hexdigest()

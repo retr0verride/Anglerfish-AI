@@ -51,3 +51,34 @@ def test_hassh_hash_matches_md5() -> None:
     actual = compute_hassh(["a", "b"], ["c"], ["d"], ["e"])
     expected = hashlib.md5(canonical.encode("ascii"), usedforsecurity=False).hexdigest()
     assert actual == expected
+
+
+# ---------------------------------------------------------------------------
+# Hardening against attacker-controlled algorithm names (audit H3)
+# ---------------------------------------------------------------------------
+
+
+def test_hassh_non_ascii_name_does_not_crash() -> None:
+    """A malicious client can offer a non-ASCII algorithm name.
+
+    The name-lists are fully attacker-controlled in a honeypot, and the
+    hash is computed inside the post-kex hook in begin_auth. A non-ASCII
+    byte must not raise UnicodeEncodeError (which would crash that path).
+    """
+    h = compute_hassh(["aesé-x"], ["m"], [], [])
+    assert len(h) == 32
+    assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_hassh_strips_field_separators_from_names() -> None:
+    """``,`` / ``;`` inside an algorithm name cannot inject a field boundary.
+
+    A crafted name containing the record (``;``) or field (``,``)
+    separators is sanitised so it cannot shift the canonical-string
+    layout and blur one attacker's fingerprint into another's.
+    """
+    s = compute_hassh_string(["a;b,c"], ["x"], [], [])
+    # The only ``;`` are the three real field separators; the name's
+    # injected separators are gone.
+    assert s.count(";") == 3
+    assert s.split(";")[0] == "abc"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -245,3 +246,85 @@ async def test_chat_deep_role_consumes_deep_bucket() -> None:
         await client.aclose()
     assert budget.consumed_fast == 0
     assert budget.consumed_deep == 5
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: shared-budget atomicity (audit M2)
+# ---------------------------------------------------------------------------
+
+
+class _SlowTransport(httpx.AsyncBaseTransport):
+    """An async transport that awaits before responding.
+
+    The default MockTransport handler is synchronous, so concurrent
+    chat() coroutines never interleave at the network await and the race
+    cannot manifest. A real await point forces the interleave.
+    """
+
+    def __init__(self, *, prompt_tokens: int, eval_tokens: int) -> None:
+        self._prompt = prompt_tokens
+        self._eval = eval_tokens
+
+    async def handle_async_request(self, _request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={
+                "message": {"role": "assistant", "content": "ok"},
+                "prompt_eval_count": self._prompt,
+                "eval_count": self._eval,
+                "done": True,
+            },
+        )
+
+
+def _slow_client(*, prompt_tokens: int, eval_tokens: int) -> LLMClient:
+    http = httpx.AsyncClient(
+        transport=_SlowTransport(prompt_tokens=prompt_tokens, eval_tokens=eval_tokens),
+        base_url="http://127.0.0.1:11434",
+    )
+    return LLMClient(OllamaConfig(fast_model="fast:7b"), http_client=http)
+
+
+async def test_concurrent_same_session_chat_does_not_overshoot_budget() -> None:
+    """Concurrent calls sharing one budget must not overshoot the cap (M2).
+
+    Each call consumes 100 tokens; the budget holds exactly one call.
+    Without the budget lock all five clear check() before any consume()
+    and overshoot to 500. With it, the calls serialise: one fits, the
+    rest are refused, and consumed never exceeds the cap.
+    """
+    import asyncio
+
+    client = _slow_client(prompt_tokens=50, eval_tokens=50)
+    budget = TokenBudget(fast_token_cap=100)
+    msgs = [ChatMessage(role="user", content="hi")]
+    try:
+        results = await asyncio.gather(
+            *[client.chat(msgs, budget=budget) for _ in range(5)],
+            return_exceptions=True,
+        )
+    finally:
+        await client.aclose()
+
+    successes = [r for r in results if not isinstance(r, Exception)]
+    exhausted = [r for r in results if isinstance(r, BudgetExhaustedError)]
+    assert len(successes) == 1
+    assert len(exhausted) == 4
+    assert budget.consumed_fast == 100  # exactly the cap, no overshoot
+
+
+async def test_distinct_budgets_run_concurrently_without_blocking() -> None:
+    """Different sessions (distinct budgets) must not serialise on M2's lock."""
+    import asyncio
+
+    client = _slow_client(prompt_tokens=1, eval_tokens=1)
+    msgs = [ChatMessage(role="user", content="hi")]
+    budgets = [TokenBudget(fast_token_cap=100) for _ in range(5)]
+    try:
+        results = await asyncio.gather(*[client.chat(msgs, budget=b) for b in budgets])
+    finally:
+        await client.aclose()
+    # All five succeed; each distinct budget consumed its own 2 tokens.
+    assert len(results) == 5
+    assert all(b.consumed_fast == 2 for b in budgets)

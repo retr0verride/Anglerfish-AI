@@ -40,6 +40,7 @@ from anglerfish.bridge.defense_patterns import (
     PatternSpec,
     compile_pattern,
 )
+from anglerfish.bridge.sanitize import normalise_for_scan
 from anglerfish.config.models import DefenseConfig, OllamaConfig
 
 if TYPE_CHECKING:
@@ -320,8 +321,11 @@ class OutputFilter:
                 truncated=False,
             )
         cap = self._config.scan_max_chars
-        scan_target = llm_response[:cap]
-        truncated = len(llm_response) > cap
+        # Audit H2: canonicalise so a zero-width / compatibility-form
+        # character spliced into a flagged token cannot evade the scan.
+        normalised = normalise_for_scan(llm_response)
+        scan_target = normalised[:cap]
+        truncated = len(normalised) > cap
         for spec, pattern in self._compiled:
             match = pattern.search(scan_target)
             if match is not None:
@@ -412,8 +416,11 @@ class InjectionScorer:
                 truncated=False,
             )
         cap = self._config.scan_max_chars
-        scan_target = attacker_input[:cap]
-        truncated = len(attacker_input) > cap
+        # Audit H2: canonicalise so a zero-width / compatibility-form
+        # character spliced into a flagged token cannot evade the scan.
+        normalised = normalise_for_scan(attacker_input)
+        scan_target = normalised[:cap]
+        truncated = len(normalised) > cap
         # Collect all matches; aggregation is max-severity. Stage 1
         # only ships severity 1.0 patterns, but the structure has to
         # support fuzzy heuristics that will land in later stages.

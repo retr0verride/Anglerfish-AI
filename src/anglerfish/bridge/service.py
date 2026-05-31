@@ -784,6 +784,14 @@ class AIBridgeService:
         """
         if not self._settings.bridge.engaged_persistence or self._persistence_classifier is None:
             return None
+        # Audit M7: cap the command before classification so the
+        # persistence regexes (and the LLM classifier) see the same
+        # bounded input the main command path does, rather than the raw
+        # up-to-32 KB wire command.
+        command = sanitize_command(
+            command,
+            max_chars=self._settings.bridge.max_input_chars,
+        )
         try:
             event = await self._persistence_classifier.classify(
                 command,
@@ -988,7 +996,25 @@ class AIBridgeService:
         Bridge-level failures degrade to scripted fallback content;
         when fallbacks are disabled in configuration, the response text
         is empty and ``source`` is :attr:`ResponseSource.REJECTED`.
+
+        Audit M6: the inner handler maps the known LLM/limiter failures
+        to fallback itself; this outer guard catches anything it does
+        not (sanitisation, the injection scorer, ``cd`` handling, a
+        strategy hook) so an unexpected error degrades to fallback
+        rather than propagating an exception to the attacker.
         """
+        try:
+            return await self._run_command(session, command)
+        except Exception as exc:  # noqa: BLE001 - the attacker must never see an exception
+            self._record_handler_error(session, exc)
+            text, source = self._fail_closed(session, command, exc)
+            return BridgeResponse(text=text, source=source, latency_ms=0.0)
+
+    async def _run_command(
+        self,
+        session: SessionContext,
+        command: str,
+    ) -> BridgeResponse:
         sanitised = sanitize_command(
             command,
             max_chars=self._settings.bridge.max_input_chars,
@@ -1075,16 +1101,19 @@ class AIBridgeService:
                     max_chars=self._settings.ollama.max_response_chars,
                 )
                 output_verdict = self._output_filter.check(text)
-                # Stage 1.8.5: surface scan-cap truncation on the output
-                # path too. Most LLM responses sit well under the cap;
-                # one that exceeds it means either model misbehaviour
-                # or an attacker steering toward a long response to
-                # smuggle a leak past the scan window.
-                if output_verdict.truncated:
+                # Surface an over-long model response. Audit L4:
+                # output_verdict.truncated compares the already-capped
+                # `text` against scan_max_chars (>= max_response_chars),
+                # so it can never fire here. Detect it directly against
+                # the raw content length: a response longer than the cap
+                # had its tail discarded before scanning (model
+                # misbehaviour, or an attacker steering toward a long
+                # response to smuggle a leak past the scan window).
+                if len(result.content) > self._settings.ollama.max_response_chars:
                     self._record_scan_truncated(
                         session,
                         kind="output",
-                        input_length=len(text),
+                        input_length=len(result.content),
                         verdict=output_verdict,
                     )
                 if output_verdict.fired:
@@ -1131,7 +1160,31 @@ class AIBridgeService:
         Bridge-level failures degrade to a single fallback chunk if
         no AI content was streamed yet, or close the stream cleanly
         with what was already shipped otherwise.
+
+        Audit M6: the outer guard catches any error the inner generator
+        does not map (the pre-stream surface, a strategy hook), yielding
+        a terminal fallback chunk instead of propagating - or, if AI
+        content already streamed, closing the stream cleanly.
         """
+        streamed_ai = False
+        try:
+            async for chunk in self._run_command_stream(session, command):
+                if chunk.source == ResponseSource.AI and chunk.delta:
+                    streamed_ai = True
+                yield chunk
+        except Exception as exc:  # noqa: BLE001 - the attacker must never see an exception
+            self._record_handler_error(session, exc)
+            if streamed_ai:
+                yield BridgeChunk(delta="", source=ResponseSource.AI, done=True, latency_ms=0.0)
+            else:
+                text, source = self._fail_closed(session, command, exc)
+                yield BridgeChunk(delta=text, source=source, done=True, latency_ms=0.0)
+
+    async def _run_command_stream(
+        self,
+        session: SessionContext,
+        command: str,
+    ) -> AsyncIterator[BridgeChunk]:
         sanitised = sanitize_command(
             command,
             max_chars=self._settings.bridge.max_input_chars,
@@ -1294,13 +1347,11 @@ class AIBridgeService:
                 max_chars=self._settings.ollama.max_response_chars,
             )
             output_verdict = self._output_filter.check(full_text)
-            if output_verdict.truncated:
-                self._record_scan_truncated(
-                    session,
-                    kind="output",
-                    input_length=len(full_text),
-                    verdict=output_verdict,
-                )
+            # Audit L4: no over-long check here. On the streaming path the
+            # accumulator is bounded mid-flight - a stream that exceeds
+            # max_response_chars breaks with an error (see the response_cap
+            # guard above) and lands on the error path below, never on this
+            # success branch - so a scan-truncation signal cannot arise.
             if output_verdict.fired:
                 self._record_defense_fire(session, output_verdict)
             session.record(
@@ -1322,6 +1373,14 @@ class AIBridgeService:
         # scripted fallback as a single chunk.
         if accumulated:
             full_text = "".join(accumulated)
+            # Audit M6: run the output filter on the partial content too
+            # (detection only, like the success path), so a leak that
+            # then errored out is still audited rather than silently
+            # dropped. The chunks already shipped; this is the operator
+            # signal, not a redaction.
+            partial_verdict = self._output_filter.check(full_text)
+            if partial_verdict.fired:
+                self._record_defense_fire(session, partial_verdict)
             session.record(
                 sanitised,
                 full_text,
@@ -1538,12 +1597,47 @@ class AIBridgeService:
             attacker_ip=session.source_ip,
         )
 
+    def _record_handler_error(self, session: SessionContext, exc: Exception) -> None:
+        """Audit an unexpected error caught by a command handler's guard (M6)."""
+        self._logger.exception(
+            "bridge.handler_error session=%s",
+            session.session_id,
+        )
+        self._audit_log.record(
+            "bridge.handler_error",
+            session_id=str(session.session_id),
+            attacker_ip=session.source_ip,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    def _fail_closed(
+        self,
+        session: SessionContext,
+        command: str,
+        exc: Exception,
+    ) -> tuple[str, ResponseSource]:
+        """Last-resort scripted fallback for an unexpected handler error.
+
+        Produces the same indistinguishable fallback the bridge serves
+        for known failures. Even this path is guarded: if re-sanitising
+        or building the fallback raises, degrade to the empty/REJECTED
+        response rather than letting the exception escape.
+        """
+        try:
+            sanitised = sanitize_command(
+                command,
+                max_chars=self._settings.bridge.max_input_chars,
+            )
+            return self._fallback(session, sanitised, reason=exc)
+        except Exception:  # noqa: BLE001 - the fallback itself must not raise
+            return ("", ResponseSource.REJECTED)
+
     def _fallback(
         self,
         session: SessionContext,
         command: str,
         *,
-        reason: LLMError,
+        reason: Exception,
     ) -> tuple[str, ResponseSource]:
         self._logger.warning(
             "bridge.fallback session=%s reason=%s message=%s",

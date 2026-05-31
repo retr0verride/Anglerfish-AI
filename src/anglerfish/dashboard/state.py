@@ -64,6 +64,7 @@ class DashboardEventKind(StrEnum):
     COMMAND = "command"
     THREAT = "threat"
     INTENT = "intent"
+    NARRATOR = "narrator"
 
 
 class DashboardEvent(BaseModel):
@@ -395,6 +396,9 @@ class DashboardState:
 
     async def list_static_honeytokens(self) -> list[Honeytoken]:
         return await self._store.list_static_honeytokens()
+
+    async def list_all_honeytokens(self) -> list[Honeytoken]:
+        return await self._store.list_all_honeytokens()
 
     # ------------------------------------------------------------------
     # Queries - called by REST routes.
