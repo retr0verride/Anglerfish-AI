@@ -75,7 +75,7 @@ def test_honeytoken_report_guards_malicious_source_ip() -> None:
         payload="SECRET",
         callback_url="https://cb.example/h1",
         placed_at="/root/.aws/credentials",
-        source_ip="=HYPERLINK(\"http://evil\")",
+        source_ip='=HYPERLINK("http://evil")',
         session_id=uuid4(),
         created_at=_AT,
     )
