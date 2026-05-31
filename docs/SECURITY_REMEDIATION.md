@@ -25,14 +25,14 @@ Lanes:
 |----|---------|-----|--------------|------|--------|
 | H1 | Per-IP limiter `_recent` map grows unbounded (memory DoS) | high | remote, unauth, **default-on** | hotfix | **closed** `f4610f0` |
 | H2 | Zero-width / homoglyph bypass of the defense filters | high | remote, defense-in-depth layer | fix (zero-width+combining) / accept (homoglyph) | **closed** `da8c9cf` |
-| H3 | HASSH fingerprint is a constant for every attacker | high (efficacy) | not a vuln; broken feature | spike done -> fix | **spike done, impl pending** |
+| H3 | HASSH fingerprint is a constant for every attacker | high (efficacy) | not a vuln; broken feature | fix | **closed** `f2edd33` + `970c09b` |
 | M1 | CSV formula injection in both CSV exports | medium | operator opens the file | fix | **closed** `cf8c673` |
-| M2 | Per-session token-budget TOCTOU (concurrent overshoot) | medium | attacker pipelining; local GPU cost | fix-or-accept | open |
+| M2 | Per-session token-budget TOCTOU (concurrent overshoot) | medium | attacker pipelining; local GPU cost | fix | **closed** `63ec3d1` |
 | M3 | Audit-tailer poison-pill (non-finite latency wedges sync) | medium | log replay / corruption, not live traffic | fix | **closed** `3ea0dac` |
-| M4 | `X-Forwarded-For` spoofs audited `callback_source_ip` | medium | only with the public callback receiver deployed | feature-gated | open |
-| M5 | Naive ISO `since` 500s three dashboard endpoints | medium | authed operator | fix | open |
-| M6 | Bridge does not fail-closed on unexpected exceptions | medium | defense-in-depth robustness | fix | open |
-| M7 | ReDoS in crontab persistence pattern + raw command to LLM | medium | only with `engaged_persistence` on | feature-gated | open |
+| M4 | `X-Forwarded-For` spoofs audited `callback_source_ip` | medium | only with the public callback receiver deployed | fix | **closed** `f45f9f0` |
+| M5 | Naive ISO `since` 500s three dashboard endpoints | medium | authed operator | fix | **closed** `ea6d8de` |
+| M6 | Bridge does not fail-closed on unexpected exceptions | medium | defense-in-depth robustness | fix | **closed** `a1a28b4` |
+| M7 | ReDoS in crontab persistence pattern + raw command to LLM | medium | only with `engaged_persistence` on | fix | **closed** `fa524e1` (+H3a `f2edd33`, H3b `970c09b`) |
 | L1 | Wizard temp-file world-readable window | low | local race during first boot | fix | open |
 | L2 | Username timing oracle in login | low | authed surface, rate-limited | fix | open |
 | L3 | STIX pattern grammar injection | low | downstream TIP consumers | fix | open |
@@ -61,12 +61,12 @@ recorded here when made:
   internal) vs document HASSH unsupported and keep only `client_version`._
   The `hashes.py` separator-injection + non-ASCII-crash hardening is
   independent and should land regardless.
-- **M2 budget race.** On a local single-GPU Ollama the "cost" is
-  inference time, already bounded by the session rate limiter. Fix
-  (reserve-then-reconcile) or accept-and-document the soft cap.
-  _Decision: pending._
-- **M4 callback trust.** Default `trusted_proxy_hops` and whether to
-  derive the source IP from the socket peer. _Decision: pending._
+- **M2 budget race.** _Decision: fixed (per-budget asyncio.Lock
+  serialises the shared-budget check..consume), closed in `63ec3d1`. The
+  inherent single-call boundary overshoot is out of scope._
+- **M4 callback trust.** _Decision: fixed - record the connection peer,
+  not the raw header; behind a proxy the operator sets uvicorn
+  proxy_headers + forwarded_allow_ips. Closed in `f45f9f0`._
 - **L7 / L8.** Document-as-residual proposed for both. _Decision:
   pending._
 
