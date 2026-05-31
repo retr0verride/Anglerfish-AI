@@ -75,6 +75,14 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
+# Audit L2: a fixed throwaway bcrypt hash (cost 12, matching the wizard's
+# gensalt default) used as a compare-and-discard target so a login with a
+# wrong username runs the same bcrypt work as a wrong password, closing
+# the username-enumeration timing oracle. Not a secret: it never matches
+# any real password and the compare always discards the result.
+_DUMMY_PASSWORD_HASH = "$2b$12$rA9fQfWdPjcxFLNPkdlW3.SbtzJgTDzLr4jftmZhsjbL1GK9opzZW"
+
+
 def is_open_mode(config: DashboardConfig) -> bool:
     """True when no password hash is configured (open / first-boot mode)."""
     return config.admin_password_hash is None
@@ -95,14 +103,24 @@ def _check_basic_auth(authorization_header: str, config: DashboardConfig) -> boo
 
 
 def _check_credentials(username: str, password: str, config: DashboardConfig) -> bool:
+    # Audit L2: always run a bcrypt comparison so a wrong username takes
+    # the same time as a wrong password (no username-enumeration timing
+    # oracle). On the wrong-username / open-mode paths the compare runs
+    # against a fixed dummy hash and its result is discarded.
+    stored = (
+        config.admin_password_hash.get_secret_value()
+        if config.admin_password_hash is not None
+        else _DUMMY_PASSWORD_HASH
+    )
+    password_ok = verify_password(password, stored)
+    if config.admin_password_hash is None:
+        # Open mode — never accept Basic auth (Basic auth is a positive
+        # assertion of credentials; pretending to validate when we can't
+        # would be misleading).
+        return False
     if config.admin_username != username:
         return False
-    if config.admin_password_hash is None:
-        # Open mode — never accept Basic auth in open mode (Basic auth is
-        # a positive assertion of credentials; pretending to validate when
-        # we can't would be misleading).
-        return False
-    return verify_password(password, config.admin_password_hash.get_secret_value())
+    return password_ok
 
 
 def _settings_from(request: Request) -> DashboardConfig:

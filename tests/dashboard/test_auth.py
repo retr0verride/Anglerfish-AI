@@ -359,3 +359,40 @@ def test_login_seeds_csrf_token(authed_client: TestClient) -> None:
     # The /api/csrf endpoint returns the seeded token without re-creating one.
     token = authed_client.get("/api/csrf").json()["token"]
     assert len(token) >= 32
+
+
+def test_wrong_username_still_runs_bcrypt_no_timing_oracle(
+    session_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong username must still run a bcrypt compare (audit L2).
+
+    Before the fix, a wrong username returned before verify_password, so a
+    valid username took ~150ms longer (a username-enumeration oracle).
+    """
+    from anglerfish.dashboard import auth
+
+    calls: list[tuple[str, str]] = []
+    real = auth.verify_password
+
+    def _spy(password: str, stored_hash: str) -> bool:
+        calls.append((password, stored_hash))
+        return real(password, stored_hash)
+
+    monkeypatch.setattr(auth, "verify_password", _spy)
+
+    config = DashboardConfig(
+        session_secret=SecretStr(session_secret),
+        admin_username="admin",
+        admin_password_hash=SecretStr(hash_password("s3cret")),
+    )
+
+    # Wrong username: bcrypt still runs (against the dummy hash).
+    assert auth._check_credentials("attacker", "guess", config) is False
+    assert len(calls) == 1
+    # Right username, wrong password: bcrypt runs.
+    assert auth._check_credentials("admin", "wrong", config) is False
+    assert len(calls) == 2
+    # Right username, right password: accepted.
+    assert auth._check_credentials("admin", "s3cret", config) is True
+    assert len(calls) == 3
