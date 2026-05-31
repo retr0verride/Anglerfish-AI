@@ -43,7 +43,9 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
   ``bridge.honeytoken_placed``, ``bridge.honeytoken_callback``,
   ``bridge.honeytoken_placement_error``,
   ``bridge.counter_deception_engaged``,
-  ``bridge.counter_deception_timebomb_applied``.
+  ``bridge.counter_deception_timebomb_applied``,
+  ``bridge.handler_error`` (an unexpected error a command handler caught
+  and degraded to fallback, so the attacker never saw an exception).
 * Lure: ``lure.server_started``, ``lure.server_stopped``,
   ``lure.session_opened``, ``lure.session_closed``,
   ``lure.command_native``, ``lure.command_bridge``,

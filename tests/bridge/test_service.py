@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from uuid import uuid4
 
@@ -1639,3 +1640,97 @@ async def test_end_session_budget_clears_wasting_state(
         "total_wasted_ms": 0,
     }
     await service.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed on unexpected errors (audit M6)
+# ---------------------------------------------------------------------------
+
+
+class _BoomScorer:
+    """An injection scorer that raises an unmapped error (pre-try surface)."""
+
+    def score(self, _attacker_input: str) -> object:
+        raise RuntimeError("boom")
+
+
+async def test_handle_command_fails_closed_on_unexpected_error(
+    settings: AnglerfishSettings,
+) -> None:
+    """An unexpected error from the pre-try surface degrades to fallback."""
+    ollama_calls: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        ollama_calls.append(request.read())
+        return httpx.Response(200, json={"message": {"content": "x"}})
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    service._injection_scorer = _BoomScorer()  # type: ignore[assignment]
+    session = _make_session()
+    try:
+        response = await service.handle_command(session, "ls")
+    finally:
+        await service.aclose()
+
+    # Did not raise; degraded to a scripted fallback, Ollama never reached.
+    assert response.source in (ResponseSource.FALLBACK, ResponseSource.REJECTED)
+    assert ollama_calls == []
+    assert any(e[0] == "bridge.handler_error" for e in audit.events)
+
+
+async def test_handle_command_stream_fails_closed_on_unexpected_error(
+    settings: AnglerfishSettings,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"message":{"content":"x"},"done":true}\n')
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    service._injection_scorer = _BoomScorer()  # type: ignore[assignment]
+    session = _make_session()
+    try:
+        chunks = [c async for c in service.handle_command_stream(session, "ls")]
+    finally:
+        await service.aclose()
+
+    # Did not raise; a terminal chunk closed the stream.
+    assert chunks
+    assert chunks[-1].done is True
+    assert any(e[0] == "bridge.handler_error" for e in audit.events)
+
+
+async def test_stream_partial_error_runs_output_filter(
+    settings: AnglerfishSettings,
+) -> None:
+    """A leak streamed before a mid-stream error is still audited (M6)."""
+    ndjson = (
+        json.dumps({"message": {"content": "I am an AI assistant"}, "done": False})
+        + "\n"
+        + "not json\n"  # malformed -> OllamaUnavailableError mid-stream
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=ndjson.encode("utf-8"))
+
+    audit = _MockAudit()
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(handler),
+        audit_log=audit,  # type: ignore[arg-type]
+    )
+    session = _make_session()
+    try:
+        _ = [c async for c in service.handle_command_stream(session, "whoami")]
+    finally:
+        await service.aclose()
+
+    assert any(e[0] == "bridge.defense_fired" for e in audit.events)
