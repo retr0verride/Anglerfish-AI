@@ -784,6 +784,14 @@ class AIBridgeService:
         """
         if not self._settings.bridge.engaged_persistence or self._persistence_classifier is None:
             return None
+        # Audit M7: cap the command before classification so the
+        # persistence regexes (and the LLM classifier) see the same
+        # bounded input the main command path does, rather than the raw
+        # up-to-32 KB wire command.
+        command = sanitize_command(
+            command,
+            max_chars=self._settings.bridge.max_input_chars,
+        )
         try:
             event = await self._persistence_classifier.classify(
                 command,

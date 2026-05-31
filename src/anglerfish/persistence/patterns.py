@@ -153,11 +153,16 @@ _CRONTAB_PIPE = re.compile(
         '([^']+)'                                # group 1
       | "([^"]+)"                                # group 2
     )
-    \s*[);\s]*                                   # optional ) ; whitespace
+    [);\s]*                                      # optional ) ; whitespace
     \|\s*crontab\s+-\s*$
     """,
     re.VERBOSE,
 )
+# Audit M7: the field above was `\s*[);\s]*` - two adjacent quantifiers
+# that both match whitespace, so a quoted echo followed by a long space
+# run that never reaches `| crontab -` backtracked quadratically (~1.1s
+# at the 32 KB command cap, on the bridge event loop). The single
+# `[);\s]*` class is match-equivalent on every real form and linear.
 
 # Captures `crontab -e` with no payload (interactive edit). We
 # record the install with payload="<interactive edit>" so the
