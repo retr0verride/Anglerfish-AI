@@ -33,14 +33,14 @@ Lanes:
 | M5 | Naive ISO `since` 500s three dashboard endpoints | medium | authed operator | fix | **closed** `ea6d8de` |
 | M6 | Bridge does not fail-closed on unexpected exceptions | medium | defense-in-depth robustness | fix | **closed** `a1a28b4` |
 | M7 | ReDoS in crontab persistence pattern + raw command to LLM | medium | only with `engaged_persistence` on | fix | **closed** `fa524e1` (+H3a `f2edd33`, H3b `970c09b`) |
-| L1 | Wizard temp-file world-readable window | low | local race during first boot | fix | open |
-| L2 | Username timing oracle in login | low | authed surface, rate-limited | fix | open |
-| L3 | STIX pattern grammar injection | low | downstream TIP consumers | fix | open |
-| L4 | Dead `truncated` audit branch on the output path | low | observability only (no leak) | fix | open |
-| L5 | ReDoS in two T1059.004 technique regexes | low | scorer not on the request loop (latent) | fix | open |
-| L6 | Geo archive decompression bomb | low | mirror compromise, off request path | fix | open |
-| L7 | `csp-report` POST lacks `require_csrf` | low | mitigated by SameSite=Strict + caps | accept (doc) | open |
-| L8 | fsync on the event loop for audit writes | low | flood on slow storage | accept-or-fix | open |
+| L1 | Wizard temp-file world-readable window | low | local race during first boot | fix | **closed** `ea679c4` |
+| L2 | Username timing oracle in login | low | authed surface, rate-limited | fix | **closed** `f4b52eb` |
+| L3 | STIX pattern grammar injection | low | downstream TIP consumers | fix | **closed** `dc3d728` |
+| L4 | Dead `truncated` audit branch on the output path | low | observability only (no leak) | fix | **closed** `fc4b00d` |
+| L5 | ReDoS in two T1059.004 technique regexes | low | scorer not on the request loop (latent) | fix | **closed** `525c6fe` |
+| L6 | Geo archive decompression bomb | low | mirror compromise, off request path | fix | **closed** `7571398` |
+| L7 | `csp-report` POST lacks `require_csrf` | low | mitigated by SameSite=Strict + caps | accept (doc) | **documented** `9eed303` |
+| L8 | fsync on the event loop for audit writes | low | flood on slow storage | accept (doc) | **documented** `9eed303` |
 
 ## Owner decisions required
 
@@ -67,8 +67,26 @@ recorded here when made:
 - **M4 callback trust.** _Decision: fixed - record the connection peer,
   not the raw header; behind a proxy the operator sets uvicorn
   proxy_headers + forwarded_allow_ips. Closed in `f45f9f0`._
-- **L7 / L8.** Document-as-residual proposed for both. _Decision:
-  pending._
+- **L7 csp-report CSRF.** _Decision: accepted as a documented residual.
+  The browser sends CSP reports automatically and cannot attach the
+  `X-Anglerfish-CSRF` header, so `require_csrf` would disable the
+  tripwire. `SameSite=Strict` blocks the cross-site cookie; a forged
+  same-origin POST appends only one capped, fixed-field, operator-visible
+  row. Documented at the route and in THREAT_MODEL; closed in `9eed303`._
+- **L8 fsync on the loop.** _Decision: accepted as a documented residual.
+  Per-event durability and strict append ordering are the audit log's
+  contract (the `chattr +a` tamper-evidence relies on in-order,
+  un-batched writes). Audit volume is security events, not per-packet, so
+  the loop stall is bounded; offloading would trade the guarantee for
+  unneeded throughput. Documented at the write site and in THREAT_MODEL
+  Known-limitations; closed in `9eed303`._
+
+## Outcome
+
+All audit findings are closed: H1-H3 and M1-M7 fixed and independently
+re-verified, L1-L6 fixed test-first, L7-L8 accepted with recorded
+rationale. Branch `security/mythos-remediation` (PR #9). The full suite
+is green (1991 passed, 1 skipped) and coverage holds above the 90 % gate.
 
 ## Process
 
