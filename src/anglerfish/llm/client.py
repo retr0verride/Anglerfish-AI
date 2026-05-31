@@ -156,6 +156,27 @@ class LLMClient:
             OllamaUnavailableError: network failure or 5xx response.
             OllamaResponseError: 4xx response or malformed body.
         """
+        if budget is None:
+            return await self._chat(
+                messages, role=role, budget=None, response_format=response_format
+            )
+        # Audit M2: hold the budget lock across check..consume so
+        # concurrent calls sharing one budget (a session's pipelined
+        # commands) cannot all pass check() before any consume() and
+        # overshoot the cap.
+        async with budget.lock:
+            return await self._chat(
+                messages, role=role, budget=budget, response_format=response_format
+            )
+
+    async def _chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        role: LLMRole,
+        budget: TokenBudget | None,
+        response_format: str | None,
+    ) -> ChatResult:
         if budget is not None:
             budget.check(role)
         payload: dict[str, Any] = {
@@ -241,6 +262,23 @@ class LLMClient:
                 or malformed chunk mid-stream.
             OllamaResponseError: 4xx response before the first chunk.
         """
+        if budget is None:
+            async for chunk in self._stream_chat(messages, role=role, budget=None):
+                yield chunk
+            return
+        # Audit M2: hold the budget lock across the whole stream so
+        # concurrent same-session streams cannot overshoot the cap.
+        async with budget.lock:
+            async for chunk in self._stream_chat(messages, role=role, budget=budget):
+                yield chunk
+
+    async def _stream_chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        role: LLMRole,
+        budget: TokenBudget | None,
+    ) -> AsyncIterator[ChatChunk]:
         if budget is not None:
             budget.check(role)
         payload: dict[str, Any] = {
@@ -473,6 +511,11 @@ class LLMClient:
             OllamaResponseError: 4xx response, malformed body, or a
                 vector that is not a list of numbers.
         """
+        # Audit M2: embed is intentionally NOT lock-wrapped like chat /
+        # stream_chat. Every caller (Stage 8 embeddings) passes a fresh
+        # per-call TokenBudget, so the check..consume span is never shared
+        # and cannot race. If a shared budget is ever passed here
+        # concurrently, wrap this in `async with budget.lock` as chat does.
         if budget is not None:
             budget.check(LLMRole.EMBED)
         payload: dict[str, Any] = {
