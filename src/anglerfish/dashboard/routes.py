@@ -612,6 +612,16 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         so this is not an unauthenticated write path into the audit log.
         The body is size-capped and only a fixed set of fields is recorded,
         each truncated, so a violation cannot bloat or inject the log.
+
+        Audit L7 (accepted residual): unlike the other state-changing
+        endpoints this one omits ``require_csrf`` by design. The browser
+        emits CSP reports automatically and cannot attach the
+        ``X-Anglerfish-CSRF`` header, so requiring the token would disable
+        the tripwire. The exposure is bounded: ``SameSite=Strict`` keeps a
+        cross-site page from sending the session cookie, the worst a forged
+        same-origin POST can do is append one capped, fixed-field
+        ``dashboard.csp_violation`` row, and that row is itself a tripwire -
+        spurious entries are visible to the operator rather than silent.
         """
         raw = await request.body()
         if len(raw) > _CSP_REPORT_MAX_BYTES:

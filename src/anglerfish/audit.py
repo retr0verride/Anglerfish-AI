@@ -133,6 +133,16 @@ class AuditLog:
                 with self._path.open("ab") as fp:
                     fp.write(line)
                     fp.flush()
+                    # Audit L8 (accepted residual): fsync is a blocking
+                    # syscall and most callers are coroutines, so this stalls
+                    # the event loop for the flush. Kept deliberately: the
+                    # per-event durability + strict append ordering is the
+                    # module's contract (chattr +a tamper-evidence relies on
+                    # records hitting disk in order, not being batched or
+                    # reordered by a writer thread). Audit volume is
+                    # security events, not per-packet, so the stall is bounded
+                    # and rare. Offloading to a thread/queue would trade that
+                    # guarantee for throughput we do not need.
                     os.fsync(fp.fileno())
             except OSError as exc:
                 _logger.warning(
