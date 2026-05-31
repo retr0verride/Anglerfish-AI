@@ -1101,16 +1101,19 @@ class AIBridgeService:
                     max_chars=self._settings.ollama.max_response_chars,
                 )
                 output_verdict = self._output_filter.check(text)
-                # Stage 1.8.5: surface scan-cap truncation on the output
-                # path too. Most LLM responses sit well under the cap;
-                # one that exceeds it means either model misbehaviour
-                # or an attacker steering toward a long response to
-                # smuggle a leak past the scan window.
-                if output_verdict.truncated:
+                # Surface an over-long model response. Audit L4:
+                # output_verdict.truncated compares the already-capped
+                # `text` against scan_max_chars (>= max_response_chars),
+                # so it can never fire here. Detect it directly against
+                # the raw content length: a response longer than the cap
+                # had its tail discarded before scanning (model
+                # misbehaviour, or an attacker steering toward a long
+                # response to smuggle a leak past the scan window).
+                if len(result.content) > self._settings.ollama.max_response_chars:
                     self._record_scan_truncated(
                         session,
                         kind="output",
-                        input_length=len(text),
+                        input_length=len(result.content),
                         verdict=output_verdict,
                     )
                 if output_verdict.fired:
@@ -1344,13 +1347,11 @@ class AIBridgeService:
                 max_chars=self._settings.ollama.max_response_chars,
             )
             output_verdict = self._output_filter.check(full_text)
-            if output_verdict.truncated:
-                self._record_scan_truncated(
-                    session,
-                    kind="output",
-                    input_length=len(full_text),
-                    verdict=output_verdict,
-                )
+            # Audit L4: no over-long check here. On the streaming path the
+            # accumulator is bounded mid-flight - a stream that exceeds
+            # max_response_chars breaks with an error (see the response_cap
+            # guard above) and lands on the error path below, never on this
+            # success branch - so a scan-truncation signal cannot arise.
             if output_verdict.fired:
                 self._record_defense_fire(session, output_verdict)
             session.record(
