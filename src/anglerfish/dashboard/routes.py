@@ -124,6 +124,23 @@ _CLUSTER_NODE_MAX = 1000
 _CLUSTER_THREAT_SCAN = 200
 
 
+def _parse_since(since: str | None) -> datetime:
+    """Parse a ``since`` query param into a tz-aware UTC datetime.
+
+    Absent yields the unix epoch. A tz-less but valid ISO-8601 string
+    (e.g. ``2020-01-01T00:00:00``) is treated as UTC rather than left
+    naive, which would otherwise raise ``TypeError`` against the
+    tz-aware range bound downstream and 500 the endpoint (audit M5).
+    Raises ``ValueError`` on a malformed string.
+    """
+    if since is None:
+        return datetime.fromtimestamp(0, tz=UTC)
+    parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 async def _build_similar_items(
     state: DashboardState,
     session_id: UUID,
@@ -485,11 +502,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         emitted once. Nodes beyond the cap drop oldest-first.
         """
         try:
-            start = (
-                datetime.fromisoformat(since)
-                if since is not None
-                else datetime.fromtimestamp(0, tz=UTC)
-            )
+            start = _parse_since(since)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -734,11 +747,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         events have actually landed on disk.
         """
         try:
-            start = (
-                datetime.fromisoformat(since)
-                if since is not None
-                else datetime.fromtimestamp(0, tz=UTC)
-            )
+            start = _parse_since(since)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -819,11 +828,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         defaulting to the unix epoch.
         """
         try:
-            start = (
-                datetime.fromisoformat(since)
-                if since is not None
-                else datetime.fromtimestamp(0, tz=UTC)
-            )
+            start = _parse_since(since)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
