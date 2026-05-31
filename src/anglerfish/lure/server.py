@@ -67,6 +67,20 @@ _logger = logging.getLogger(__name__)
 
 _RATE_WINDOW_SECONDS = 60.0
 
+# Audit finding H1: ``_PerIPLimiter.release`` cleans the concurrent
+# counter but never the sliding-window ``_recent`` map, so a rotation of
+# distinct source IPs (botnet / Tor / proxy, the norm for an
+# internet-facing honeypot) would grow it without bound and OOM the
+# listener. ``admit`` sweeps fully-expired entries once the map crosses
+# this high-water mark. If the live set alone still exceeds it (a
+# sustained high-distinct-rate flood), the least-recently-active windows
+# are evicted down to ``_RECENT_EVICT_TARGET`` so the map stays a hard
+# constant, not bounded by the live set. The low-water gap also amortises
+# the O(n) maintenance: it cannot re-fire until the map grows back over
+# the high-water mark.
+_RECENT_SWEEP_THRESHOLD = 10_000
+_RECENT_EVICT_TARGET = 7_500
+
 
 class BaitNicError(RuntimeError):
     """Raised when the configured listen_host is not bindable on the host.
@@ -168,8 +182,13 @@ class _PerIPLimiter:
             return False, "per_ip_concurrent"
 
         ts = now if now is not None else time.monotonic()
-        recent = self._recent.setdefault(source_ip, deque())
         cutoff = ts - _RATE_WINDOW_SECONDS
+        # Drop fully-expired per-IP windows before they accumulate. Gated
+        # on a high-water mark so the O(n) sweep is amortised away under
+        # normal load (see _RECENT_SWEEP_THRESHOLD).
+        if len(self._recent) > _RECENT_SWEEP_THRESHOLD:
+            self._sweep_recent(cutoff)
+        recent = self._recent.setdefault(source_ip, deque())
         while recent and recent[0] < cutoff:
             recent.popleft()
         if len(recent) >= self._max_rpm:
@@ -188,6 +207,32 @@ class _PerIPLimiter:
             self._concurrent.pop(source_ip, None)
         else:
             self._concurrent[source_ip] = current - 1
+
+    def _sweep_recent(self, cutoff: float) -> None:
+        """Bound the ``_recent`` map: drop expired windows, then hard-cap.
+
+        Step 1 evicts per-IP rate windows whose newest timestamp predates
+        ``cutoff``. ``release`` cannot do this: it has no clock, and an IP
+        can disconnect while its rpm window is still live (the window must
+        outlast the connection so reconnect-spam is still throttled). A
+        whole deque is stale iff its newest entry (``dq[-1]``) is already
+        outside the window, so the check is O(1) per key.
+
+        Step 2 is the hard cap. When the live set itself exceeds the
+        high-water mark (a sustained high-distinct-rate flood, where
+        step 1 frees nothing), evict the least-recently-active windows
+        (smallest ``dq[-1]``, i.e. closest to expiry) down to the
+        low-water target. This drops only rate state for the most-idle
+        IPs, who then start a fresh window, in exchange for a hard memory
+        ceiling regardless of attack rate.
+        """
+        stale = [ip for ip, dq in self._recent.items() if not dq or dq[-1] < cutoff]
+        for ip in stale:
+            del self._recent[ip]
+        if len(self._recent) > _RECENT_SWEEP_THRESHOLD:
+            by_recency = sorted(self._recent.items(), key=lambda kv: kv[1][-1])
+            for ip, _dq in by_recency[: len(self._recent) - _RECENT_EVICT_TARGET]:
+                del self._recent[ip]
 
     def concurrent_for(self, source_ip: str) -> int:
         return self._concurrent.get(source_ip, 0)

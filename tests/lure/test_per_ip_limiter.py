@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from anglerfish.lure.server import _PerIPLimiter
+from anglerfish.lure.server import _RECENT_SWEEP_THRESHOLD, _PerIPLimiter
 
 
 def test_first_connection_admitted() -> None:
@@ -151,3 +151,58 @@ def test_same_tick_rapid_fire_does_not_double_count() -> None:
     allowed, reason = lim.admit("1.1.1.1", now=100.0)
     assert allowed is False
     assert reason == "per_ip_rpm"
+
+
+# ---------------------------------------------------------------------------
+# Memory bound (audit finding H1)
+# ---------------------------------------------------------------------------
+
+
+def test_recent_map_bounded_under_ip_rotation() -> None:
+    """The sliding-window ``_recent`` map must not grow without bound.
+
+    ``release`` cleans ``_concurrent`` but never touches ``_recent``;
+    without an eviction sweep, every distinct source IP that ever
+    connects leaves a permanent ``_recent`` entry. A botnet / Tor /
+    proxy rotation that cycles tens of thousands of one-shot IPs (the
+    norm for an internet-facing honeypot) would grow ``_recent``
+    forever and OOM the listener. After the clock advances past the
+    window for the early IPs, a bounded limiter must have evicted their
+    stale entries.
+    """
+    lim = _PerIPLimiter(max_concurrent=3, max_rpm=12)
+    n = 30_000
+    for i in range(n):
+        # A distinct IP each iteration; the clock advances one second per
+        # connection so the early entries fall out of the rpm window long
+        # before the loop ends.
+        ip = f"10.{(i >> 16) & 255}.{(i >> 8) & 255}.{i & 255}"
+        lim.admit(ip, now=float(i))
+    # The live set at any instant is only the IPs seen within the last
+    # window; a bounded map holds far fewer than the n distinct IPs.
+    assert len(lim._recent) < n // 2
+    # The sweep is gated on a high-water mark, so the map is bounded to
+    # the threshold plus the single entry that triggers the next sweep -
+    # never the n distinct IPs.
+    assert len(lim._recent) <= _RECENT_SWEEP_THRESHOLD + 1
+
+
+def test_recent_map_hard_capped_under_distinct_ip_flood() -> None:
+    """A flood of distinct IPs inside one window cannot exceed the cap.
+
+    The stale-eviction sweep reclaims nothing when every window is still
+    live (a high-distinct-rate flood: >threshold unique IPs within the
+    60s window). Without a hard cap the map would grow with the live set
+    instead of a constant, and the sweep would re-scan O(n) on every
+    admit. The limiter must instead evict the least-recently-active
+    windows down to a low-water mark, so memory stays a hard constant.
+    """
+    lim = _PerIPLimiter(max_concurrent=100, max_rpm=100)
+    n = 30_000
+    for i in range(n):
+        # All at the SAME instant, so no window ever ages out of the
+        # rpm cutoff: stale-eviction frees nothing and only the hard cap
+        # can bound the map.
+        ip = f"10.{(i >> 16) & 255}.{(i >> 8) & 255}.{i & 255}"
+        lim.admit(ip, now=1000.0)
+    assert len(lim._recent) <= _RECENT_SWEEP_THRESHOLD + 1
