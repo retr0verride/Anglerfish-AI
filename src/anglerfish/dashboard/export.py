@@ -39,6 +39,7 @@ __all__ = [
     "MAX_EXPORT_WINDOW_DAYS",
     "ExportRangeError",
     "audit_export_payload",
+    "csv_safe_cell",
     "intent_export_payload",
     "parse_range",
     "session_csv_rows",
@@ -47,6 +48,13 @@ __all__ = [
 
 
 MAX_EXPORT_WINDOW_DAYS = 7
+
+# Audit M1: leading characters a spreadsheet (Excel / LibreOffice /
+# Sheets) treats as the start of a formula. A cell beginning with one is
+# prefixed with a single quote so it renders as literal text instead of
+# being evaluated (DDE / =HYPERLINK / =WEBSERVICE data exfil). Attacker-
+# controlled fields (captured usernames, source IPs) reach the CSV cells.
+_CSV_FORMULA_TRIGGERS = frozenset({"=", "+", "-", "@", "\t", "\r"})
 
 # Export formats and their availability, returned in every export
 # response so the SPA can enable or grey-disable buttons. Stage 13
@@ -231,10 +239,23 @@ def _csv_row(cells: Iterable[object]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def _csv_value(value: object) -> str:
-    """Coerce a session-payload value into a CSV-safe string."""
+def csv_safe_cell(value: object) -> str:
+    """Coerce a value to a string and neutralise CSV formula injection.
+
+    Prefixes a single quote when the cell would otherwise begin with a
+    spreadsheet formula trigger (``= + - @`` or a leading tab/CR), so an
+    attacker-derived field cannot execute as a formula when an operator
+    opens the export. Idempotent: a value already starting with ``'`` is
+    left unchanged. See :data:`_CSV_FORMULA_TRIGGERS`.
+    """
     if value is None:
         return ""
-    if isinstance(value, str):
-        return value
-    return str(value)
+    text = value if isinstance(value, str) else str(value)
+    if text and text[0] in _CSV_FORMULA_TRIGGERS:
+        return "'" + text
+    return text
+
+
+def _csv_value(value: object) -> str:
+    """Coerce a session-payload value into a CSV-safe, formula-guarded string."""
+    return csv_safe_cell(value)

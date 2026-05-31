@@ -22,6 +22,8 @@ import io
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from anglerfish.dashboard.export import csv_safe_cell
+
 if TYPE_CHECKING:
     from anglerfish.honeytokens.schema import Honeytoken
 
@@ -109,8 +111,12 @@ def _aggregate_callbacks(callbacks: list[dict[str, Any]]) -> dict[str, dict[str,
 
 
 def _csv_row(cells: Iterable[object]) -> bytes:
-    """Render one CSV row to bytes via the stdlib writer (handles quoting)."""
+    """Render one CSV row to bytes via the stdlib writer (handles quoting).
+
+    Each cell is formula-guarded (audit M1) so an attacker-derived field
+    (e.g. a spoofed source IP) cannot execute as a spreadsheet formula.
+    """
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(["" if c is None else str(c) for c in cells])
+    writer.writerow([csv_safe_cell(c) for c in cells])
     return buf.getvalue().encode("utf-8")
