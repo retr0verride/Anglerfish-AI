@@ -66,6 +66,7 @@ def build_system_prompt(
     cwd: str,
     persona: Persona | None = None,
     persistence_events: Sequence[PersistenceEvent] | None = None,
+    fs_context: str | None = None,
 ) -> str:
     """Render the system prompt with the chosen fake-environment values.
 
@@ -96,11 +97,31 @@ def build_system_prompt(
         username = config.fake_username
         persona_block = ""
     persistence_block = _render_persistence_block(persistence_events)
+    fs_context_block = _render_fs_context_block(fs_context)
     return _SYSTEM_PROMPT_TEMPLATE.format(
         hostname=hostname,
         username=username,
         cwd=cwd,
-        persona_block=persona_block + persistence_block,
+        persona_block=persona_block + persistence_block + fs_context_block,
+    )
+
+
+def _render_fs_context_block(fs_context: str | None) -> str:
+    """Render the lure's fakefs summary as a prompt block (audit review M3).
+
+    The lure ships ``fs_context`` (the paths it serves natively) on every
+    command; surfacing it here is what keeps the LLM's invented content
+    from contradicting files the shell already returns. Empty / absent
+    context produces the empty string so the prompt shape is unchanged
+    when no lure context was sent.
+    """
+    if not fs_context or not fs_context.strip():
+        return ""
+    return (
+        "\nFilesystem ground truth. The shell serves the paths described "
+        "below directly; treat them as authoritative and never invent "
+        "content that contradicts them:\n"
+        f"{fs_context.strip()}\n"
     )
 
 
@@ -156,6 +177,7 @@ def build_messages(
     history: Sequence[CommandTurn],
     persona: Persona | None = None,
     persistence_events: Sequence[PersistenceEvent] | None = None,
+    fs_context: str | None = None,
 ) -> list[ChatMessage]:
     """Build the ordered Ollama chat-API message list.
 
@@ -164,7 +186,10 @@ def build_messages(
     command as the final user message. ``persona`` and
     ``persistence_events`` both flow through to
     :func:`build_system_prompt`; pass ``None`` for the
-    pre-Stage-9 / pre-Stage-10 behaviours.
+    pre-Stage-9 / pre-Stage-10 behaviours. ``fs_context`` is the lure's
+    fakefs summary (audit review M3): the paths the shell serves
+    natively, given to the LLM as ground truth so it does not invent
+    contradicting content.
     """
     messages: list[ChatMessage] = [
         ChatMessage(
@@ -174,6 +199,7 @@ def build_messages(
                 cwd=cwd,
                 persona=persona,
                 persistence_events=persistence_events,
+                fs_context=fs_context,
             ),
         ),
     ]
@@ -209,14 +235,16 @@ def build_clarification_messages(
     history: Sequence[CommandTurn],
     persona: Persona | None = None,
     persistence_events: Sequence[PersistenceEvent] | None = None,
+    fs_context: str | None = None,
 ) -> list[ChatMessage]:
     """Build the message list for an aggressive-strategy clarification turn.
 
-    Same shape as :func:`build_messages` but appends a second
-    system message after the history that overrides the next response
-    to produce a "did you mean X or Y?" disambiguation question
-    instead of executing the command. The override is scoped to one
-    turn; the system prompt's permanent rules still apply.
+    Same shape as :func:`build_messages` (including the ``fs_context``
+    ground-truth block) but appends a second system message after the
+    history that overrides the next response to produce a "did you mean
+    X or Y?" disambiguation question instead of executing the command.
+    The override is scoped to one turn; the system prompt's permanent
+    rules still apply.
     """
     messages: list[ChatMessage] = [
         ChatMessage(
@@ -226,6 +254,7 @@ def build_clarification_messages(
                 cwd=cwd,
                 persona=persona,
                 persistence_events=persistence_events,
+                fs_context=fs_context,
             ),
         ),
     ]
