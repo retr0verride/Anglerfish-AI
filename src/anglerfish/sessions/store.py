@@ -444,6 +444,38 @@ class SessionStore:
         )
         return [self._row_to_snapshot_with_turns(row) for row in cur.fetchall()]
 
+    async def get_session_node_metadata(
+        self,
+        session_ids: Sequence[UUID],
+    ) -> dict[UUID, tuple[str, str | None]]:
+        """Batch-fetch ``(source_ip, persona)`` for ``session_ids`` in one
+        query (audit review M7).
+
+        Returns a ``{session_id: (source_ip, persona)}`` map; ids with no
+        row are simply absent. Used by the cluster-graph endpoint to
+        enrich nodes without a per-node ``get_session`` round-trip (which
+        also reloads every turn the node does not need).
+        """
+        self._require_open()
+        ids = list(session_ids)
+        if not ids:
+            return {}
+        async with self._lock:
+            return await asyncio.to_thread(self._get_session_node_metadata_locked, ids)
+
+    def _get_session_node_metadata_locked(
+        self,
+        ids: list[UUID],
+    ) -> dict[UUID, tuple[str, str | None]]:
+        assert self._conn is not None  # noqa: S101
+        placeholders = ",".join("?" * len(ids))
+        cur = self._conn.execute(
+            f"SELECT session_id, source_ip, persona FROM sessions "  # noqa: S608 - placeholders are "?"*N, not interpolated values
+            f"WHERE session_id IN ({placeholders})",
+            [str(i) for i in ids],
+        )
+        return {UUID(row[0]): (row[1], row[2]) for row in cur.fetchall()}
+
     async def get_recent_commands(
         self,
         *,

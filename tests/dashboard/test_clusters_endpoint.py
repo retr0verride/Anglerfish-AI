@@ -259,3 +259,45 @@ async def test_clusters_nodes_enriched(
     assert node["persona"] == "gpu-rig"
     assert node["threat_score"] == 77
     assert node["intent_label"] == "cryptojacking"
+
+
+# ---------------------------------------------------------------------------
+# N+1 elimination (audit review M7)
+# ---------------------------------------------------------------------------
+
+
+async def test_clusters_batches_node_metadata_no_per_node_query(
+    client: TestClient,
+    dashboard_state: DashboardState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Node enrichment uses two batched queries, not a get_session +
+    get_intent per node (audit review M7)."""
+    a = await _add(dashboard_state, vector=_vec(1.0), persona="gpu-rig")
+    b = await _add(dashboard_state, vector=_vec(0.99), persona="gpu-rig")
+
+    calls = {"get_session": 0, "get_intent": 0}
+    real_get_session = dashboard_state.get_session
+    real_get_intent = dashboard_state.get_intent
+
+    async def _spy_session(sid: UUID) -> object:
+        calls["get_session"] += 1
+        return await real_get_session(sid)
+
+    async def _spy_intent(sid: UUID) -> object:
+        calls["get_intent"] += 1
+        return await real_get_intent(sid)
+
+    monkeypatch.setattr(dashboard_state, "get_session", _spy_session)
+    monkeypatch.setattr(dashboard_state, "get_intent", _spy_intent)
+
+    r = client.get("/api/clusters")
+    assert r.status_code == 200, r.text
+    nodes = {n["session_id"]: n for n in r.json()["nodes"]}
+    assert str(a) in nodes
+    assert str(b) in nodes
+    assert nodes[str(a)]["source_ip"] == "203.0.113.7"
+    assert nodes[str(a)]["persona"] == "gpu-rig"
+    # The N+1 is gone: no per-node session/intent lookups.
+    assert calls["get_session"] == 0
+    assert calls["get_intent"] == 0
