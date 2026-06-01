@@ -145,6 +145,24 @@ async def test_lookup_swallows_corrupt_database_error() -> None:
     await lookup.aclose()
 
 
+async def test_lookup_swallows_out_of_range_record_values() -> None:
+    """A reader returning a well-formed dict with out-of-range values must
+    not propagate GeoRecord's ValidationError out of lookup() (audit
+    review R4b follow-up); lookup() promises never to raise.
+    """
+    city = _StubReader(
+        {"203.0.113.7": {"location": {"latitude": 999.0, "longitude": 0.0}}},
+    )
+    lookup = GeoLookup(
+        GeoConfig(city_db_path=Path("/x.mmdb")),
+        city_reader=city,
+    )
+    record = await lookup.lookup("203.0.113.7")
+    assert record.looked_up is True
+    assert record.latitude is None
+    await lookup.aclose()
+
+
 async def test_lookup_non_dict_payload_is_ignored() -> None:
     city = _StubReader({"1.2.3.4": "unexpected"})  # type: ignore[dict-item]
     lookup = GeoLookup(

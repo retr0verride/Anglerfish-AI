@@ -195,16 +195,28 @@ def _fetch_one(
                 f"got {actual_sha.hexdigest()})",
             )
 
-        extracted = _extract_mmdb(archive_path, edition=edition)
-        if extracted is None:
-            raise FetchError(f"{edition}: archive did not contain a .mmdb payload")
-
-        # Stage the file in the destination directory so the final
-        # rename is on the same filesystem.
-        staged = destination.with_suffix(destination.suffix + ".new")
-        shutil.copyfile(extracted, staged)
-        staged.chmod(0o644)
-        staged.replace(destination)
+        # Audit review R4a (follow-up): extraction + install also honor the
+        # FetchError-only contract. A sha-matching but non-gzip/corrupt
+        # archive raises tarfile.ReadError, and the staging copy/rename can
+        # raise OSError (ENOSPC, EACCES); both would otherwise crash
+        # `anglerfish geo update` and skip the geo.update_failed audit.
+        try:
+            extracted = _extract_mmdb(archive_path, edition=edition)
+            if extracted is None:
+                raise FetchError(f"{edition}: archive did not contain a .mmdb payload")
+            # Stage the file in the destination directory so the final
+            # rename is on the same filesystem.
+            staged = destination.with_suffix(destination.suffix + ".new")
+            shutil.copyfile(extracted, staged)
+            staged.chmod(0o644)
+            staged.replace(destination)
+        except FetchError:
+            raise
+        except (tarfile.TarError, OSError) as exc:
+            raise FetchError(
+                f"{edition}: extracting/installing the database failed: "
+                f"{type(exc).__name__}: {exc}",
+            ) from exc
         return FetchResult(
             edition=edition,
             destination=destination,

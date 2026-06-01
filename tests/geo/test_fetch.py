@@ -166,6 +166,24 @@ def test_fetch_download_http_error_raises_fetch_error(tmp_path: Path) -> None:
         fetch_geolite_databases(_single_city_config(tmp_path), http_client=client)
 
 
+def test_fetch_corrupt_archive_raises_fetch_error(tmp_path: Path) -> None:
+    """A sha-matching but non-gzip/corrupt archive (tarfile.ReadError) must
+    surface as FetchError, not crash the update (audit review R4a follow-up).
+    """
+    body = b"this is not a gzip tarball, it is a captive-portal HTML page"
+    client = _mock_client(
+        {
+            ".sha256": (200, f"{_sha256(body)}  GeoLite2-City.tar.gz".encode()),
+            "edition_id=GeoLite2-City&license_key=licensekey1234&suffix=tar.gz": (
+                200,
+                body,
+            ),
+        },
+    )
+    with pytest.raises(FetchError):
+        fetch_geolite_databases(_single_city_config(tmp_path), http_client=client)
+
+
 def test_fetch_connect_error_raises_fetch_error(tmp_path: Path) -> None:
     """A transport-level failure (timeout / connection refused) must surface
     as FetchError, not a raw httpx.ConnectError (audit review R4a).
