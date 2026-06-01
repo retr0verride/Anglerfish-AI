@@ -11,10 +11,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 from anglerfish.lure.bridge_client import BridgeStreamChunk, BufferedCommandResult
-from anglerfish.lure.server import _handle_bridge_buffered, _handle_bridge_stream
+from anglerfish.lure.server import (
+    LureServer,
+    _handle_bridge_buffered,
+    _handle_bridge_stream,
+)
 from anglerfish.lure.session import LureSessionContext
 
 
@@ -28,11 +33,17 @@ def _session() -> LureSessionContext:
     )
 
 
-def _container(bridge_client: object) -> SimpleNamespace:
-    return SimpleNamespace(
-        bridge_client=bridge_client,
-        commands=SimpleNamespace(record_bridge_latency=lambda _ms: None),
-        audit=SimpleNamespace(record=lambda *_a, **_k: None),
+def _container(bridge_client: object) -> LureServer:
+    # The handlers only touch .bridge_client / .commands / .audit; a
+    # SimpleNamespace stub is enough. Cast so the handler signatures
+    # (which expect LureServer) type-check.
+    return cast(
+        "LureServer",
+        SimpleNamespace(
+            bridge_client=bridge_client,
+            commands=SimpleNamespace(record_bridge_latency=lambda _ms: None),
+            audit=SimpleNamespace(record=lambda *_a, **_k: None),
+        ),
     )
 
 
