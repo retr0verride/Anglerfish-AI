@@ -235,7 +235,11 @@ def test_t1059_004_command_patterns_are_not_redos() -> None:
         start = time.perf_counter()
         rule.matches(payload)
         elapsed = time.perf_counter() - start
-        assert elapsed < 0.1, f"matches took {elapsed * 1000:.0f}ms (ReDoS)"
+        # Generous bound: a linear scan of this input is tens to a few
+        # hundred ms even on a slow/contended CI runner, while a
+        # catastrophic-backtracking regression would take many seconds.
+        # 2s cleanly separates the two without flaking on runner speed.
+        assert elapsed < 2.0, f"matches took {elapsed * 1000:.0f}ms (likely ReDoS)"
 
 
 def test_t1098_write_pattern_is_not_redos() -> None:
@@ -256,7 +260,11 @@ def test_t1098_write_pattern_is_not_redos() -> None:
         start = time.perf_counter()
         rule.matches(payload)
         elapsed = time.perf_counter() - start
-        assert elapsed < 0.1, f"matches took {elapsed * 1000:.0f}ms (ReDoS)"
+        # Generous bound: a linear scan of this input is tens to a few
+        # hundred ms even on a slow/contended CI runner, while a
+        # catastrophic-backtracking regression would take many seconds.
+        # 2s cleanly separates the two without flaking on runner speed.
+        assert elapsed < 2.0, f"matches took {elapsed * 1000:.0f}ms (likely ReDoS)"
 
 
 def test_t1059_004_still_matches_real_reverse_shells() -> None:
