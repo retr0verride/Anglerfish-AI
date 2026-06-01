@@ -425,4 +425,6 @@ def test_session_open_merges_honeytokens_into_overlay(
         ).json()
     overlay = body["persona_overlay"]
     assert "/root/.aws/credentials" in overlay
-    assert "AKIAPERSESSIONBBBBBB" in overlay["/root/.aws/credentials"]  # gitleaks:allow - synthetic honeytoken, not a real key
+    assert (
+        "AKIAPERSESSIONBBBBBB" in overlay["/root/.aws/credentials"]
+    )  # gitleaks:allow - synthetic honeytoken, not a real key
