@@ -203,8 +203,17 @@ def bridge_serve(
         static_fallback=settings.bridge.wasting_strategy,
         audit_log=audit_log,
     )
-    intent_extractor = IntentExtractor(ai_client)
-    embedding_generator = EmbeddingGenerator(ai_client)
+    # Audit review M6: thread the per-call budgets from config (mirrors
+    # the persistence_classifier wiring below) instead of the extractors'
+    # hardcoded defaults.
+    intent_extractor = IntentExtractor(
+        ai_client,
+        budget_cap_tokens=settings.bridge.intent_extraction_token_cap,
+    )
+    embedding_generator = EmbeddingGenerator(
+        ai_client,
+        budget_cap_tokens=settings.bridge.embedding_token_cap,
+    )
 
     # Stage 9: load the persona registry + open a read-only handle on
     # the sessions DB for the selector. Both are wired only when

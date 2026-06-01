@@ -213,12 +213,12 @@ class OllamaConfig(BaseModel):
         le=10_000_000,
         description=(
             "Per-attacker-session ceiling on tokens billed against the "
-            "embed tier (Stage 8 behavioural clustering). Embed calls "
-            "do not report exact token counts so consumption is "
-            "estimated from input character length (~4 chars/token). "
-            "Default 10_000 covers a session of any practical size "
-            "because the EmbeddingGenerator truncates the input to "
-            "max_command_chars first."
+            "embed tier (Stage 8 behavioural clustering) by the bridge's "
+            "per-session budget machinery. Embed calls do not report exact "
+            "token counts so consumption is estimated from input character "
+            "length (~4 chars/token). This does NOT govern the end-of-"
+            "session EmbeddingGenerator's per-call budget - that is "
+            "embedding_token_cap (audit review M6)."
         ),
     )
 
@@ -568,6 +568,30 @@ class BridgeConfig(BaseModel):
             "Sized for the fast-tier model + the short structured-JSON "
             "output schema. Ignored when "
             "persistence_classifier_llm_enabled is False."
+        ),
+    )
+    intent_extraction_token_cap: int = Field(
+        default=4000,
+        gt=0,
+        le=100_000,
+        description=(
+            "Per-call deep-tier token budget for the Stage 7 end-of-session "
+            "IntentExtractor. Distinct from session_deep_token_cap, which "
+            "caps the deep tier across a session's live commands; this caps "
+            "one summarisation call. Audit review M6: previously hardcoded "
+            "in the extractor and unreachable from config."
+        ),
+    )
+    embedding_token_cap: int = Field(
+        default=2000,
+        gt=0,
+        le=100_000,
+        description=(
+            "Per-call embed-tier token budget for the Stage 8 end-of-session "
+            "EmbeddingGenerator. Distinct from session_embed_token_cap (the "
+            "per-session command-path ceiling); this caps one embedding "
+            "call. Audit review M6: previously hardcoded in the generator "
+            "and unreachable from config."
         ),
     )
 

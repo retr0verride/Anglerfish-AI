@@ -193,6 +193,20 @@ def test_bridge_defaults() -> None:
     assert cfg.enable_fallback is True
 
 
+def test_bridge_intent_and_embedding_token_caps_are_configurable() -> None:
+    """The Stage 7/8 generator budgets are reachable from config (M6)."""
+    cfg = BridgeConfig()
+    assert cfg.intent_extraction_token_cap == 4000
+    assert cfg.embedding_token_cap == 2000
+    custom = BridgeConfig(intent_extraction_token_cap=9000, embedding_token_cap=512)
+    assert custom.intent_extraction_token_cap == 9000
+    assert custom.embedding_token_cap == 512
+    with pytest.raises(ValidationError):
+        BridgeConfig(intent_extraction_token_cap=0)
+    with pytest.raises(ValidationError):
+        BridgeConfig(embedding_token_cap=0)
+
+
 def test_bridge_invalid_hostname() -> None:
     with pytest.raises(ValidationError):
         BridgeConfig(fake_hostname="bad_hostname")
