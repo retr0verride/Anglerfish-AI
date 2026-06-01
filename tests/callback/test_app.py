@@ -223,3 +223,21 @@ def test_callback_hit_and_miss_responses_are_byte_identical(
     # Headers identical (content-type, length, no extra cookies or
     # debug headers that could leak hit/miss).
     assert hit.headers["content-type"] == miss.headers["content-type"]
+
+
+def test_callback_app_opens_and_closes_its_own_reader(
+    session_store: SessionStore,
+    settings: AnglerfishSettings,
+    audit_path: Path,
+) -> None:
+    """With no reader injected the app opens its own SessionStoreReader for
+    the lifespan and closes it on shutdown (audit review M11). Previously
+    only the injected-reader path was tested."""
+    app = create_callback_app(settings, audit=AuditLog(audit_path))
+    with TestClient(app) as c:
+        # The lifespan opened the factory-owned reader; a callback lookup
+        # (get_honeytoken) is served (403 AWS-style), not a 500 from a
+        # never-opened reader.
+        r = c.get("/cb/BBBBBBBBBBBBBBBB")
+        assert r.status_code == 403
+    # Exiting the context ran the shutdown aclose without raising.

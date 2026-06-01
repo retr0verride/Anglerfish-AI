@@ -559,3 +559,15 @@ def test_defense_frozen() -> None:
 def test_defense_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         DefenseConfig(secret_setting="oops")  # type: ignore[call-arg]
+
+
+def test_honeytokens_enabled_requires_callback_base_url() -> None:
+    """enabled=True without callback_base_url is rejected at config load
+    (audit review M12): tokens pointing at nothing are operator-confusing."""
+    from anglerfish.config.models import HoneytokensConfig
+
+    with pytest.raises(ValidationError):
+        HoneytokensConfig(enabled=True)
+    # With a callback URL it is accepted; disabled needs no URL.
+    HoneytokensConfig(enabled=True, callback_base_url="https://honey.example.com")
+    HoneytokensConfig(enabled=False)
