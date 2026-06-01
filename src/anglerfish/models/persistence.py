@@ -16,11 +16,17 @@ read endpoint all reference the same type.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["PersistenceEvent", "PersistenceKind", "PersistenceSource"]
+__all__ = [
+    "PERSISTENCE_KINDS",
+    "PERSISTENCE_SOURCES",
+    "PersistenceEvent",
+    "PersistenceKind",
+    "PersistenceSource",
+]
 
 
 PersistenceKind = Literal["crontab", "systemctl", "authorized_keys"]
@@ -39,7 +45,12 @@ explicitly deferred to a future stage per the Stage 10 design
 "Out of scope" section.
 """
 
+# Membership sets derived from the Literals so consumers (e.g. the
+# audit-tailer's validation) cannot drift from the type (audit review M10).
+PERSISTENCE_KINDS: frozenset[str] = frozenset(get_args(PersistenceKind))
+
 PersistenceSource = Literal["regex", "llm"]
+PERSISTENCE_SOURCES: frozenset[str] = frozenset(get_args(PersistenceSource))
 """How the classifier reached the verdict.
 
 Useful for the operator and the test harness to distinguish

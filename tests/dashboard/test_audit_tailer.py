@@ -1717,3 +1717,19 @@ async def test_honeytoken_placed_malformed_session_id_skipped(
     )
     await tailer._poll_once()
     assert await dashboard_state.get_honeytoken("BADSESSIONIDAAAA") is None
+
+
+def test_tailer_validation_sets_derive_from_model_literals() -> None:
+    """The tailer's intent/persistence/honeytoken validation reuses the
+    model-derived frozensets, so a new Literal member cannot drift out of
+    validation (audit review M10)."""
+    from anglerfish.dashboard import audit_tailer
+    from anglerfish.honeytokens.schema import HONEYTOKEN_KINDS
+    from anglerfish.models.intent import ACTOR_PROFILES, INTENT_CONFIDENCES
+    from anglerfish.models.persistence import PERSISTENCE_KINDS, PERSISTENCE_SOURCES
+
+    assert audit_tailer._VALID_ACTOR_PROFILES is ACTOR_PROFILES
+    assert audit_tailer._VALID_CONFIDENCES is INTENT_CONFIDENCES
+    assert audit_tailer._VALID_PERSISTENCE_KINDS is PERSISTENCE_KINDS
+    assert audit_tailer._VALID_PERSISTENCE_SOURCES is PERSISTENCE_SOURCES
+    assert audit_tailer._VALID_HONEYTOKEN_KINDS is HONEYTOKEN_KINDS

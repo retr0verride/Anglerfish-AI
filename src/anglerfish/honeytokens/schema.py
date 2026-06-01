@@ -24,12 +24,12 @@ from __future__ import annotations
 import base64
 import secrets
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["Honeytoken", "HoneytokenKind", "new_lookup_id"]
+__all__ = ["HONEYTOKEN_KINDS", "Honeytoken", "HoneytokenKind", "new_lookup_id"]
 
 
 HoneytokenKind = Literal["aws", "ssh_key"]
@@ -45,6 +45,10 @@ HoneytokenKind = Literal["aws", "ssh_key"]
 DB connection strings + generic API tokens are deferred to v1.1
 per the Stage 11 design Out of scope.
 """
+
+# Membership set derived from the Literal so the audit-tailer's validation
+# cannot drift from the type (audit review M10).
+HONEYTOKEN_KINDS: frozenset[str] = frozenset(get_args(HoneytokenKind))
 
 
 # 16 chars of RFC 4648 base32 = 80 bits. AWS access-key-IDs are

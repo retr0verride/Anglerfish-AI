@@ -14,12 +14,18 @@ type without circular imports back into the intel package.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["IntentSummary"]
+__all__ = [
+    "ACTOR_PROFILES",
+    "INTENT_CONFIDENCES",
+    "ActorProfile",
+    "IntentConfidence",
+    "IntentSummary",
+]
 
 
 ActorProfile = Literal[
@@ -36,8 +42,13 @@ ActorProfile = Literal[
 * ``exploratory`` - human-driven recon with no clear goal
 """
 
+# Membership sets derived from the Literals so consumers (e.g. the
+# audit-tailer's validation) cannot drift from the type (audit review M10).
+ACTOR_PROFILES: frozenset[str] = frozenset(get_args(ActorProfile))
+
 
 IntentConfidence = Literal["low", "medium", "high"]
+INTENT_CONFIDENCES: frozenset[str] = frozenset(get_args(IntentConfidence))
 """LLM's self-reported confidence in the produced summary.
 
 The Stage 7 extractor also emits ``confidence="low"`` on the
