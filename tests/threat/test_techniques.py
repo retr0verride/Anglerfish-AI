@@ -40,18 +40,6 @@ def test_rule_matches_empty_command() -> None:
     assert rule.matches("   ") is False
 
 
-def test_rule_matches_argument_pattern() -> None:
-    rule = TechniqueRule(
-        id="T0",
-        name="x",
-        description="d",
-        commands=("cat",),
-        argument_patterns=(re.compile(r"/etc/shadow"),),
-    )
-    # The command match alone triggers — argument_patterns is an OR.
-    assert rule.matches("cat /etc/passwd") is True
-
-
 def test_rule_matches_command_pattern() -> None:
     rule = TechniqueRule(
         id="T0",
@@ -62,20 +50,6 @@ def test_rule_matches_command_pattern() -> None:
     assert rule.matches("history -c") is True
     assert rule.matches("history -ca") is True
     assert rule.matches("ls") is False
-
-
-def test_rule_argument_pattern_does_not_match_command_name() -> None:
-    """argument_patterns are only applied to argv[1:]."""
-    rule = TechniqueRule(
-        id="T0",
-        name="x",
-        description="d",
-        commands=("ls",),
-        argument_patterns=(re.compile(r"\bls\b"),),
-    )
-    # tokens[1:] for "ls" alone is empty, so the pattern can't match,
-    # but the command name match makes this True anyway.
-    assert rule.matches("ls") is True
 
 
 def test_rule_falls_back_to_whitespace_split_on_shlex_error() -> None:
@@ -139,6 +113,85 @@ def test_indicator_removal_log_truncation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Command-context false positives (audit review R2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["apt install vim", "apt-get install -y curl", "pip install requests", "make install"],
+)
+def test_package_manager_install_does_not_trip_t1543(command: str) -> None:
+    """A package-manager install must not match T1543 (audit review R2a).
+
+    The head is not a service-management command; only the loose 'install'
+    keyword matched the old cross-head argument_patterns.
+    """
+    hits = {r.id for r in TECHNIQUES if r.matches(command)}
+    assert "T1543" not in hits, f"{command!r} wrongly matched T1543: {sorted(hits)}"
+
+
+def test_git_show_does_not_trip_t1016() -> None:
+    """`git show` must not match network-discovery T1016 (audit review R2a)."""
+    hits = {r.id for r in TECHNIQUES if r.matches("git show HEAD")}
+    assert "T1016" not in hits, sorted(hits)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "systemctl enable evil.service",
+        "systemctl start evil",
+        "service x start",
+        "update-rc.d evil defaults",
+    ],
+)
+def test_service_commands_still_match_t1543(command: str) -> None:
+    hits = {r.id for r in TECHNIQUES if r.matches(command)}
+    assert "T1543" in hits, f"{command!r} should match T1543: {sorted(hits)}"
+
+
+@pytest.mark.parametrize("command", ["ip addr show", "ifconfig", "route -n", "arp -a"])
+def test_network_discovery_commands_still_match_t1016(command: str) -> None:
+    hits = {r.id for r in TECHNIQUES if r.matches(command)}
+    assert "T1016" in hits, f"{command!r} should match T1016: {sorted(hits)}"
+
+
+def test_etc_os_release_read_still_matches_t1082() -> None:
+    """Cross-command read of os-release stays detected (now via command_patterns)."""
+    hits = {r.id for r in TECHNIQUES if r.matches("cat /etc/os-release")}
+    assert "T1082" in hits, sorted(hits)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat /etc/shadow", "grep root /etc/sudoers", "less /root/.ssh/authorized_keys"],
+)
+def test_reading_credential_files_does_not_trip_t1098(command: str) -> None:
+    """Read-only credential-file access is T1003, not persistence (audit review R2b).
+
+    T1098 (Account Manipulation) sets persistence_attempted; a plain read
+    must not flip it.
+    """
+    hits = {r.id for r in TECHNIQUES if r.matches(command)}
+    assert "T1098" not in hits, f"{command!r} wrongly matched T1098: {sorted(hits)}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "ssh-rsa AAAA" >> /root/.ssh/authorized_keys',
+        "vim /etc/sudoers",
+        "echo 'attacker ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
+        "visudo",
+    ],
+)
+def test_writing_credential_files_still_matches_t1098(command: str) -> None:
+    hits = {r.id for r in TECHNIQUES if r.matches(command)}
+    assert "T1098" in hits, f"{command!r} should match T1098: {sorted(hits)}"
+
+
+# ---------------------------------------------------------------------------
 # ReDoS hardening (audit L5)
 # ---------------------------------------------------------------------------
 
@@ -161,6 +214,27 @@ def test_t1059_004_command_patterns_are_not_redos() -> None:
     payloads = [
         "ls " + "|" * 50000 + " x",  # pattern 1: pipes, no keyword
         "echo " + "bash -i " * 6000 + "x",  # pattern 2: many `bash -i`, no target
+    ]
+    for payload in payloads:
+        start = time.perf_counter()
+        rule.matches(payload)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.1, f"matches took {elapsed * 1000:.0f}ms (ReDoS)"
+
+
+def test_t1098_write_pattern_is_not_redos() -> None:
+    """The T1098 write-context pattern stays linear on adversarial input.
+
+    The bounded ``{0,80}`` gap caps per-start-position work, so even a long
+    run of redirect characters (one match start per ``>``) cannot pin the
+    matcher. Mirrors the T1059.004 ReDoS bar above.
+    """
+    import time
+
+    rule = next(r for r in TECHNIQUES if r.id == "T1098")
+    payloads = [
+        ">" * 50000 + " x",  # a match start at every redirect char, no target
+        "vim " + "a" * 50000,  # editor head, long no-target tail
     ]
     for payload in payloads:
         start = time.perf_counter()

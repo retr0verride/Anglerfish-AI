@@ -6,16 +6,24 @@ Anglerfish observations with other sources. Adding a new rule means
 adding a new :class:`TechniqueRule` here; the scorer pulls in
 :data:`TECHNIQUES` unconditionally.
 
-Three kinds of matches are supported per rule:
+Two kinds of matches are supported per rule:
 
 * ``commands`` — exact command-name match against the first token of
   the command line (after :mod:`shlex` parsing). Absolute paths are
   collapsed to the basename so ``/usr/bin/whoami`` and ``whoami`` both
   match the rule.
-* ``argument_patterns`` — regex applied to the argument portion of
-  the command (everything after the first token).
 * ``command_patterns`` — regex applied to the full command line. Use
-  for cross-token patterns (``cat /etc/shadow``, pipelines, URLs).
+  for cross-token patterns (``cat /etc/shadow``, pipelines, URLs) and
+  for "this command head touched this file" matches.
+
+Audit review R2: an earlier ``argument_patterns`` kind matched the
+argument portion regardless of the command head, so ``apt install``
+tripped a systemd-service rule keyed on ``install`` and ``git show``
+tripped a network-discovery rule keyed on ``show``. The head-match
+short-circuit meant that branch only ever ran for an *unrelated* head,
+so it produced only false positives; its one legitimate use (reading
+``/etc/os-release`` via any command) moved to ``command_patterns``,
+where cross-command matching belongs.
 """
 
 from __future__ import annotations
@@ -36,7 +44,6 @@ class TechniqueRule:
     name: str
     description: str
     commands: tuple[str, ...] = ()
-    argument_patterns: tuple[re.Pattern[str], ...] = ()
     command_patterns: tuple[re.Pattern[str], ...] = ()
     weight: int = field(default=5)
     persistence: bool = False
@@ -64,11 +71,6 @@ class TechniqueRule:
         if head in self.commands:
             return True
 
-        if self.argument_patterns:
-            args_text = " ".join(tokens[1:])
-            if any(pat.search(args_text) for pat in self.argument_patterns):
-                return True
-
         return any(pat.search(command_line) for pat in self.command_patterns)
 
 
@@ -94,7 +96,10 @@ TECHNIQUES: tuple[TechniqueRule, ...] = (
             "lshw",
             "dmidecode",
         ),
-        argument_patterns=(
+        command_patterns=(
+            # Cross-command read of an OS-identity file (e.g. `cat
+            # /etc/os-release`); a full-line match, not an arg match
+            # (audit review R2a).
             re.compile(
                 r"/etc/(os-release|issue|debian_version|redhat-release|lsb-release)",
             ),
@@ -120,7 +125,10 @@ TECHNIQUES: tuple[TechniqueRule, ...] = (
         name="System Network Configuration Discovery",
         description="Inspect network interfaces and routing.",
         commands=("ifconfig", "iwconfig", "ip", "route", "arp"),
-        argument_patterns=(re.compile(r"\b(addr|link|route|neigh|show)\b"),),
+        # Audit review R2a: the head set already covers `ip addr`,
+        # `ifconfig`, `route`, `arp` etc. The old argument_patterns
+        # (\b(addr|link|route|neigh|show)\b) only ever ran for an
+        # unrelated head, where it false-matched `git show`. Dropped.
         weight=3,
     ),
     TechniqueRule(
@@ -219,8 +227,20 @@ TECHNIQUES: tuple[TechniqueRule, ...] = (
         id="T1098",
         name="Account Manipulation",
         description="SSH key or password manipulation, sudoers edits.",
-        commands=("passwd", "usermod", "chpasswd", "gpasswd"),
-        command_patterns=(re.compile(r"authorized_keys|/etc/sudoers|/etc/shadow"),),
+        commands=("passwd", "usermod", "chpasswd", "gpasswd", "visudo"),
+        command_patterns=(
+            # Audit review R2b: require a write/modify context near the
+            # credential file. Read-only access (`cat /etc/shadow`, `grep
+            # root /etc/sudoers`) is OS Credential Dumping (T1003), not
+            # Account Manipulation, and must not flip persistence_attempted.
+            # The {0,200} gap is bounded so the pattern stays linear (no
+            # ReDoS), matching the T1059.004 hardening above.
+            re.compile(
+                r"(?:>>?|\btee\b|sed\s+-i|\bvim?\b|\bnano\b)"
+                r"[^\n]{0,80}?"
+                r"(?:authorized_keys|/etc/sudoers|/etc/shadow)",
+            ),
+        ),
         weight=9,
         persistence=True,
     ),
@@ -237,7 +257,11 @@ TECHNIQUES: tuple[TechniqueRule, ...] = (
         name="Create or Modify System Process",
         description="Install or enable system services.",
         commands=("systemctl", "service", "update-rc.d", "chkconfig"),
-        argument_patterns=(re.compile(r"\b(enable|start|install)\b"),),
+        # Audit review R2a: the head set covers the service-management
+        # commands. The old argument_patterns (\b(enable|start|install)\b)
+        # only ran for an unrelated head, so `apt|pip|make install` all
+        # false-matched on the bare word `install`. Dropped; the
+        # command_patterns below still catch direct unit-file writes.
         command_patterns=(re.compile(r"/etc/systemd/|/etc/init\.d/"),),
         weight=8,
         persistence=True,
