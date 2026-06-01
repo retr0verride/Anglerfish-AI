@@ -1567,24 +1567,28 @@ async def test_honeytoken_placed_persists_per_session_token(
     assert loaded.session_id == sid
 
 
-async def test_honeytoken_placed_persists_static_base_with_nulls(
+async def test_honeytoken_placed_persists_null_provenance(
     dashboard_state: DashboardState,
     tmp_path: Path,
 ) -> None:
-    """source_ip + session_id = null is the static-base shape; tailer accepts it."""
+    """A honeytoken_placed event with source_ip + session_id = null parses
+    and persists with null provenance (the event/column shape stays
+    nullable; the tailer tolerates it defensively).
+    """
     tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
     _append(
         tailer.audit_path,
         _honeytoken_placed_line(
-            token_id="STATICAAAAAAAAAA",
+            token_id="NULLPROVAAAAAAAA",
             source_ip=None,
             session_id=None,
         ),
     )
     await tailer._poll_once()
-    loaded = await dashboard_state.get_honeytoken("STATICAAAAAAAAAA")
+    loaded = await dashboard_state.get_honeytoken("NULLPROVAAAAAAAA")
     assert loaded is not None
-    assert loaded.is_static_base()
+    assert loaded.source_ip is None
+    assert loaded.session_id is None
 
 
 async def test_honeytoken_placed_replay_is_idempotent(

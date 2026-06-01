@@ -250,10 +250,8 @@ class SessionStoreReader:
     ) -> list[Honeytoken]:
         """Stage 11: per-session honeytokens for the bridge session-open seed.
 
-        Oldest first. Excludes static-base tokens (those have
-        ``source_ip IS NULL``); slice 11.3's bridge integration
-        merges static + per-IP rows separately into the lure
-        ``fakefs_overlay``.
+        Oldest first; the bridge merges these into the lure
+        ``fakefs_overlay`` at session open (slice 11.3).
         """
         self._require_open()
         async with self._lock:
@@ -273,25 +271,6 @@ class SessionStoreReader:
             ORDER BY created_at ASC, id ASC
             """,
             (source_ip,),
-        )
-        return [_row_to_honeytoken(row) for row in cur.fetchall()]
-
-    async def list_static_honeytokens(self) -> list[Honeytoken]:
-        """Stage 11: operator-defined static-base tokens (source_ip IS NULL)."""
-        self._require_open()
-        async with self._lock:
-            return await asyncio.to_thread(self._list_static_honeytokens_locked)
-
-    def _list_static_honeytokens_locked(self) -> list[Honeytoken]:
-        assert self._conn is not None  # noqa: S101
-        cur = self._conn.execute(
-            """
-            SELECT id, kind, payload, callback_url, placed_at,
-                   source_ip, session_id, created_at
-            FROM honeytokens
-            WHERE source_ip IS NULL
-            ORDER BY created_at ASC, id ASC
-            """,
         )
         return [_row_to_honeytoken(row) for row in cur.fetchall()]
 

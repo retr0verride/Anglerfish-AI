@@ -315,9 +315,10 @@ class AuditTailer:
         event_type = event.get("event_type")
         if not isinstance(event_type, str):
             return
-        # Stage 11: honeytoken_placed events for static-base tokens
-        # carry session_id=null intentionally. Dispatch before the
-        # session_id parse so those don't fall through the gate.
+        # Stage 11: honeytoken_placed is registry-bound, not
+        # session-update-bound, so route it by event_type here, before
+        # the session_id-keyed dispatch below (which has no handler for
+        # it and would drop it).
         if event_type == "bridge.honeytoken_placed":
             await self._handle_honeytoken_placed(event)
             return
@@ -935,10 +936,8 @@ def _parse_honeytoken_placed_event(event: dict[str, Any]) -> Honeytoken | None:
 
     Returns :data:`None` (with a warning log) when any required
     field is missing or type-mismatched. Mirrors the slice 10.2
-    persistence parser shape.
-
-    Static-base tokens carry ``source_ip=null`` + ``session_id=null``
-    intentionally; the parser preserves that.
+    persistence parser shape. ``source_ip`` / ``session_id`` are
+    nullable in the event shape and the parser preserves a null.
     """
     token_id = event.get("token_id")
     kind = event.get("kind")

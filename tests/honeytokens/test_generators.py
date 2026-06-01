@@ -106,12 +106,11 @@ def test_generate_aws_provenance_round_trips() -> None:
     assert token.session_id == sid
 
 
-def test_generate_aws_static_base_when_no_provenance() -> None:
+def test_generate_aws_without_provenance_leaves_provenance_none() -> None:
     gen = HoneytokenGenerator(callback_base_url="https://honey.example.com")
     token = gen.generate_aws()
     assert token.source_ip is None
     assert token.session_id is None
-    assert token.is_static_base()
 
 
 # ---------------------------------------------------------------------------
@@ -247,18 +246,3 @@ def test_honeytoken_rejects_malformed_id() -> None:
             placed_at="/root/.aws/credentials",
             created_at=datetime(2026, 5, 26, tzinfo=UTC),
         )
-
-
-def test_honeytoken_is_static_base_helper() -> None:
-    token = Honeytoken(
-        id="A" * 16,
-        kind="aws",
-        payload="x",
-        callback_url="https://x/cb/x",
-        placed_at="/root/.aws/credentials",
-        created_at=datetime(2026, 5, 26, tzinfo=UTC),
-    )
-    assert token.is_static_base() is True
-    sid = uuid4()
-    other = token.model_copy(update={"source_ip": "1.1.1.1", "session_id": sid})
-    assert other.is_static_base() is False
