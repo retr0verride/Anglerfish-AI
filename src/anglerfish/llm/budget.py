@@ -103,6 +103,24 @@ class TokenBudget:
         else:
             raise ValueError(f"unknown role: {role!r}")
 
+    def settle(self, role: LLMRole, reserved: int, actual: int) -> None:
+        """Replace a prior ``reserved`` consumption with the ``actual`` usage.
+
+        Audit review R3: :meth:`LLMClient.stream_chat` consumes a projected
+        reservation under the lock *before* streaming (so concurrent
+        same-session streams cannot overshoot the cap), then calls this when
+        the stream ends to swap the reservation for the tokens Ollama
+        actually reported - or ``actual=0`` if the stream failed or was
+        abandoned before its terminal usage chunk. ``consumed`` is clamped
+        at zero so an over-reservation cannot drive the counter negative.
+        """
+        if reserved < 0:
+            raise ValueError(f"reserved must be >= 0, got {reserved}")
+        if actual < 0:
+            raise ValueError(f"actual must be >= 0, got {actual}")
+        new_consumed = max(0, self._consumed(role) + actual - reserved)
+        self._set_consumed(role, new_consumed)
+
     def as_dict(self) -> dict[str, dict[str, int]]:
         """Return a JSON-serialisable per-role consumed/remaining/cap snapshot."""
         return {
@@ -128,6 +146,16 @@ class TokenBudget:
 
     def _consumed(self, role: LLMRole) -> int:
         return self._cap_and_consumed(role)[1]
+
+    def _set_consumed(self, role: LLMRole, value: int) -> None:
+        if role is LLMRole.FAST:
+            self.consumed_fast = value
+        elif role is LLMRole.DEEP:
+            self.consumed_deep = value
+        elif role is LLMRole.EMBED:
+            self.consumed_embed = value
+        else:
+            raise ValueError(f"unknown role: {role!r}")
 
     def _cap_and_consumed(self, role: LLMRole) -> tuple[int, int]:
         if role is LLMRole.FAST:

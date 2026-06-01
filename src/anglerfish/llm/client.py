@@ -251,10 +251,11 @@ class LLMClient:
         When ``budget`` is supplied, the per-role remaining cap is
         checked *before* the request is sent - an exhausted role
         raises :class:`BudgetExhaustedError` with no Ollama traffic
-        and no chunks yielded. The terminal chunk's usage is added to
-        ``budget.consumed_<role>`` after the stream completes
-        successfully; partial-stream failures do not consume budget
-        (Ollama would not have charged for it either).
+        and no chunks yielded. A projected reservation is taken under
+        the budget lock before streaming and reconciled against the
+        terminal chunk's actual usage when the stream ends; partial or
+        abandoned streams release the reservation and consume nothing
+        net (Ollama would not have charged for it either).
 
         Raises:
             BudgetExhaustedError: ``budget`` supplied and exhausted.
@@ -263,24 +264,38 @@ class LLMClient:
             OllamaResponseError: 4xx response before the first chunk.
         """
         if budget is None:
-            async for chunk in self._stream_chat(messages, role=role, budget=None):
+            async for chunk in self._stream_chat(messages, role=role):
                 yield chunk
             return
-        # Audit M2: hold the budget lock across the whole stream so
-        # concurrent same-session streams cannot overshoot the cap.
+        # Audit review R3: reserve the projected cost under the lock, then
+        # stream WITHOUT holding it. The previous code held budget.lock
+        # across the `yield`s, so a consumer that broke out of the stream
+        # early suspended this generator with the lock still held, and the
+        # next command on the same session deadlocked acquiring the same
+        # per-session lock. The reservation still serialises concurrent
+        # same-session streams against the cap (the M2 invariant); the
+        # reconcile in `finally` swaps it for the actual usage whether the
+        # stream completed, failed, or was abandoned.
+        projected = self._config.max_response_tokens
         async with budget.lock:
-            async for chunk in self._stream_chat(messages, role=role, budget=budget):
+            budget.check(role)
+            budget.consume(role, projected)
+        actual = 0
+        try:
+            async for chunk in self._stream_chat(messages, role=role):
+                if chunk.done and chunk.usage is not None:
+                    actual = chunk.usage.prompt_tokens + chunk.usage.completion_tokens
                 yield chunk
+        finally:
+            async with budget.lock:
+                budget.settle(role, projected, actual)
 
     async def _stream_chat(
         self,
         messages: Sequence[ChatMessage],
         *,
         role: LLMRole,
-        budget: TokenBudget | None,
     ) -> AsyncIterator[ChatChunk]:
-        if budget is not None:
-            budget.check(role)
         payload: dict[str, Any] = {
             "model": self.model_for(role),
             "stream": True,
@@ -305,11 +320,9 @@ class LLMClient:
                         f"{body_preview!r}",
                     )
                 async for chunk in self._iter_stream_lines(response):
-                    if chunk.done and chunk.usage is not None and budget is not None:
-                        budget.consume(
-                            role,
-                            chunk.usage.prompt_tokens + chunk.usage.completion_tokens,
-                        )
+                    # Budget accounting (reserve + reconcile) lives in the
+                    # public stream_chat wrapper (audit review R3); this
+                    # inner generator is purely the HTTP/NDJSON mechanics.
                     yield chunk
         except httpx.HTTPError as exc:
             raise OllamaUnavailableError(
