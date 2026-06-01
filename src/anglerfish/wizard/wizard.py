@@ -361,10 +361,24 @@ def prompt_for_answers(
 
     host = ollama_endpoint.host
     if host is not None and host not in {"127.0.0.1", "::1", "localhost"}:
+        # Audit review M8: mirror OllamaConfig._validate_endpoint_host here so
+        # a remote-Ollama config the runtime would reject at first boot is
+        # caught while the operator is still at the wizard. A non-loopback
+        # endpoint must be an IP literal (hostnames are rejected - DNS could
+        # change between validation and use) and the trusted IP must equal it.
+        host_bare = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+        try:
+            endpoint_ip = ipaddress.ip_address(host_bare)
+        except ValueError as exc:
+            raise ValueError(
+                f"Ollama endpoint host {host!r} is not an IP literal; a "
+                "non-loopback endpoint must use an IP address (hostnames are "
+                "rejected because DNS could change between validation and use).",
+            ) from exc
         trusted_default = (
             str(defaults.ollama_trusted_remote_host)
             if defaults is not None and defaults.ollama_trusted_remote_host is not None
-            else host or ""
+            else str(endpoint_ip)
         )
         trusted_str = prompt(
             "Trusted remote Ollama IP (must match endpoint host)",
@@ -374,6 +388,11 @@ def prompt_for_answers(
             ollama_trusted = ipaddress.ip_address(trusted_str)
         except ValueError as exc:
             raise ValueError(f"invalid trusted remote IP: {trusted_str!r}") from exc
+        if ollama_trusted != endpoint_ip:
+            raise ValueError(
+                f"trusted remote IP {ollama_trusted!s} does not match the "
+                f"Ollama endpoint host {endpoint_ip!s}.",
+            )
 
     ollama_model = prompt(
         "Ollama model tag",
