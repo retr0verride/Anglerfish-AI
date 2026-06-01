@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -161,3 +162,74 @@ async def test_rotation_skips_undecryptable_rows(tmp_path: Path) -> None:
     )
     assert result.rows_rotated == 3
     assert result.rows_skipped == 1
+
+
+async def test_rotation_clears_orphaned_wal_sidecars(tmp_path: Path) -> None:
+    """Rotation must not leave the source DB's -wal/-shm orphaned beside
+    the swapped-in DB, where SQLite could replay them and revert it
+    (audit review R6).
+    """
+    db = tmp_path / "creds.db"
+    old_key, new_key = _key(1), _key(2)
+    async with CredentialStore(_config(db, old_key)) as store:
+        await _populate(store, count=3)
+
+    # Fold any real WAL into the main file (so the rows are durable in the
+    # main DB), then simulate an unclean shutdown that left WAL sidecars.
+    with closing(sqlite3.connect(str(db))) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    wal = db.with_name(db.name + "-wal")
+    shm = db.with_name(db.name + "-shm")
+    wal.write_bytes(b"")
+    shm.write_bytes(b"")
+
+    rotate_key(
+        db_path=db,
+        old_cipher=CredentialCipher(old_key),
+        new_cipher=CredentialCipher(new_key),
+    )
+
+    # No journal orphaned beside the live DB after the swap.
+    assert not wal.exists()
+    assert not shm.exists()
+    # The data survived and decrypts under the new key.
+    async with CredentialStore(_config(db, new_key)) as store:
+        records = await store.query(limit=100)
+    assert len(records) == 3
+
+
+async def test_rotation_swap_failure_raises_rotation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OSError during the file swap surfaces as RotationError (R6)."""
+    import anglerfish.credentials.rotation as rotation_mod
+
+    db = tmp_path / "creds.db"
+    async with CredentialStore(_config(db, _key(1))) as store:
+        await _populate(store, count=2)
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(rotation_mod.shutil, "move", _boom)
+    with pytest.raises(RotationError, match="swap failed"):
+        rotate_key(
+            db_path=db,
+            old_cipher=CredentialCipher(_key(1)),
+            new_cipher=CredentialCipher(_key(2)),
+        )
+
+
+async def test_rotation_corrupt_source_db_raises_rotation_error(tmp_path: Path) -> None:
+    """A non-SQLite / corrupt source file surfaces as RotationError, not a
+    bare sqlite3.Error (R6 - the error path is now exercised).
+    """
+    db = tmp_path / "creds.db"
+    db.write_bytes(b"this is definitely not a sqlite database")
+    with pytest.raises(RotationError):
+        rotate_key(
+            db_path=db,
+            old_cipher=CredentialCipher(_key(1)),
+            new_cipher=CredentialCipher(_key(2)),
+        )
