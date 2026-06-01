@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import pytest
 from pydantic import SecretStr, ValidationError
@@ -15,6 +16,7 @@ from anglerfish.config.models import (
     DefenseConfig,
     LogLevel,
     OllamaConfig,
+    SessionStoreConfig,
 )
 
 
@@ -179,3 +181,50 @@ def test_chunk_cap_equal_to_response_cap_accepted(
         ollama=OllamaConfig(max_response_chars=4096, max_chunk_chars=4096),
     )
     assert s.ollama.max_chunk_chars == 4096
+
+
+# ---------------------------------------------------------------------------
+# data_dir governs all on-disk state (audit review M9)
+# ---------------------------------------------------------------------------
+
+
+def test_data_dir_rebases_all_state_paths(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """ANGLERFISH_DATA_DIR relocates every default state path at once (M9)."""
+    s = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        data_dir=Path("/data/anglerfish"),
+    )
+    assert s.sessions.database_path == Path("/data/anglerfish/sessions.db")
+    assert s.credentials.database_path == Path("/data/anglerfish/credentials.db")
+    assert s.fingerprint.tor_exit_list_path == Path("/data/anglerfish/tor-exits.txt")
+
+
+def test_data_dir_default_leaves_packaged_paths(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    s = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+    )
+    assert s.sessions.database_path == Path("/var/lib/anglerfish/sessions.db")
+    assert s.credentials.database_path == Path("/var/lib/anglerfish/credentials.db")
+
+
+def test_data_dir_preserves_explicit_path_override(
+    session_secret: str,
+    encryption_key_b64: str,
+) -> None:
+    """An operator's explicit path is not rebased; defaults still move (M9)."""
+    s = AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        data_dir=Path("/data/anglerfish"),
+        sessions=SessionStoreConfig(database_path=Path("/mnt/fast/sessions.db")),
+    )
+    assert s.sessions.database_path == Path("/mnt/fast/sessions.db")
+    assert s.credentials.database_path == Path("/data/anglerfish/credentials.db")
