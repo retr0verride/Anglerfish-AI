@@ -299,6 +299,60 @@ async def test_command_after_restart_rehydrates_turns_from_store(
     assert [t.command for t in snap.turns] == ["whoami", "uname -a", "id"]
 
 
+async def test_replayed_command_after_crash_is_not_duplicated(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """Re-reading an already-recorded command line must not duplicate the
+    turn (audit review R1 follow-up).
+
+    The offset cache and the per-turn store write are not atomic; a crash
+    between them rewinds the tailer over a committed command line. On the
+    next run that line re-reads as an accumulator miss, and the rehydrate
+    path must recognise it as a replay rather than append it again.
+    """
+    sid = uuid4()
+    sid_s = str(sid)
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.9",
+            username="root",
+            session_id=sid_s,
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    offset_after_open = tailer._offset  # before the command line
+
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.9",
+            command="whoami",
+            session_id=sid_s,
+        ),
+    )
+    await tailer._poll_once()
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert [t.command for t in snap.turns] == ["whoami"]
+
+    # Simulate a crash whose offset save did not land: a fresh tailer
+    # (empty accumulators) resumes BEFORE the already-recorded command
+    # line and re-reads it.
+    restarted = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    restarted._offset = offset_after_open
+    await restarted._poll_once()
+
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert [t.command for t in snap.turns] == ["whoami"]  # not duplicated
+
+
 async def test_open_after_command_upgrades_placeholder_metadata(
     dashboard_state: DashboardState,
     tmp_path: Path,

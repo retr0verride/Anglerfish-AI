@@ -433,6 +433,23 @@ class AuditTailer:
             #    source_ip/username.
             persisted = await self._state.store.get_session(session_id)
             if persisted is not None:
+                # Idempotent replay guard (review R1 follow-up): the offset
+                # cache and the per-turn store write are not atomic, so a
+                # crash between record_turn and the offset save rewinds the
+                # tailer over already-recorded command lines. On restart
+                # those lines re-read as accumulator misses. If this turn
+                # (same timestamp + command + source) is already persisted,
+                # it is such a replay - skip it WITHOUT caching the
+                # accumulator, so the next re-read line is re-checked the
+                # same way and a genuinely new command (absent from the
+                # persisted turns) still records and seeds the accumulator.
+                if any(
+                    t.timestamp == turn.timestamp
+                    and t.command == turn.command
+                    and t.source == turn.source
+                    for t in persisted.turns
+                ):
+                    return
                 snapshot = persisted
             else:
                 source_ip = _str_field(event, "source_ip", default="unknown")
