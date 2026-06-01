@@ -468,9 +468,13 @@ class SessionStore:
         ids: list[UUID],
     ) -> dict[UUID, tuple[str, str | None]]:
         assert self._conn is not None  # noqa: S101
+        # `placeholders` is a run of "?" bind markers (one per id), never an
+        # interpolated value, so the IN-clause build is not an injection
+        # vector. ruff S608 and bandit B608 both anchor the diagnostic to
+        # the first line of the string; suppress both there.
         placeholders = ",".join("?" * len(ids))
         cur = self._conn.execute(
-            f"SELECT session_id, source_ip, persona FROM sessions "  # noqa: S608 - placeholders are "?"*N, not interpolated values
+            "SELECT session_id, source_ip, persona FROM sessions "  # noqa: S608  # nosec B608
             f"WHERE session_id IN ({placeholders})",
             [str(i) for i in ids],
         )
