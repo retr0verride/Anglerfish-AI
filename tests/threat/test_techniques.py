@@ -184,11 +184,27 @@ def test_reading_credential_files_does_not_trip_t1098(command: str) -> None:
         "vim /etc/sudoers",
         "echo 'attacker ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
         "visudo",
+        # cp/mv/install/dd writes with the credential file as the
+        # destination (audit review R2 follow-up).
+        "cp /tmp/k /root/.ssh/authorized_keys",
+        "mv /tmp/k /root/.ssh/authorized_keys",
+        "install -m 600 /tmp/k /root/.ssh/authorized_keys",
+        "cp evil /etc/sudoers",
+        "dd if=/tmp/k of=/root/.ssh/authorized_keys",
     ],
 )
 def test_writing_credential_files_still_matches_t1098(command: str) -> None:
     hits = {r.id for r in TECHNIQUES if r.matches(command)}
     assert "T1098" in hits, f"{command!r} should match T1098: {sorted(hits)}"
+
+
+def test_copying_credential_file_away_does_not_trip_t1098() -> None:
+    """`cp <credfile> /elsewhere` reads the file (T1003/exfil), not Account
+    Manipulation; only the file as the cp destination is a write
+    (audit review R2 follow-up).
+    """
+    hits = {r.id for r in TECHNIQUES if r.matches("cp /etc/sudoers /tmp/steal")}
+    assert "T1098" not in hits, sorted(hits)
 
 
 # ---------------------------------------------------------------------------

@@ -233,13 +233,27 @@ TECHNIQUES: tuple[TechniqueRule, ...] = (
             # credential file. Read-only access (`cat /etc/shadow`, `grep
             # root /etc/sudoers`) is OS Credential Dumping (T1003), not
             # Account Manipulation, and must not flip persistence_attempted.
-            # The {0,200} gap is bounded so the pattern stays linear (no
-            # ReDoS), matching the T1059.004 hardening above.
+            # Redirect / tee / in-place editors write the file mid-line:
             re.compile(
                 r"(?:>>?|\btee\b|sed\s+-i|\bvim?\b|\bnano\b)"
                 r"[^\n]{0,80}?"
                 r"(?:authorized_keys|/etc/sudoers|/etc/shadow)",
             ),
+            # cp/mv/install with the credential file as the FINAL argument
+            # (the destination) is a write. The end-anchor avoids matching
+            # `cp /etc/sudoers /tmp/x`, which reads the file (T1003 turf).
+            re.compile(
+                r"\b(?:cp|mv|install)\b"
+                r"[^\n]{0,200}?"
+                r"(?:authorized_keys|/etc/sudoers|/etc/shadow)\s*$",
+            ),
+            # dd writing to the credential file (of=...).
+            re.compile(
+                r"\bdd\b[^\n]{0,80}?\bof=\S{0,200}?"
+                r"(?:authorized_keys|/etc/sudoers|/etc/shadow)",
+            ),
+            # All gaps are bounded so each pattern stays linear (no ReDoS),
+            # matching the T1059.004 hardening above.
         ),
         weight=9,
         persistence=True,
