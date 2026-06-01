@@ -15,14 +15,22 @@ independently re-verified before they are marked closed.
 
 | ID | Finding | Sev | File | Status |
 |----|---------|-----|------|--------|
-| R1 | Commands dropped after dashboard restart (positional turn-diff vs empty post-restart accumulator) | high | `dashboard/audit_tailer.py` / `dashboard/state.py` | open |
-| R2a | `argument_patterns` match across unrelated command heads (false persistence/discovery hits) | high | `threat/techniques.py` | open |
-| R2b | T1098 flips `persistence_attempted` on read-only credential-file access | high | `threat/techniques.py` | open |
-| R3 | `stream_chat` holds the per-session budget lock across a caller-controlled loop (deadlock on reuse) | high | `llm/client.py` | open |
-| R4a | `fetch_geolite_databases` lets httpx/parse errors escape its FetchError-only contract | high | `geo/fetch.py` | open |
-| R4b | `GeoLookup.lookup()` catch too narrow for its "never raises" contract (corrupt MMDB) | medium | `geo/lookup.py` | open |
-| R5 | Static-base honeytoken half-feature (read path + config field + docstrings, no producer) | high | `honeytokens/`, `config/models.py`, `sessions/` | open |
-| R6 | Rotation leaves stale WAL sidecars that revert the new DB after an unclean shutdown | medium | `credentials/rotation.py` | open |
+| R1 | Commands dropped after dashboard restart (positional turn-diff vs empty post-restart accumulator) | high | `dashboard/audit_tailer.py` / `dashboard/state.py` | **closed** `28808bb` |
+| R2a | `argument_patterns` match across unrelated command heads (false persistence/discovery hits) | high | `threat/techniques.py` | **closed** `94836a1` |
+| R2b | T1098 flips `persistence_attempted` on read-only credential-file access | high | `threat/techniques.py` | **closed** `94836a1` |
+| R3 | `stream_chat` holds the per-session budget lock across a caller-controlled loop (deadlock on reuse) | high | `llm/client.py` | **closed** `582a122` |
+| R4a | `fetch_geolite_databases` lets httpx/parse errors escape its FetchError-only contract | high | `geo/fetch.py` | **closed** `44f716f` |
+| R4b | `GeoLookup.lookup()` catch too narrow for its "never raises" contract (corrupt MMDB) | medium | `geo/lookup.py` | **closed** `44f716f` |
+| R5 | Static-base honeytoken half-feature (read path + config field + docstrings, no producer) | high | `honeytokens/`, `config/models.py`, `sessions/` | **retired** `2501e3e` |
+| R6 | Rotation leaves stale WAL sidecars that revert the new DB after an unclean shutdown | medium | `credentials/rotation.py` | **closed** `ffb8f36` |
+
+## Outcome
+
+All six recommended fixes landed test-first on `review/code-review-remediation`,
+each a single green commit with an audit-notes block. The High fixes
+(R1, R2a/b, R3, R4a) were independently re-verified before closure. The
+remaining Medium/Low findings from the review stay catalogued in
+[`CODE_REVIEW_2026-06-01.md`](CODE_REVIEW_2026-06-01.md) for a later pass.
 
 ## Owner decisions
 
