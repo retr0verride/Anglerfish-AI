@@ -20,6 +20,27 @@ def _session(*, username: str = "alice", hostname: str = "srv-prod-01") -> LureS
     )
 
 
+def test_listdir_sizes_match_cat_content() -> None:
+    """`ls -l` size must equal what `cat` returns for resolvable files
+    (audit review M2): no size-0 placeholder while cat serves content, and
+    no hardcoded size that drifts from the rendered (per-session) body.
+    """
+    session = _session()
+    result = listdir("/etc", session)
+    assert result.status == "entries"
+    by_name = {e.name: e for e in result.entries}
+    for name in ("passwd", "hostname", "os-release", "group"):
+        entry = by_name[name]
+        content = read(f"/etc/{name}", session)
+        assert content.status == "content"
+        assert entry.size == len(content.content), name
+        assert entry.size > 0, name
+    # A genuinely-empty file (motd) stays size 0, matching its content.
+    assert by_name["motd"].size == len(read("/etc/motd", session).content)
+    # A permission-denied file keeps its static plausible non-zero size.
+    assert by_name["shadow"].size > 0
+
+
 # ---------------------------------------------------------------------------
 # read() - file contents
 # ---------------------------------------------------------------------------

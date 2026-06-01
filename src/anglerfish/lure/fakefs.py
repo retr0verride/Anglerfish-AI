@@ -19,7 +19,7 @@ served and lure-served output.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 
 from anglerfish.lure.session import LureSessionContext
@@ -660,37 +660,67 @@ def read(path: str, session: LureSessionContext) -> ReadResult:
     return ReadResult(status="not_in_fakefs")
 
 
+def _with_content_sizes(
+    entries: tuple[FakeEntry, ...],
+    dir_path: str,
+    session: LureSessionContext,
+) -> tuple[FakeEntry, ...]:
+    """Recompute each file entry's size from the content ``read`` returns.
+
+    Audit review M2: ``ls -l`` rendered a static (sometimes placeholder 0,
+    sometimes stale-hardcoded) size while ``cat`` served real, per-session
+    content - a fingerprint tell (``ls -l /etc/passwd`` showed 0 but
+    ``cat /etc/passwd | wc -c`` did not). Deriving the size from the same
+    ``read`` path keeps the two consistent, including for templated files
+    (passwd, hostname) and persona overlays. Directories and symlinks keep
+    their conventional sizes; files that are not readable (e.g.
+    permission-denied ``/etc/shadow``) keep their static plausible size.
+    """
+    base = "" if dir_path == "/" else dir_path
+    out: list[FakeEntry] = []
+    for entry in entries:
+        if entry.is_dir or entry.is_symlink:
+            out.append(entry)
+            continue
+        result = read(f"{base}/{entry.name}", session)
+        if result.status == "content":
+            out.append(replace(entry, size=len(result.content)))
+        else:
+            out.append(entry)
+    return tuple(out)
+
+
 def listdir(path: str, session: LureSessionContext) -> ListResult:
     """Return the entries inside ``path`` from the static filesystem."""
     user = session.username
     normalised = path.rstrip("/") or "/"
 
+    entries: tuple[FakeEntry, ...] | None = None
     if normalised == "/":
-        return ListResult(status="entries", entries=_ROOT_DIR_ENTRIES)
-    if normalised == "/etc":
-        return ListResult(status="entries", entries=_ETC_DIR_ENTRIES)
-    if normalised == "/var":
-        return ListResult(status="entries", entries=_VAR_DIR_ENTRIES)
-    if normalised == "/proc":
-        return ListResult(status="entries", entries=_PROC_DIR_ENTRIES)
-    if normalised == "/home":
-        return ListResult(
-            status="entries",
-            entries=(FakeEntry(user, _D755, 4096, owner=user, group=user, is_dir=True),),
-        )
-    if normalised == f"/home/{user}":
-        return ListResult(
-            status="entries",
-            entries=_format_entries(_HOME_DIR_ENTRIES_TEMPLATE, user=user),
-        )
-    if normalised == "/root":
-        return ListResult(status="entries", entries=_ROOT_HOME_ENTRIES)
-    if normalised in (f"/home/{user}/.ssh", "/root/.ssh"):
-        return ListResult(status="entries", entries=_SSH_DIR_ENTRIES)
-    if normalised == "/var/log":
-        return ListResult(status="entries", entries=_VAR_LOG_DIR_ENTRIES)
+        entries = _ROOT_DIR_ENTRIES
+    elif normalised == "/etc":
+        entries = _ETC_DIR_ENTRIES
+    elif normalised == "/var":
+        entries = _VAR_DIR_ENTRIES
+    elif normalised == "/proc":
+        entries = _PROC_DIR_ENTRIES
+    elif normalised == "/home":
+        entries = (FakeEntry(user, _D755, 4096, owner=user, group=user, is_dir=True),)
+    elif normalised == f"/home/{user}":
+        entries = _format_entries(_HOME_DIR_ENTRIES_TEMPLATE, user=user)
+    elif normalised == "/root":
+        entries = _ROOT_HOME_ENTRIES
+    elif normalised in (f"/home/{user}/.ssh", "/root/.ssh"):
+        entries = _SSH_DIR_ENTRIES
+    elif normalised == "/var/log":
+        entries = _VAR_LOG_DIR_ENTRIES
 
-    return ListResult(status="not_in_fakefs")
+    if entries is None:
+        return ListResult(status="not_in_fakefs")
+    return ListResult(
+        status="entries",
+        entries=_with_content_sizes(entries, normalised, session),
+    )
 
 
 _STATIC_SUMMARY = (
