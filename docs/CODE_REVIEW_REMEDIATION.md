@@ -24,12 +24,25 @@ independently re-verified before they are marked closed.
 | R5 | Static-base honeytoken half-feature (read path + config field + docstrings, no producer) | high | `honeytokens/`, `config/models.py`, `sessions/` | **retired** `2501e3e` |
 | R6 | Rotation leaves stale WAL sidecars that revert the new DB after an unclean shutdown | medium | `credentials/rotation.py` | **closed** `ffb8f36` |
 
+## Adversarial verification + follow-ups
+
+The High fixes were independently re-verified by adversarial reviewers
+(one per fix, prompted to refute). R3 held clean. The pass found a real
+gap in three and each was closed with a follow-up commit:
+
+| Fix | Gap found | Follow-up |
+|-----|-----------|-----------|
+| R1 | rehydrate duplicated a turn on the crash-recovery replay path (offset rewind over an already-recorded line) | `d615137` idempotent replay guard |
+| R2b | T1098 stopped matching `cp`/`mv`/`install`/`dd` writes to credential files (caught pre-fix) | `6328889` destination-anchored verbs |
+| R4 | `tarfile.ReadError`/`OSError` still escaped FetchError-only; `ValidationError` still escaped lookup never-raises | `b9c1484` wrap extract/install + `_build_record` |
+
 ## Outcome
 
 All six recommended fixes landed test-first on `review/code-review-remediation`,
-each a single green commit with an audit-notes block. The High fixes
-(R1, R2a/b, R3, R4a) were independently re-verified before closure. The
-remaining Medium/Low findings from the review stay catalogued in
+each a single green commit with an audit-notes block, plus three
+verification-driven follow-ups. Full suite: 2028 passed, 1 skipped,
+93.6% coverage; mypy strict + ruff clean. The remaining Medium/Low
+findings from the review stay catalogued in
 [`CODE_REVIEW_2026-06-01.md`](CODE_REVIEW_2026-06-01.md) for a later pass.
 
 ## Owner decisions
