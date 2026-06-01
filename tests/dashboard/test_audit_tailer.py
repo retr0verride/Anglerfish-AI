@@ -232,6 +232,73 @@ async def test_command_before_open_auto_creates_placeholder(
     assert snap.turns[0].command == "uname -a"
 
 
+async def test_command_after_restart_rehydrates_turns_from_store(
+    dashboard_state: DashboardState,
+    tmp_path: Path,
+) -> None:
+    """A command on a session opened before a tailer restart must not drop
+    the new turn (audit review R1).
+
+    The in-memory accumulator does not survive a process restart, but the
+    persisted turns do. On an accumulator miss the tailer must rehydrate
+    the cumulative turns from the store; otherwise ``update_session``'s
+    positional diff (``snapshot.turns[len(existing):]``) slices the new
+    turn to ``()`` and never records it, and the published snapshot
+    regresses the live view to a single turn.
+    """
+    sid = uuid4()
+    sid_s = str(sid)
+    audit_path = tmp_path / "audit.jsonl"
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.session_opened",
+            source_ip="203.0.113.9",
+            username="root",
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.9",
+            command="whoami",
+            session_id=sid_s,
+        ),
+        _audit_line(
+            "lure.command_native",
+            source_ip="203.0.113.9",
+            command="uname -a",
+            session_id=sid_s,
+        ),
+    )
+    tailer = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    await tailer._poll_once()
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert [t.command for t in snap.turns] == ["whoami", "uname -a"]
+
+    # Simulate a process restart: a fresh tailer with empty in-memory
+    # accumulators, resuming at the byte offset the previous instance
+    # reached. The offset cache survives a restart; the accumulators do
+    # not.
+    restarted = _make_tailer(tmp_path=tmp_path, dashboard_state=dashboard_state)
+    restarted._offset = tailer._offset
+
+    _append(
+        audit_path,
+        _audit_line(
+            "lure.command_bridge",
+            source_ip="203.0.113.9",
+            command="id",
+            session_id=sid_s,
+        ),
+    )
+    await restarted._poll_once()
+
+    snap = await dashboard_state.get_session(sid)
+    assert snap is not None
+    assert [t.command for t in snap.turns] == ["whoami", "uname -a", "id"]
+
+
 async def test_open_after_command_upgrades_placeholder_metadata(
     dashboard_state: DashboardState,
     tmp_path: Path,

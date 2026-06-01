@@ -418,21 +418,34 @@ class AuditTailer:
             return
         snapshot = self._accumulators.get(session_id)
         if snapshot is None:
-            # Command-before-open: synthesize a placeholder session
-            # row from the command event. If a real session_opened
-            # arrives later it will overwrite source_ip/username.
-            source_ip = _str_field(event, "source_ip", default="unknown")
-            snapshot = SessionSnapshot(
-                session_id=session_id,
-                source_ip=source_ip,
-                username=_PLACEHOLDER_USERNAME,
-                fake_hostname=_PLACEHOLDER_HOSTNAME,
-                fake_username=_PLACEHOLDER_USERNAME,
-                fake_cwd=_PLACEHOLDER_CWD,
-                started_at=ts,
-                last_activity_at=ts,
-                turns=(),
-            )
+            # Accumulator miss. Two cases:
+            #  - a command on a session opened before a process restart:
+            #    the in-memory accumulator does not survive a restart, but
+            #    the persisted turns do. Rehydrate them from the store so
+            #    the cumulative `turns` tuple stays complete. Without this,
+            #    update_session's positional diff (snapshot.turns[len(
+            #    existing):]) slices the new turn to () and never records
+            #    it, and the published snapshot regresses the live view to
+            #    a single turn (audit review R1).
+            #  - a genuine command-before-open (no session row yet):
+            #    synthesize a placeholder; a later session_opened upgrades
+            #    source_ip/username.
+            persisted = await self._state.store.get_session(session_id)
+            if persisted is not None:
+                snapshot = persisted
+            else:
+                source_ip = _str_field(event, "source_ip", default="unknown")
+                snapshot = SessionSnapshot(
+                    session_id=session_id,
+                    source_ip=source_ip,
+                    username=_PLACEHOLDER_USERNAME,
+                    fake_hostname=_PLACEHOLDER_HOSTNAME,
+                    fake_username=_PLACEHOLDER_USERNAME,
+                    fake_cwd=_PLACEHOLDER_CWD,
+                    started_at=ts,
+                    last_activity_at=ts,
+                    turns=(),
+                )
         snapshot = snapshot.model_copy(
             update={
                 "last_activity_at": ts,
