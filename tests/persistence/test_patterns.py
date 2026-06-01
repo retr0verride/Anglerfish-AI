@@ -228,3 +228,31 @@ def test_crontab_pipe_legit_forms_still_match() -> None:
         event = extract_event(cmd)
         assert event is not None, cmd
         assert event.kind == "crontab"
+
+
+# ---------------------------------------------------------------------------
+# Robustness (audit review M4 + M5)
+# ---------------------------------------------------------------------------
+
+
+def test_systemctl_unit_with_hyphens_and_dots_not_truncated() -> None:
+    """`my-backdoor.service` records the full unit, not the first segment (M5)."""
+    event = extract_event("systemctl enable my-backdoor.service")
+    assert event is not None
+    assert event.sub_key == "my-backdoor"
+    # A dotted (non-.service) unit keeps its name intact.
+    event2 = extract_event("systemctl start foo.bar.baz")
+    assert event2 is not None
+    assert event2.sub_key == "foo.bar.baz"
+
+
+def test_oversized_capture_is_truncated_not_raised() -> None:
+    """A padded authorized_keys line must not raise ValidationError out of
+    the synchronous classifier; it is recorded truncated to the model
+    bound (audit review M4).
+    """
+    huge_key = "ssh-rsa " + "A" * 10000
+    event = extract_event(f'echo "{huge_key}" >> /root/.ssh/authorized_keys')
+    assert event is not None
+    assert event.kind == "authorized_keys"
+    assert len(event.payload) <= 4096
