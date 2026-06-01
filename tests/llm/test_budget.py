@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from typing import cast
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from anglerfish.config.models import OllamaConfig
 from anglerfish.llm import (
     BudgetExhaustedError,
+    ChatChunk,
     ChatMessage,
     LLMClient,
     LLMRole,
@@ -355,7 +357,12 @@ async def test_stream_chat_early_break_does_not_hold_budget_lock() -> None:
 
     client = _make_client(handler)
     budget = TokenBudget(fast_token_cap=100_000)
-    gen = client.stream_chat([ChatMessage(role="user", content="hi")], budget=budget)
+    # stream_chat is an async generator; cast so .aclose() type-checks
+    # (its declared return type is the narrower AsyncIterator).
+    gen = cast(
+        "AsyncGenerator[ChatChunk, None]",
+        client.stream_chat([ChatMessage(role="user", content="hi")], budget=budget),
+    )
     try:
         # Take one chunk, then abandon the generator (the realistic
         # early-break case: a `break` out of an `async for`).

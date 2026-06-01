@@ -393,7 +393,7 @@ def test_session_open_merges_honeytokens_into_overlay(
             Honeytoken(
                 id="PERSESSIONBBBBBB",
                 kind="aws",
-                payload="[default]\naws_access_key_id = AKIAPERSESSIONBBBBBB\n",
+                payload="[default]\naws_access_key_id = AKIAPERSESSIONBBBBBB\n",  # gitleaks:allow - synthetic honeytoken, not a real key
                 callback_url="https://honey.example.com/cb/PERSESSIONBBBBBB",
                 placed_at="/root/.aws/credentials",
                 source_ip="203.0.113.99",
@@ -425,4 +425,4 @@ def test_session_open_merges_honeytokens_into_overlay(
         ).json()
     overlay = body["persona_overlay"]
     assert "/root/.aws/credentials" in overlay
-    assert "AKIAPERSESSIONBBBBBB" in overlay["/root/.aws/credentials"]
+    assert "AKIAPERSESSIONBBBBBB" in overlay["/root/.aws/credentials"]  # gitleaks:allow - synthetic honeytoken, not a real key

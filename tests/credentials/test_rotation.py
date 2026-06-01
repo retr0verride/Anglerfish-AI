@@ -203,7 +203,7 @@ async def test_rotation_swap_failure_raises_rotation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An OSError during the file swap surfaces as RotationError (R6)."""
-    import anglerfish.credentials.rotation as rotation_mod
+    import shutil
 
     db = tmp_path / "creds.db"
     async with CredentialStore(_config(db, _key(1))) as store:
@@ -212,7 +212,9 @@ async def test_rotation_swap_failure_raises_rotation_error(
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise OSError("simulated disk failure")
 
-    monkeypatch.setattr(rotation_mod.shutil, "move", _boom)
+    # Patch the shared shutil module (rotation calls shutil.move), not
+    # rotation.shutil, which mypy strict rejects as an implicit re-export.
+    monkeypatch.setattr(shutil, "move", _boom)
     with pytest.raises(RotationError, match="swap failed"):
         rotate_key(
             db_path=db,
