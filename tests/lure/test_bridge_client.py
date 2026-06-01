@@ -226,7 +226,23 @@ async def test_submit_command_returns_text() -> None:
         out = await client.submit_command(uuid4(), "ls")
     finally:
         await client.aclose()
-    assert out == "drwxr-xr-x"
+    assert out.text == "drwxr-xr-x"
+    assert out.cwd is None
+
+
+async def test_submit_command_returns_cwd_when_present() -> None:
+    """The bridge reports its post-command cwd; the lure applies it (M1)."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"text": "ok", "cwd": "/var/www"})
+
+    client = _client_with(handler)
+    try:
+        out = await client.submit_command(uuid4(), "cd /var/www")
+    finally:
+        await client.aclose()
+    assert out.text == "ok"
+    assert out.cwd == "/var/www"
 
 
 async def test_submit_command_sends_fs_context_when_present() -> None:

@@ -29,6 +29,7 @@ __all__ = [
     "BridgeClient",
     "BridgeStreamChunk",
     "BridgeUnavailableError",
+    "BufferedCommandResult",
     "OpenSessionResult",
 ]
 
@@ -63,6 +64,20 @@ class OpenSessionResult:
     # Non-empty only when the bridge engaged counter-deception for this
     # source IP on a prior session. Empty tuple for the common case.
     counter_deception_garble_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BufferedCommandResult:
+    """Outcome of :meth:`BridgeClient.submit_command` (protocol v2 path).
+
+    ``text`` is the full response body; ``cwd`` is the bridge's
+    post-command working directory (``None`` when the bridge did not
+    report one) so the lure can keep its prompt + native handlers in
+    sync after a bridge-handled ``cd`` (audit review M1).
+    """
+
+    text: str
+    cwd: str | None = None
 
 
 @dataclass(frozen=True)
@@ -211,13 +226,16 @@ class BridgeClient:
         command: str,
         *,
         fs_context: str | None = None,
-    ) -> str:
-        """Submit one command and return the response text.
+    ) -> BufferedCommandResult:
+        """Submit one command; return its text plus the bridge's cwd.
 
         ``fs_context`` rides through protocol v2 and is the lure's way
         of telling the bridge prompt builder which paths the lure
         already serves natively (so LLM-invented content stays
-        consistent with the static fakefs).
+        consistent with the static fakefs). The bridge reports its
+        post-command working directory in ``cwd``; the lure applies it
+        so its prompt and native handlers do not drift after a
+        bridge-handled ``cd`` (audit review M1).
         """
         payload: dict[str, Any] = {"command": command}
         if fs_context is not None:
@@ -231,7 +249,9 @@ class BridgeClient:
             raise BridgeUnavailableError(
                 f"bridge submit_command returned non-string text: {body!r}",
             )
-        return text
+        cwd_raw = body.get("cwd")
+        cwd = cwd_raw if isinstance(cwd_raw, str) else None
+        return BufferedCommandResult(text=text, cwd=cwd)
 
     async def command_stream(
         self,

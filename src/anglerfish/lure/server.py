@@ -744,6 +744,7 @@ async def _handle_bridge_stream(
     bridge_uuid = session.session_id
     start = time.monotonic()
     wrote_any = False
+    new_cwd: str | None = None
     try:
         async for chunk in container.bridge_client.command_stream(
             bridge_uuid,
@@ -753,6 +754,11 @@ async def _handle_bridge_stream(
             if chunk.delta:
                 write(chunk.delta)
                 wrote_any = True
+            # The terminal chunk carries the bridge's post-command cwd
+            # (audit review M1); apply it so the prompt + native handlers
+            # do not drift after a bridge-handled `cd`.
+            if chunk.cwd is not None:
+                new_cwd = chunk.cwd
         latency_ms = (time.monotonic() - start) * 1000.0
     except BridgeUnavailableError as exc:
         # Mid-stream failure: emit the lure-side fallback only if we
@@ -771,6 +777,8 @@ async def _handle_bridge_stream(
         return
 
     container.commands.record_bridge_latency(latency_ms)
+    if new_cwd is not None:
+        session.update_cwd(new_cwd)
     session.record(sanitised, response_source="bridge")
     container.audit.record(
         "lure.command_bridge",
@@ -795,13 +803,17 @@ async def _handle_bridge_buffered(
     bridge_uuid = session.session_id
     start = time.monotonic()
     try:
-        response = await container.bridge_client.submit_command(
+        result = await container.bridge_client.submit_command(
             bridge_uuid,
             sanitised,
             fs_context=system_prompt_summary(session),
         )
         latency_ms = (time.monotonic() - start) * 1000.0
         container.commands.record_bridge_latency(latency_ms)
+        if result.cwd is not None:
+            # Keep the prompt + native handlers in sync after a
+            # bridge-handled `cd` (audit review M1).
+            session.update_cwd(result.cwd)
         session.record(sanitised, response_source="bridge")
         container.audit.record(
             "lure.command_bridge",
@@ -810,6 +822,7 @@ async def _handle_bridge_buffered(
             latency_ms=latency_ms,
             session_id=str(session.session_id),
         )
+        response = result.text
         if response and not response.endswith("\n"):
             response = response + "\n"
         if response:
