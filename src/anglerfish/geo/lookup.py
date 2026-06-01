@@ -102,7 +102,12 @@ class GeoLookup:
             return None
         try:
             result = await asyncio.to_thread(reader.get, ip)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
+            # Audit review R4b: a corrupt / truncated MMDB raises
+            # maxminddb.InvalidDatabaseError, which subclasses RuntimeError.
+            # lookup() promises never to raise, so include RuntimeError
+            # here rather than let a bad database file propagate out and
+            # crash the caller mid-enrichment.
             self._logger.warning(
                 "geo.lookup_failed ip=%s error=%s",
                 ip,

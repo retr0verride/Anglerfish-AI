@@ -121,6 +121,30 @@ async def test_lookup_swallows_reader_errors() -> None:
     await lookup.aclose()
 
 
+async def test_lookup_swallows_corrupt_database_error() -> None:
+    """A corrupt MMDB raises maxminddb.InvalidDatabaseError (a RuntimeError
+    subclass); lookup() must degrade, not propagate (audit review R4b).
+    """
+
+    class _CorruptReader:
+        def get(self, _ip: str) -> Any:
+            # Stand-in for maxminddb.InvalidDatabaseError, which subclasses
+            # RuntimeError - the exact type the real reader raises on a
+            # truncated / corrupt database file.
+            raise RuntimeError("Database metadata corrupt")
+
+        def close(self) -> None: ...
+
+    lookup = GeoLookup(
+        GeoConfig(city_db_path=Path("/x.mmdb")),
+        city_reader=_CorruptReader(),
+    )
+    record = await lookup.lookup("203.0.113.7")
+    assert record.looked_up is True
+    assert record.country is None
+    await lookup.aclose()
+
+
 async def test_lookup_non_dict_payload_is_ignored() -> None:
     city = _StubReader({"1.2.3.4": "unexpected"})  # type: ignore[dict-item]
     lookup = GeoLookup(
