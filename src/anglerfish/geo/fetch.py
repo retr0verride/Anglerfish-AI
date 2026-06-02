@@ -59,6 +59,12 @@ class FetchError(RuntimeError):
 
 @dataclass(frozen=True)
 class FetchResult:
+    """Outcome of installing one GeoLite2 edition.
+
+    ``bytes_written`` is the installed on-disk size of ``destination``
+    (the extracted .mmdb), not the compressed download size.
+    """
+
     edition: str
     destination: Path
     bytes_written: int
@@ -210,6 +216,10 @@ def _fetch_one(
             shutil.copyfile(extracted, staged)
             staged.chmod(0o644)
             staged.replace(destination)
+            # Report the installed on-disk size, not bytes_seen (the
+            # compressed download), since this is printed next to the
+            # destination path. stat() stays inside the OSError handler.
+            installed_bytes = destination.stat().st_size
         except FetchError:
             raise
         except (tarfile.TarError, OSError) as exc:
@@ -220,7 +230,7 @@ def _fetch_one(
         return FetchResult(
             edition=edition,
             destination=destination,
-            bytes_written=bytes_seen,
+            bytes_written=installed_bytes,
             sha256=expected_sha,
         )
 
