@@ -132,6 +132,14 @@ def test_threats(client: TestClient, app_state: DashboardState) -> None:
     assert payload[0]["score"] == 85
 
 
+def test_threats_limit_above_facade_cap_is_rejected(client: TestClient) -> None:
+    # The facade caps at _DEFAULT_THREAT_HISTORY (200); the route must not
+    # advertise a higher limit it would silently truncate. 200 is accepted,
+    # 201 is a 422 (a clear signal instead of a silent cap).
+    assert client.get("/api/threats?limit=200").status_code == 200
+    assert client.get("/api/threats?limit=201").status_code == 422
+
+
 def test_recent_commands_endpoint(
     client: TestClient,
     app_state: DashboardState,
