@@ -194,11 +194,10 @@ class AIBridgeService:
         # set at session-open from the registry, mirroring Stage 10's
         # cross-session pattern).
         self._honeytoken_placement = honeytoken_placement
-        # Set tracking source IPs we have already triggered placement
-        # for; placement service de-dupes per session, this set
-        # bounds duplicate audits within a single bridge process
-        # lifetime when the threat scorer fires repeatedly for the
-        # same session above the threshold.
+        # Set tracking session IDs we have already triggered placement
+        # for; dedup is per session, so this set bounds duplicate audits
+        # within a single bridge process lifetime when the threat scorer
+        # fires repeatedly for the same session above the threshold.
         self._honeytoken_placed_for: set[UUID] = set()
         # Stage 11: parallel map of session_id -> source_ip the HTTP
         # server populates at session-open via
@@ -382,8 +381,8 @@ class AIBridgeService:
         ``settings.honeytokens.enabled`` AND threat.score crosses
         ``settings.honeytokens.placement_threshold``, schedule a
         fire-and-forget placement task for this session's source
-        IP. Per-source-IP de-dup via ``_honeytoken_placed_for``
-        bounds the audit-log noise when the scorer fires
+        IP. Per-session de-dup via ``_honeytoken_placed_for`` (a set of
+        session IDs) bounds the audit-log noise when the scorer fires
         repeatedly above the threshold for the same session.
 
         Stage 12: after honeytoken placement, ``engage_counter_deception``
