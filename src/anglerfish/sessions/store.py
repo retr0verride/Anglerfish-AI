@@ -42,6 +42,7 @@ from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.persona_pin import PersonaPin
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment, ThreatTechnique
+from anglerfish.sessions._honeytoken_row import row_to_honeytoken
 from anglerfish.sessions.schema import PRAGMAS, run_migrations
 
 if TYPE_CHECKING:
@@ -664,7 +665,7 @@ class SessionStore:
             (token_id,),
         )
         row = cur.fetchone()
-        return _row_to_honeytoken(row) if row is not None else None
+        return row_to_honeytoken(row) if row is not None else None
 
     async def list_honeytokens_for_source_ip(
         self,
@@ -694,7 +695,7 @@ class SessionStore:
             """,
             (source_ip,),
         )
-        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+        return [row_to_honeytoken(row) for row in cur.fetchall()]
 
     async def list_all_honeytokens(self) -> list[Honeytoken]:
         """Return every registered honeytoken, newest placement first.
@@ -717,7 +718,7 @@ class SessionStore:
             ORDER BY created_at DESC, id ASC
             """,
         )
-        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+        return [row_to_honeytoken(row) for row in cur.fetchall()]
 
     # ------------------------------------------------------------------
     # Fake persistence state (Stage 10 slice 10.2)
@@ -1355,31 +1356,6 @@ class SessionStore:
 
 def _utcnow_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
-
-
-# ---------------------------------------------------------------------------
-# Honeytoken row hydration (Stage 11 slice 11.2)
-# ---------------------------------------------------------------------------
-
-
-def _row_to_honeytoken(row: Sequence[Any]) -> Honeytoken:
-    """Rehydrate one honeytokens row into a :class:`Honeytoken`.
-
-    Row column order matches the SELECT in
-    :meth:`SessionStore._get_honeytoken_locked` /
-    :meth:`SessionStore._list_honeytokens_locked`.
-    """
-    session_id_raw = row[6]
-    return Honeytoken(
-        id=row[0],
-        kind=row[1],
-        payload=row[2],
-        callback_url=row[3],
-        placed_at=row[4],
-        source_ip=row[5],
-        session_id=UUID(session_id_raw) if session_id_raw is not None else None,
-        created_at=datetime.fromisoformat(row[7]),
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -19,12 +19,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime
 from typing import TYPE_CHECKING, Self
-from uuid import UUID
 
 from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.persistence import PersistenceEvent
+from anglerfish.sessions._honeytoken_row import row_to_honeytoken
 from anglerfish.sessions.schema import PRAGMAS
 
 if TYPE_CHECKING:
@@ -242,7 +241,7 @@ class SessionStoreReader:
             (token_id,),
         )
         row = cur.fetchone()
-        return _row_to_honeytoken(row) if row is not None else None
+        return row_to_honeytoken(row) if row is not None else None
 
     async def list_honeytokens_for_source_ip(
         self,
@@ -272,7 +271,7 @@ class SessionStoreReader:
             """,
             (source_ip,),
         )
-        return [_row_to_honeytoken(row) for row in cur.fetchall()]
+        return [row_to_honeytoken(row) for row in cur.fetchall()]
 
     # -----------------------------------------------------------------
     # Internals
@@ -281,24 +280,3 @@ class SessionStoreReader:
     def _require_open(self) -> None:
         if self._conn is None:
             raise RuntimeError("SessionStoreReader.open() must be awaited first")
-
-
-def _row_to_honeytoken(row: tuple[object, ...]) -> Honeytoken:
-    """Rehydrate one honeytokens row into a :class:`Honeytoken`.
-
-    Mirrors :func:`anglerfish.sessions.store._row_to_honeytoken`;
-    duplicated here so the reader has no import dependency on the
-    writer module. The two helpers stay in lock-step because they
-    SELECT the same column order.
-    """
-    session_id_raw = row[6]
-    return Honeytoken(
-        id=str(row[0]),
-        kind=str(row[1]),  # type: ignore[arg-type]
-        payload=str(row[2]),
-        callback_url=str(row[3]),
-        placed_at=str(row[4]),
-        source_ip=str(row[5]) if row[5] is not None else None,
-        session_id=UUID(str(session_id_raw)) if session_id_raw is not None else None,
-        created_at=datetime.fromisoformat(str(row[7])),
-    )
