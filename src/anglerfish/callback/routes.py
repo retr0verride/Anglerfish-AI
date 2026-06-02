@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING
+from xml.sax.saxutils import escape as _xml_escape
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
@@ -123,6 +124,9 @@ def build_callback_router() -> APIRouter:
         token = await reader.get_honeytoken(token_id)
         callback_ip = _callback_source_ip(request)
         user_agent = (request.headers.get("user-agent") or "")[:_USER_AGENT_MAX]
+        # Always "/cb/<token_id>" on this single-route receiver (so it is
+        # derivable from token_id), but retained because the dashboard
+        # honeytoken/alert views render it directly.
         request_path = request.url.path
 
         if token is None:
@@ -163,9 +167,11 @@ def _aws_403_response(token_id: str) -> Response:
 
     Body is XML matching the ``InvalidAccessKeyId`` shape; the
     ``AWSAccessKeyId`` field echoes back ``AKIA<token_id>`` so the
-    response looks like a real IAM error to ``aws-cli`` clients.
+    response looks like a real IAM error to ``aws-cli`` clients. The
+    reject path passes an unvalidated ``token_id``, so the echo is
+    XML-escaped (a raw ``<``/``&`` would yield malformed XML, a tell).
     """
-    body = _AWS_403_BODY.format(access_key=f"AKIA{token_id}")
+    body = _AWS_403_BODY.format(access_key=_xml_escape(f"AKIA{token_id}"))
     return Response(
         content=body,
         status_code=status.HTTP_403_FORBIDDEN,

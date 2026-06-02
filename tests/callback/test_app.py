@@ -153,6 +153,18 @@ def test_callback_rejects_malformed_token_id_without_registry_lookup(
     assert _audit_events(audit_path) == []
 
 
+def test_aws_403_body_escapes_xml_metacharacters() -> None:
+    # The reject path feeds an unvalidated token_id into the XML body, so
+    # metacharacters must be XML-escaped or the response is malformed XML -
+    # a fidelity tell real AWS never produces.
+    from anglerfish.callback.routes import _aws_403_response
+
+    resp = _aws_403_response("<script>&x")
+    body = resp.body.decode("utf-8")
+    assert "<script>" not in body
+    assert "AKIA&lt;script&gt;&amp;x" in body
+
+
 def test_callback_truncates_oversized_user_agent(
     client: TestClient,
     audit_path: Path,
