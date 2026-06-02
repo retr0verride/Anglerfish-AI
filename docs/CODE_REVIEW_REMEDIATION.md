@@ -141,8 +141,18 @@ the JA3 surface (`compute_ja3`), `PersonaRegistry.get_or_default`, the
 `AuditLog` context manager, and the `BridgeStreamChunk.done` wire flag
 (`2c1f8a4`).
 
-_Duplication/drift, docstring-drift, and test-gap buckets land below as
-they complete._
+**Bucket 3 - duplication / drift**
+
+| Finding | File | Status |
+|---------|------|--------|
+| Byte-identical AWS/SSH callback-URL builders | `honeytokens/generators.py` | **closed** `9065902` |
+| `_DEFAULT_SCAN_MAX_CHARS` duplicate of the config default (unused) | `bridge/defense.py` | **closed** `9f8437d` |
+| `RotationResult.new_path` held the live DB path, not the `.new` file | `credentials/rotation.py` | **closed** `00beab3` |
+| `_SCHEMA` (attempts DDL) duplicated rotation vs storage | `credentials/rotation.py` | **closed** `b3cff21` |
+| `_row_to_honeytoken` duplicated + drifted across facades | `sessions/` | **closed** `3f49bc1` |
+| Persistence-list method name drift across facades | `sessions/reader.py` | **closed** `2cf58ae` |
+
+_Docstring-drift and test-gap buckets land below as they complete._
 
 ## Process
 
