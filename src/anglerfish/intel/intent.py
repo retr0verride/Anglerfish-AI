@@ -23,7 +23,6 @@ Stage 5 slice 5 introduced.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
@@ -34,7 +33,7 @@ from anglerfish.models.intent import ActorProfile, IntentConfidence, IntentSumma
 from anglerfish.models.session import CommandTurn, SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 
-__all__ = ["IntentExtractionError", "IntentExtractor"]
+__all__ = ["IntentExtractor"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,22 +99,6 @@ profile, confidence (<= 2000 chars).
 
 
 # ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
-class IntentExtractionError(Exception):
-    """Base class for intent-extraction failures the extractor itself raises.
-
-    Underlying LLM-layer failures (OllamaUnavailableError,
-    StructuredOutputError, BudgetExhaustedError) propagate
-    unchanged so the bridge integration in slice 7.2 can audit
-    them as ``bridge.intent_extraction_failed`` with a precise
-    error_type.
-    """
-
-
-# ---------------------------------------------------------------------------
 # LLM-side payload (schema for structured_chat)
 # ---------------------------------------------------------------------------
 
@@ -154,7 +137,6 @@ class IntentExtractor:
         budget_cap_tokens: int = _DEFAULT_BUDGET_TOKENS,
         max_history_turns: int = _DEFAULT_MAX_HISTORY_TURNS,
         clock: Callable[[], datetime] | None = None,
-        logger: logging.Logger | None = None,
     ) -> None:
         if min_commands < 0:
             raise ValueError(f"min_commands must be >= 0, got {min_commands}")
@@ -171,7 +153,6 @@ class IntentExtractor:
         self._budget_cap_tokens = budget_cap_tokens
         self._max_history_turns = max_history_turns
         self._clock = clock
-        self._logger = logger if logger is not None else logging.getLogger(__name__)
 
     async def extract(
         self,

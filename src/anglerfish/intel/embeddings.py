@@ -27,7 +27,6 @@ bridge behaviour rather than attacker behaviour.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
@@ -35,7 +34,7 @@ from anglerfish.llm import LLMClient, LLMRole, TokenBudget
 from anglerfish.models.embedding import SessionEmbedding
 from anglerfish.models.session import CommandTurn, SessionSnapshot
 
-__all__ = ["EmbeddingExtractionError", "EmbeddingGenerator"]
+__all__ = ["EmbeddingGenerator"]
 
 
 # ---------------------------------------------------------------------------
@@ -45,21 +44,6 @@ __all__ = ["EmbeddingExtractionError", "EmbeddingGenerator"]
 _DEFAULT_MIN_COMMANDS = 3
 _DEFAULT_BUDGET_TOKENS = 2000
 _DEFAULT_MAX_COMMAND_CHARS = 4096
-
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
-class EmbeddingExtractionError(Exception):
-    """Base class for embedding-generation failures the generator itself raises.
-
-    Underlying LLM-layer failures (OllamaUnavailableError,
-    BudgetExhaustedError) propagate unchanged so the bridge
-    integration in slice 8.4 can audit them as
-    ``bridge.embedding_failed`` with a precise error_type.
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +62,6 @@ class EmbeddingGenerator:
         budget_cap_tokens: int = _DEFAULT_BUDGET_TOKENS,
         max_command_chars: int = _DEFAULT_MAX_COMMAND_CHARS,
         clock: Callable[[], datetime] | None = None,
-        logger: logging.Logger | None = None,
     ) -> None:
         if min_commands < 0:
             raise ValueError(f"min_commands must be >= 0, got {min_commands}")
@@ -95,7 +78,6 @@ class EmbeddingGenerator:
         self._budget_cap_tokens = budget_cap_tokens
         self._max_command_chars = max_command_chars
         self._clock = clock
-        self._logger = logger if logger is not None else logging.getLogger(__name__)
 
     async def generate(self, snapshot: SessionSnapshot) -> SessionEmbedding | None:
         """Produce a :class:`SessionEmbedding` for ``snapshot``.
