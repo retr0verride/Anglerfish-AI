@@ -98,12 +98,34 @@ test (M12), `models/embedding.py` co-located test (M13), rotation
 
 ### Open buckets (worked in risk order)
 
-| ID | Bucket / finding | File | Status |
-|----|------------------|------|--------|
-| L0 | Stray `.intel_tests.txt` artifact | repo root | **closed** `cf32871` |
+**Bucket 0 - cleanup**
 
-_Behaviour/fidelity, dead-code, duplication, docstring-drift, and
-test-gap buckets land below as they complete._
+| ID | Finding | Status |
+|----|---------|--------|
+| L0 | Stray `.intel_tests.txt` artifact committed by accident | **closed** `cf32871` |
+
+**Bucket 1 - behaviour/fidelity** (all test-first)
+
+| ID | Finding | File | Status |
+|----|---------|------|--------|
+| B1 | Wasting jitter identical per chunk (fixed cadence) | `bridge/strategies/*` | **closed** `0bdb313` |
+| B2 | `cd -` / `~user` produced `<cwd>/-`, `<cwd>/~user` | `bridge/service.py` | **closed** `d0f5fca` |
+| B3 | `structured_chat` stashed bad output only on ValidationError | `llm/client.py` | **closed** `f3b7a60` |
+| B4 | `_wasting_stats` scanned the whole log (continue vs break) | `dashboard/health.py` | **closed** `89cae7f` |
+| B5 | `/api/threats` advertised 500 but facade caps at 200 | `dashboard/routes.py` | **closed** `97e9cda` |
+| B6 | `_suppress_get_nowait` convoluted backpressure helper | `dashboard/state.py` | **closed** `971ab23` |
+| B7 | Username trim inconsistent across auth records | `lure/server.py` | **closed** `a4c4288` |
+| B8 | `ls -l` hardcoded the date, ignored `FakeEntry.mtime` | `lure/commands.py` | **closed** `84cd502` |
+| B9 | `FetchResult.bytes_written` reported compressed size | `geo/fetch.py` | **closed** `b267faf` |
+| B10 | Callback reject path reflected unescaped input into XML | `callback/routes.py` | **closed** `8975f58` |
+| B11 | Audit `ts` stamped outside the lock + reserved-key clobber | `audit.py` | **closed** `9813948` |
+
+B10 keeps the redundant `request_path` audit field (rendered by the
+dashboard) with a comment. B11 also closed the audit concurrency / fsync /
+reserved-key test gaps.
+
+_Dead-code, duplication/drift, docstring-drift, and test-gap buckets land
+below as they complete._
 
 ## Process
 
