@@ -124,8 +124,25 @@ B10 keeps the redundant `request_path` audit field (rendered by the
 dashboard) with a comment. B11 also closed the audit concurrency / fsync /
 reserved-key test gaps.
 
-_Dead-code, duplication/drift, docstring-drift, and test-gap buckets land
-below as they complete._
+**Bucket 2 - dead code**
+
+Deleted (clearly accidental, no production caller):
+
+| Finding | File | Status |
+|---------|------|--------|
+| Never-raised `IntentExtractionError` / `EmbeddingExtractionError` + unused loggers | `intel/` | **closed** `b6163fb` |
+| Dead `_utcnow` (read-only reader) + unused module `_logger` | `sessions/reader.py`, `persona/selector.py` | **closed** `0027385` |
+| Unread `StrategyContext.command` / `wasted_ms_so_far` | `bridge/strategies/base.py` | **closed** `0b8a9cb` |
+
+Kept and marked as deliberate, currently-unwired extension points (owner
+decision), with the false "used by..." docstrings corrected: `GeoLookup`,
+the threat scoring->alerting pipeline (`ThreatEngine`/`ThreatAlerter`),
+the JA3 surface (`compute_ja3`), `PersonaRegistry.get_or_default`, the
+`AuditLog` context manager, and the `BridgeStreamChunk.done` wire flag
+(`2c1f8a4`).
+
+_Duplication/drift, docstring-drift, and test-gap buckets land below as
+they complete._
 
 ## Process
 
