@@ -241,7 +241,12 @@ def test_wasting_stats_stops_at_window_boundary(
     events = [
         {"event_type": "bridge.wasting_applied", "ts": recent, "session_id": sid, "wasted_ms": 100},
         {"event_type": "bridge.wasting_applied", "ts": stale, "session_id": sid, "wasted_ms": 5},
-        {"event_type": "bridge.wasting_applied", "ts": recent, "session_id": sid, "wasted_ms": 9999},
+        {
+            "event_type": "bridge.wasting_applied",
+            "ts": recent,
+            "session_id": sid,
+            "wasted_ms": 9999,
+        },
     ]
     monkeypatch.setattr(health, "iter_events", lambda _path: iter(events))
     stats = health._wasting_stats(Path("ignored"), "light")
