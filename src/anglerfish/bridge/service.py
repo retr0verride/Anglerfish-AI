@@ -731,7 +731,7 @@ class AIBridgeService:
             return []
         if self._session_store_reader is None:
             return []
-        return await self._session_store_reader.list_persistence_for_source_ip(
+        return await self._session_store_reader.list_persistence_events_for_source_ip(
             source_ip,
         )
 

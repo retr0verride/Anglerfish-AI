@@ -177,7 +177,7 @@ class SessionStoreReader:
         row = cur.fetchone()
         return row[0] if row is not None else None
 
-    async def list_persistence_for_source_ip(
+    async def list_persistence_events_for_source_ip(
         self,
         source_ip: str,
     ) -> list[PersistenceEvent]:
@@ -191,11 +191,11 @@ class SessionStoreReader:
         self._require_open()
         async with self._lock:
             return await asyncio.to_thread(
-                self._list_persistence_for_source_ip_locked,
+                self._list_persistence_events_for_source_ip_locked,
                 source_ip,
             )
 
-    def _list_persistence_for_source_ip_locked(
+    def _list_persistence_events_for_source_ip_locked(
         self,
         source_ip: str,
     ) -> list[PersistenceEvent]:
