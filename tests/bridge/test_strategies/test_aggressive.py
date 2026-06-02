@@ -23,12 +23,10 @@ from anglerfish.models.session import BridgeChunk, ResponseSource
 _FIXED_SESSION = UUID("00000000-0000-0000-0000-000000000002")
 
 
-def _ctx(*, command: str = "ls", command_count: int = 0) -> StrategyContext:
+def _ctx(*, command_count: int = 0) -> StrategyContext:
     return StrategyContext(
         session_id=_FIXED_SESSION,
-        command=command,
         command_count=command_count,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
     )
 
@@ -153,9 +151,7 @@ async def test_clarification_skipped_immediately_after_prior_clarification() -> 
     # pass-through regardless of what the dice would have rolled.
     follow_up = StrategyContext(
         session_id=_FIXED_SESSION,
-        command="anything",
         command_count=fired_at + 1,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
         last_clarification_command_count=fired_at,
     )
@@ -170,9 +166,7 @@ async def test_clarification_rate_zero_disables_the_mode() -> None:
     for n in range(200):
         ctx = StrategyContext(
             session_id=_FIXED_SESSION,
-            command="x",
             command_count=n,
-            wasted_ms_so_far=0,
             bridge_config=config,
         )
         effect = await s.pre_command(ctx)

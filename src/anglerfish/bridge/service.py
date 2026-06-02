@@ -1257,9 +1257,7 @@ class AIBridgeService:
         strategy = self._current_strategy(session.session_id)
         strategy_ctx = StrategyContext(
             session_id=session.session_id,
-            command=sanitised,
             command_count=session.command_count,
-            wasted_ms_so_far=self._wasted_ms.get(session.session_id, 0),
             bridge_config=self._settings.bridge,
             last_clarification_command_count=self._last_clarification.get(
                 session.session_id,

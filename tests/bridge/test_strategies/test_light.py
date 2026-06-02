@@ -23,12 +23,10 @@ from anglerfish.models.session import BridgeChunk, ResponseSource
 _FIXED_SESSION = UUID("00000000-0000-0000-0000-000000000001")
 
 
-def _ctx(*, command: str = "ls", command_count: int = 0) -> StrategyContext:
+def _ctx(*, command_count: int = 0) -> StrategyContext:
     return StrategyContext(
         session_id=_FIXED_SESSION,
-        command=command,
         command_count=command_count,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
     )
 

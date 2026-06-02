@@ -20,9 +20,7 @@ from anglerfish.models.session import BridgeChunk, ResponseSource
 def _ctx() -> StrategyContext:
     return StrategyContext(
         session_id=uuid4(),
-        command="ls",
         command_count=0,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
     )
 
