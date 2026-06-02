@@ -235,9 +235,7 @@ def test_run_wizard_preflight_invoked_when_enabled(tmp_path: Path) -> None:
     # discards them.
     assert captured["ollama_url"] == str(answers.ollama_endpoint)
     expected_webhook = (
-        str(answers.threat_alert_webhook)
-        if answers.threat_alert_webhook is not None
-        else None
+        str(answers.threat_alert_webhook) if answers.threat_alert_webhook is not None else None
     )
     assert captured["webhook_url"] == expected_webhook
 
