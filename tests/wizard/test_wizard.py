@@ -204,27 +204,42 @@ def test_run_wizard_writes_authorized_keys_with_0600(tmp_path: Path) -> None:
 def test_run_wizard_preflight_invoked_when_enabled(tmp_path: Path) -> None:
     from anglerfish.wizard.preflight import CheckResult, PreflightChecker
 
-    class _StubChecker(PreflightChecker):
-        def run(  # type: ignore[no-untyped-def]
+    captured: dict[str, str | None] = {}
+
+    class _SpyChecker(PreflightChecker):
+        # Match the real run() signature exactly so the wizard->checker
+        # plumbing is actually asserted (the old stub funnelled every
+        # kwarg into **_kwargs and discarded it, testing nothing).
+        def run(
             self,
             *,
-            _ollama_url=None,
-            _splunk_hec_url=None,
-            _webhook_url=None,
-            **_kwargs,
-        ):
+            ollama_url: str | None,
+            webhook_url: str | None,
+        ) -> list[CheckResult]:
+            captured["ollama_url"] = ollama_url
+            captured["webhook_url"] = webhook_url
             return [CheckResult(service="ollama", success=True, detail="version test")]
 
+    answers = _answers()
     paths = _paths(tmp_path)
     output = run_wizard(
-        _answers(),
+        answers,
         env_path=paths.env_path,
         paths=paths,
-        preflight=_StubChecker(),
+        preflight=_SpyChecker(),
         run_preflight=True,
     )
     assert len(output.preflight_results) == 1
     assert "ollama" in output.preflight_results[0]
+    # The wizard plumbs the operator's answers into the checker, not
+    # discards them.
+    assert captured["ollama_url"] == str(answers.ollama_endpoint)
+    expected_webhook = (
+        str(answers.threat_alert_webhook)
+        if answers.threat_alert_webhook is not None
+        else None
+    )
+    assert captured["webhook_url"] == expected_webhook
 
 
 # ---------------------------------------------------------------------------
