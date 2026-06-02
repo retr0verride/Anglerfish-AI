@@ -89,13 +89,26 @@ async def test_between_chunks_returns_in_documented_range() -> None:
     s = LightStrategy()
     chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
     for n in range(50):
-        delay = await s.between_chunks(_ctx(command_count=n), chunk)
+        delay = await s.between_chunks(_ctx(command_count=n), chunk, chunk_index=0)
         assert _CHUNK_DELAY_MIN_S <= delay <= _CHUNK_DELAY_MAX_S
 
 
 async def test_between_chunks_is_deterministic_for_same_seed() -> None:
     s = LightStrategy()
     chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
-    a = await s.between_chunks(_ctx(command_count=3), chunk)
-    b = await s.between_chunks(_ctx(command_count=3), chunk)
+    a = await s.between_chunks(_ctx(command_count=3), chunk, chunk_index=2)
+    b = await s.between_chunks(_ctx(command_count=3), chunk, chunk_index=2)
     assert a == b
+
+
+async def test_between_chunks_varies_across_chunk_index() -> None:
+    # Regression: the delay was drawn from an RNG reseeded per
+    # (session_id, command_count) only, so every chunk in a command got
+    # the identical delay - a fixed cadence, a cleaner fingerprint than
+    # the jitter the strategy advertises. Distinct chunk indices within
+    # one command must yield more than one delay value.
+    s = LightStrategy()
+    chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
+    ctx = _ctx(command_count=3)
+    delays = {await s.between_chunks(ctx, chunk, chunk_index=i) for i in range(8)}
+    assert len(delays) > 1

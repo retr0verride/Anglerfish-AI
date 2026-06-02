@@ -85,16 +85,26 @@ async def test_between_chunks_returns_in_documented_range() -> None:
     s = AggressiveStrategy()
     chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
     for n in range(50):
-        delay = await s.between_chunks(_ctx(command_count=n), chunk)
+        delay = await s.between_chunks(_ctx(command_count=n), chunk, chunk_index=0)
         assert _CHUNK_DELAY_MIN_S <= delay <= _CHUNK_DELAY_MAX_S
 
 
 async def test_between_chunks_is_deterministic_for_same_seed() -> None:
     s = AggressiveStrategy()
     chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
-    a = await s.between_chunks(_ctx(command_count=3), chunk)
-    b = await s.between_chunks(_ctx(command_count=3), chunk)
+    a = await s.between_chunks(_ctx(command_count=3), chunk, chunk_index=2)
+    b = await s.between_chunks(_ctx(command_count=3), chunk, chunk_index=2)
     assert a == b
+
+
+async def test_between_chunks_varies_across_chunk_index() -> None:
+    # Regression: identical delay for every chunk in a command (fixed
+    # cadence). Distinct chunk indices must yield more than one value.
+    s = AggressiveStrategy()
+    chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
+    ctx = _ctx(command_count=3)
+    delays = {await s.between_chunks(ctx, chunk, chunk_index=i) for i in range(8)}
+    assert len(delays) > 1
 
 
 # ---------------------------------------------------------------------------

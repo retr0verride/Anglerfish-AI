@@ -1309,6 +1309,7 @@ class AIBridgeService:
                 # record matches what shipped.
                 response_cap = self._settings.ollama.max_response_chars
                 accumulated_chars = 0
+                chunk_index = 0
                 try:
                     async for chunk in self._client.stream_chat(messages, budget=budget):
                         if chunk.delta:
@@ -1327,7 +1328,12 @@ class AIBridgeService:
                                 done=False,
                             )
                             yield bridge_chunk
-                            delay = await strategy.between_chunks(strategy_ctx, bridge_chunk)
+                            delay = await strategy.between_chunks(
+                                strategy_ctx,
+                                bridge_chunk,
+                                chunk_index=chunk_index,
+                            )
+                            chunk_index += 1
                             if delay > 0:
                                 wasted_ms += int(delay * 1000.0)
                                 await self._sleep(delay)

@@ -13,9 +13,11 @@ Adds small, attacker-imperceptible delays around the LLM stream:
 Expected per-session impact: +15-30% wall-clock vs the off
 strategy. The 5% pre-message rate keeps the pattern from being a
 reliable fingerprint while still contributing observable dwell
-time. Per the Stage 6 design, randomness is seeded with
+time. Per the Stage 6 design, the per-command decision is seeded with
 ``(session_id, command_count)`` so an attacker who reconnects
-mid-session sees the same pattern across a bridge restart.
+mid-session sees the same pattern across a bridge restart; the
+inter-chunk delay folds in the chunk index too, so each chunk is
+jittered independently rather than repeating one fixed cadence.
 """
 
 from __future__ import annotations
@@ -66,13 +68,24 @@ class LightStrategy(WastingStrategyBase):
         self,
         ctx: StrategyContext,
         chunk: BridgeChunk,
+        *,
+        chunk_index: int,
     ) -> float:
         del chunk  # delay is independent of chunk content
-        rng = _rng_for(ctx)
+        rng = _rng_for(ctx, chunk_index)
         return rng.uniform(_CHUNK_DELAY_MIN_S, _CHUNK_DELAY_MAX_S)
 
 
-def _rng_for(ctx: StrategyContext) -> random.Random:
-    """Build a per-command :class:`random.Random` seeded deterministically."""
+def _rng_for(ctx: StrategyContext, chunk_index: int | None = None) -> random.Random:
+    """Build a deterministic :class:`random.Random` for ``ctx``.
+
+    ``pre_command`` seeds on ``(session_id, command_count)`` so the per-
+    command decision replays across a bridge restart. ``between_chunks``
+    additionally folds in ``chunk_index`` so each chunk in the response
+    draws its own delay (still deterministic per position) instead of
+    repeating one value for the whole stream.
+    """
     seed = f"{ctx.session_id}:{ctx.command_count}"
+    if chunk_index is not None:
+        seed = f"{seed}:{chunk_index}"
     return random.Random(seed)  # noqa: S311 - non-cryptographic timing jitter

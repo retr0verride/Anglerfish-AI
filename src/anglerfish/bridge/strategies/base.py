@@ -103,5 +103,14 @@ class WastingStrategyBase(ABC):
         self,
         ctx: StrategyContext,
         chunk: BridgeChunk,
+        *,
+        chunk_index: int,
     ) -> float:
-        """Return the inter-chunk sleep in seconds (``0.0`` for no delay)."""
+        """Return the inter-chunk sleep in seconds (``0.0`` for no delay).
+
+        ``chunk_index`` is the 0-based position of this chunk in the
+        command's streamed response. Strategies fold it into the PRNG seed
+        so each chunk draws its own jittered delay; without it the seed is
+        constant per command and every chunk gets the identical delay (a
+        fixed cadence, a cleaner fingerprint than the jitter intended).
+        """

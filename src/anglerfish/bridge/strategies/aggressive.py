@@ -19,9 +19,11 @@ injection mode the design doc describes (5% probability of a
 lands in slice 6.4 alongside the LLM-defense coverage for the
 new injection surface.
 
-Randomness is seeded with ``(session_id, command_count)`` so per-
-command jitter is reproducible across bridge restarts and
-pinnable in tests, matching :class:`LightStrategy`.
+The per-command decision is seeded with ``(session_id,
+command_count)`` so jitter is reproducible across bridge restarts
+and pinnable in tests; the inter-chunk delay folds in the chunk
+index so each chunk is jittered independently, matching
+:class:`LightStrategy`.
 """
 
 from __future__ import annotations
@@ -99,13 +101,23 @@ class AggressiveStrategy(WastingStrategyBase):
         self,
         ctx: StrategyContext,
         chunk: BridgeChunk,
+        *,
+        chunk_index: int,
     ) -> float:
         del chunk  # delay is independent of chunk content
-        rng = _rng_for(ctx)
+        rng = _rng_for(ctx, chunk_index)
         return rng.uniform(_CHUNK_DELAY_MIN_S, _CHUNK_DELAY_MAX_S)
 
 
-def _rng_for(ctx: StrategyContext) -> random.Random:
-    """Build a per-command :class:`random.Random` seeded deterministically."""
+def _rng_for(ctx: StrategyContext, chunk_index: int | None = None) -> random.Random:
+    """Build a deterministic :class:`random.Random` for ``ctx``.
+
+    Per-command decisions seed on ``(session_id, command_count)``;
+    ``between_chunks`` folds in ``chunk_index`` so each chunk draws its own
+    delay instead of repeating one fixed cadence. Matches
+    :func:`anglerfish.bridge.strategies.light._rng_for`.
+    """
     seed = f"{ctx.session_id}:{ctx.command_count}"
+    if chunk_index is not None:
+        seed = f"{seed}:{chunk_index}"
     return random.Random(seed)  # noqa: S311 - non-cryptographic timing jitter
