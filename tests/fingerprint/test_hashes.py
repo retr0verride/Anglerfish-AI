@@ -70,6 +70,20 @@ def test_hassh_non_ascii_name_does_not_crash() -> None:
     assert all(c in "0123456789abcdef" for c in h)
 
 
+def test_hassh_non_ascii_name_uses_utf8_encoding() -> None:
+    """H3: the non-ASCII byte must be UTF-8-encoded into the digest.
+
+    Pins the hardening explicitly: the digest equals MD5 of the canonical
+    string encoded as UTF-8 (so a regression back to .encode('ascii')
+    would crash on this input), and the non-ASCII char actually
+    contributes to the hash rather than being dropped.
+    """
+    canonical = compute_hassh_string(["aesé-x"], ["m"], [], [])
+    expected = hashlib.md5(canonical.encode("utf-8"), usedforsecurity=False).hexdigest()
+    assert compute_hassh(["aesé-x"], ["m"], [], []) == expected
+    assert compute_hassh(["aesé-x"], ["m"], [], []) != compute_hassh(["aes-x"], ["m"], [], [])
+
+
 def test_hassh_strips_field_separators_from_names() -> None:
     """``,`` / ``;`` inside an algorithm name cannot inject a field boundary.
 
