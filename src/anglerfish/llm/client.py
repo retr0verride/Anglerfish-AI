@@ -437,6 +437,14 @@ class LLMClient:
                 payload = json.loads(result.content)
             except json.JSONDecodeError as exc:
                 last_error = f"invalid JSON: {exc.msg}"
+                # Stash the assistant's raw reply so the correction turn
+                # shows the model the concrete output that failed to parse,
+                # mirroring the ValidationError branch below. Non-JSON is the
+                # common small-model failure, so this is where it matters most.
+                attempts = [
+                    *attempts,
+                    ChatMessage(role="assistant", content=result.content),
+                ]
                 continue
             try:
                 return schema.model_validate(payload)
