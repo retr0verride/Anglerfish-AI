@@ -12,7 +12,14 @@
 # Run as root inside a Debian/Ubuntu host with `live-build` installed.
 #
 # Usage:
-#     sudo ./iso/build.sh [--clean] [--sign]
+#     sudo ./iso/build.sh [--clean] [--sign] [--with-ollama|--without-ollama]
+#
+# --with-ollama / --without-ollama
+#         Whether to install Ollama on-host inside the image (the 0060
+#         chroot hook). Default is --without-ollama (the trusted-remote
+#         design: the operator points the bridge at a separate GPU box).
+#         --with-ollama adds ~5 GB. Translated to the
+#         ANGLERFISH_INSTALL_OLLAMA build env the hook reads.
 #
 # --sign  Signs the ISO with cosign keyless. Requires `cosign` on
 #         PATH and a workload identity capable of obtaining an OIDC
@@ -30,10 +37,13 @@ VERSION="$(grep -E '^version' "${ROOT}/pyproject.toml" | head -1 | sed -E 's/ver
 
 WANT_SIGN=0
 WANT_CLEAN=0
+WANT_OLLAMA=0
 for arg in "$@"; do
     case "${arg}" in
-        --clean) WANT_CLEAN=1 ;;
-        --sign)  WANT_SIGN=1 ;;
+        --clean)          WANT_CLEAN=1 ;;
+        --sign)           WANT_SIGN=1 ;;
+        --with-ollama)    WANT_OLLAMA=1 ;;
+        --without-ollama) WANT_OLLAMA=0 ;;
         *)
             echo "unknown flag: ${arg}" >&2
             exit 64
@@ -72,6 +82,11 @@ cp -r "${HERE}/config" config
 
 echo "[anglerfish-iso] live-build config in $(pwd)"
 echo "[anglerfish-iso] version: ${VERSION}"
+
+# The 0060 chroot hook reads ANGLERFISH_INSTALL_OLLAMA from the build
+# environment (default 0 = trusted-remote, no on-host Ollama).
+export ANGLERFISH_INSTALL_OLLAMA="${WANT_OLLAMA}"
+echo "[anglerfish-iso] on-host Ollama: ${WANT_OLLAMA} (1=install, 0=trusted-remote)"
 
 lb clean --purge
 lb config

@@ -36,7 +36,7 @@ jobs:
 
       - name: Build
         run: |
-          sudo ./iso/build.sh ${{ inputs.include_ollama && '' || '--without-ollama' }}
+          sudo ./iso/build.sh ${{ inputs.include_ollama && '--with-ollama' || '--without-ollama' }}
 
       - name: Compute provenance metadata
         id: meta
