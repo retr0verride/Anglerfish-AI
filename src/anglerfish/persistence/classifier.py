@@ -15,10 +15,11 @@ normal LLM call. False negatives degrade to pre-Stage-10
 behaviour (no fake state); false positives over-engage but do
 not violate any invariant.
 
-Slice 10.1 ships the regex-only hot path. The LLM fast-tier
-pass (for regex-silent write-shape commands) lands in slice
-10.3; the constructor already accepts the wiring so the
-integration tests can switch it on with one line.
+``classify`` is regex-first (the microsecond hot path). When the
+classifier is constructed with ``llm_enabled`` and an LLM client,
+regex-silent but write-shape commands fall through to a fast-tier
+structured-chat pass (:meth:`classify_via_llm`); without them, a
+regex miss is the final answer.
 """
 
 from __future__ import annotations
