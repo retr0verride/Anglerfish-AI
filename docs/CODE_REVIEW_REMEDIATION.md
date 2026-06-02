@@ -168,7 +168,31 @@ the `HoneytokensConfig`/`CounterDeceptionConfig` `model_post_init` raise vs the
 `@model_validator` idiom; the `source_ip`/`ip` field-constraint convention; and
 completing the `models/__init__` facade (bypassed by production today).
 
-_Test-gap bucket lands below as it completes._
+**Bucket 5 - test-gap backfill**
+
+| Gap | File | Status |
+|-----|------|--------|
+| Audit concurrent-record + fsync assertion + reserved-key clobber | `tests/test_audit.py` | **closed** (with B11) `9813948` |
+| `admin_password_hash` reject branch + bound tightened to 60 | `config/models.py`, `tests/config/test_models.py` | **closed** `434fa7a` |
+| Crypto non-UTF-8 decrypt branch | `tests/credentials/test_crypto.py` | **closed** `89a1289` |
+| Persona stale-pin + valid-recurrence ordering | `tests/persona/test_selector.py` | **closed** `860e134` |
+| CLI callback-serve disabled-honeytokens guard | `tests/cli/test_callback_subcommand.py` | **closed** `99d8ccd` |
+| Wizard preflight plumbing (was a kwargs-discarding stub) | `tests/wizard/test_wizard.py` | **closed** `be63fe0` |
+| Geo owned-reader close + default-client branch | `tests/geo/` | **closed** `c084d8d` |
+| HASSH UTF-8 hardening pinned explicitly | `tests/fingerprint/test_hashes.py` | **closed** `e645860` |
+
+The rotation `sqlite3.Error`/`OSError` branches and the geo `_MAX_BYTES` +
+HTTP-error paths were already covered by prior passes (see the
+already-closed list above).
+
+## Outcome (Low pass)
+
+All five open buckets are closed. The behaviour/fidelity bucket and the
+two correctness items the test-gap pass surfaced (the bcrypt bound, the
+audit ts/reserved-key) were test-first, single green commits with
+audit-notes blocks; dead-code/extension-point and docstring buckets are
+behaviour-preserving. Deferred: the cosmetic models-surface API tweaks
+listed under bucket 4. PR #15.
 
 ## Process
 
