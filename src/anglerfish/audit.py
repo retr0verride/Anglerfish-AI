@@ -168,6 +168,9 @@ class AuditLog:
                 )
 
     def __enter__(self) -> Self:
+        # Convenience context manager (tested, no production caller): there
+        # is no persistent handle, so it exists only so callers may `with`
+        # an AuditLog symmetrically with other resources.
         return self
 
     def __exit__(self, *_exc: object) -> None:

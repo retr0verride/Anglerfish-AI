@@ -1,9 +1,14 @@
-"""Threat engine — the integration point between the bridge and alerting.
+"""Threat engine — scoring + alerting pipeline.
 
 :class:`ThreatEngine` combines :func:`score_session` with the
 :class:`ThreatAlerter` so that a single ``process`` call performs
 scoring, optional alerting, and returns the assessment for storage or
 forwarding.
+
+Deliberate, currently-unwired extension point: no production path
+instantiates ``ThreatEngine`` yet (the bridge records rule-based
+assessments directly). Kept, with its tests, so the alerting stage can
+wire it in without rebuilding the scoring->alerting contract.
 """
 
 from __future__ import annotations
@@ -23,7 +28,11 @@ __all__ = ["ThreatEngine"]
 
 
 class ThreatEngine:
-    """Combines scoring with alerting."""
+    """Combines scoring with alerting.
+
+    Currently-unwired extension point (see the module docstring): built
+    and tested, not yet instantiated in production.
+    """
 
     def __init__(
         self,

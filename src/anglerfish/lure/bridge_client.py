@@ -88,6 +88,10 @@ class BridgeStreamChunk:
     incremental text, ``source`` is ``"ai"`` / ``"fallback"`` /
     ``"rejected"``, ``done`` flags the terminal chunk, and
     ``latency_ms`` / ``cwd`` are populated only on the terminal chunk.
+
+    ``done`` is part of the wire protocol and parsed for completeness;
+    the consumer relies on stream exhaustion to detect the end, so it
+    does not branch on the flag today.
     """
 
     delta: str
