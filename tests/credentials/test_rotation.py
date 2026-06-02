@@ -58,7 +58,7 @@ async def test_round_trip_decryption(tmp_path: Path) -> None:
     assert result.rows_rotated == 5
     assert result.rows_skipped == 0
     assert result.backup_path.exists()
-    assert result.new_path == db
+    assert result.db_path == db
 
     async with CredentialStore(_config(db, new_key)) as store:
         after = await store.query(limit=100)

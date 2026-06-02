@@ -90,7 +90,9 @@ class RotationResult:
     rows_rotated: int
     rows_skipped: int
     backup_path: Path
-    new_path: Path
+    # The live rotated database path (the work file was already moved into
+    # place); named db_path, not new_path, since it is not the ".new" file.
+    db_path: Path
 
 
 def rotate_key(
@@ -241,5 +243,5 @@ def rotate_key(
         rows_rotated=rows_rotated,
         rows_skipped=rows_skipped,
         backup_path=backup_path,
-        new_path=db_path,
+        db_path=db_path,
     )
