@@ -260,7 +260,9 @@ def _extract_mmdb(archive_path: Path, *, edition: str) -> Path | None:
                     f"{edition}: archive extracts to over {_MAX_EXTRACTED_BYTES} bytes; "
                     "refusing (possible decompression bomb)",
                 )
-        # tarfile.data_filter is available on Python 3.12+; on older it's a no-op
+        # The "data" extraction filter is honored on Python 3.12+ and the
+        # 3.11.4+ backport: it rejects absolute paths, parent-dir traversal,
+        # and other unsafe members during extraction (not a no-op).
         tar.extractall(extract_root, filter="data")
 
     matches = sorted(extract_root.rglob(f"{edition}*.mmdb"))

@@ -6,7 +6,7 @@ session history, parses the response against an internal Pydantic
 schema, and returns the operator-facing
 :class:`anglerfish.models.IntentSummary`.
 
-Two short-circuit cases avoid the LLM entirely:
+One short-circuit case avoids the LLM entirely:
 
 * Sessions with fewer than ``min_commands`` recorded turns get a
   fixed placeholder summary (``confidence="low"``,
