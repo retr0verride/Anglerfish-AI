@@ -80,8 +80,35 @@ a later pass.
   attribution model (shared tokens dilute per-session correlation) and
   the static-vs-per-session path-conflict resolved first._
 
+## Low pass
+
+The ~69 Low findings were first reconciled against current `main` (both
+prior passes merged) by parallel verification readers, so already-closed
+items are not re-touched.
+
+### Already closed by the High/Medium passes
+
+systemctl unit truncation (M5), oversized regex capture (M4), intent/embed
+token caps (M6), `data_dir` rebase (M9), tailer literal sets (M10), bridge
+`cwd` consumption (M1), threat cross-command negative test (R2), callback
+production-lifespan test (M11), `HoneytokensConfig` enabled-requires-callback
+test (M12), `models/embedding.py` co-located test (M13), rotation
+`sqlite3.Error`/`OSError` branch tests, geo `_MAX_BYTES` + HTTP-error tests
+(R4). The HASSH non-ASCII path has a test but only asserts length/hex.
+
+### Open buckets (worked in risk order)
+
+| ID | Bucket / finding | File | Status |
+|----|------------------|------|--------|
+| L0 | Stray `.intel_tests.txt` artifact | repo root | **closed** `cf32871` |
+
+_Behaviour/fidelity, dead-code, duplication, docstring-drift, and
+test-gap buckets land below as they complete._
+
 ## Process
 
 Test-first per fix, single-purpose commit, green at commit, audit-notes
 block. The Highs (R1, R2, R3, R4a) are re-verified by an independent
-adversarial pass before closure. CI watched after push.
+adversarial pass before closure. CI watched after push. Low-pass dead-code
+deletions vs. deliberate-extension-point markers are an owner decision,
+captured under Owner decisions.
