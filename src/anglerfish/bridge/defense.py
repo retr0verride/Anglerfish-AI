@@ -80,16 +80,6 @@ _UNSET: _Unset = _Unset()
 # layer would silently let a weight-swap through.
 _MODEL_BLOB_MEDIA_TYPE = "application/vnd.ollama.image.model"
 
-# Default cap on bytes scanned by ANY pattern when DefenseConfig
-# leaves scan_max_chars at its own default. Kept as a module constant
-# so legacy tests that construct DefenseConfig() get predictable
-# behaviour; production reads from DefenseConfig.scan_max_chars and
-# the AnglerfishSettings cross-field validator (Stage 1.8.5) enforces
-# the >= ollama.max_response_chars and >= bridge.max_input_chars
-# invariants so an operator cannot silently shrink the scan window
-# below the actual I/O sizes.
-_DEFAULT_SCAN_MAX_CHARS = 8192
-
 
 class DefenseVerdict(BaseModel):
     """Result of one defense check (output filter or injection scorer).

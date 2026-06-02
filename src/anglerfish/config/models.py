@@ -745,7 +745,7 @@ class DefenseConfig(BaseModel):
         ),
     )
     scan_max_chars: int = Field(
-        default=8192,  # mirrors _DEFAULT_SCAN_MAX_CHARS in bridge.defense
+        default=8192,  # the single default cap on bytes scanned per pattern
         ge=512,
         le=65536,
         description=(
