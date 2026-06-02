@@ -393,7 +393,7 @@ class _LureSSHServer(asyncssh.SSHServer):
         # connect-and-immediately-auth attackers still get logged.
         state = self._state
         if state is not None:
-            state.username = username[:64] or "root"
+            state.username = _normalise_username(username)
             conn = self._conn
             if conn is not None:
                 self._capture_fingerprint(conn, state.source_ip)
@@ -445,6 +445,7 @@ class _LureSSHServer(asyncssh.SSHServer):
     async def validate_password(self, username: str, password: str) -> bool:
         state = self._state
         source_ip = state.source_ip if state else "unknown"
+        username = _normalise_username(username)
         # Record asynchronously so a slow store doesn't extend the
         # SSH handshake. asyncssh awaits this coroutine so we get
         # backpressure for free.
@@ -473,6 +474,7 @@ class _LureSSHServer(asyncssh.SSHServer):
     def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
         state = self._state
         source_ip = state.source_ip if state else "unknown"
+        username = _normalise_username(username)
         fingerprint = key.get_fingerprint() if hasattr(key, "get_fingerprint") else "unknown"
         self._container.audit.record(
             "lure.login_attempt",
@@ -537,6 +539,16 @@ class _LureSSHServer(asyncssh.SSHServer):
 def _password_hash_prefix(password: str) -> str:
     """First 8 hex chars of sha256(password) - dedup, never plaintext."""
     return hashlib.sha256(password.encode("utf-8", errors="replace")).hexdigest()[:8]
+
+
+def _normalise_username(username: str) -> str:
+    """Canonical login username: trimmed to 64 chars, empty defaults to root.
+
+    Shared by begin_auth and the credential/audit records so every record
+    for one connection agrees on the username instead of mixing the trimmed
+    form with the raw client value.
+    """
+    return username[:64] or "root"
 
 
 # ---------------------------------------------------------------------------

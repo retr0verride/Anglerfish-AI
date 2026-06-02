@@ -13,6 +13,7 @@ import os
 import struct
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -30,7 +31,12 @@ from anglerfish.fingerprint.tor import TorExitList
 from anglerfish.lure.bridge_client import BridgeClient
 from anglerfish.lure.config import LureConfig
 from anglerfish.lure.keys import ensure_host_keys, load_host_keys
-from anglerfish.lure.server import LureServer, _client_offered_algorithms
+from anglerfish.lure.server import (
+    LureServer,
+    _client_offered_algorithms,
+    _ConnectionState,
+    _LureSSHServer,
+)
 
 # Skip integration tests on Windows. asyncssh.listen needs POSIX
 # signal-handler plumbing that nt does not provide, and CI for this
@@ -245,6 +251,40 @@ async def test_audit_records_login_attempt(
     assert "lure.login_attempt" in events
     # SHA-256 prefix of "hunter2" - never the plaintext.
     assert "hunter2" not in events
+
+
+async def test_username_normalised_consistently_across_auth_records() -> None:
+    # begin_auth trims username to 64 chars (default root); validate_password
+    # must record the same normalised value, or one connection presents two
+    # usernames across its credential-store and audit records.
+    long_name = "x" * 100
+    store_usernames: list[str] = []
+    audit_usernames: list[str] = []
+
+    async def _record_attempt(*, username: str, **_kw: object) -> None:
+        store_usernames.append(username)
+
+    def _audit_record(event_type: str, **fields: object) -> None:
+        if event_type == "lure.login_attempt":
+            audit_usernames.append(cast("str", fields["username"]))
+
+    container = cast(
+        "LureServer",
+        SimpleNamespace(
+            credential_store=SimpleNamespace(record_attempt=_record_attempt),
+            audit=SimpleNamespace(record=_audit_record),
+            placeholder_session_id=uuid4,
+        ),
+    )
+    server = _LureSSHServer(container)
+    server._state = _ConnectionState(source_ip="203.0.113.9")
+
+    server.begin_auth(long_name)
+    assert server._state.username == "x" * 64
+    await server.validate_password(long_name, "pw")
+
+    assert store_usernames == ["x" * 64]
+    assert audit_usernames == ["x" * 64]
 
 
 async def test_audit_records_fingerprint(
