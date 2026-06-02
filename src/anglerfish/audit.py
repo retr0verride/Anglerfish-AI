@@ -66,7 +66,11 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
 
 The Stage 4.2 audit-log tailer in
 :mod:`anglerfish.dashboard.audit_tailer` consumes the per-session
-``lure.*`` events to populate the persistent session store.
+``lure.*`` events (session open/close, native/bridge commands,
+fallbacks) plus the ``bridge.*`` enrichment events
+(``persistence_attempt``, ``honeytoken_placed``, ``intent_extracted``,
+``embedding_generated``, ``cluster_match``, ``persona_rebound``) to
+populate the persistent session store.
 
 The log is best-effort: a write failure logs a warning but never raises.
 The audit log MUST NOT itself crash the application — losing it would

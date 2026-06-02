@@ -29,9 +29,10 @@ class SessionEmbedding(BaseModel):
 
     ``vector`` is the immutable tuple of floats returned by
     :meth:`anglerfish.llm.LLMClient.embed`. ``dimension`` must
-    equal ``len(vector)`` (cross-checked in the validator);
-    storing both lets the persistence layer reject row reads
-    whose blob has been truncated or corrupted.
+    equal ``len(vector)`` (cross-checked in the validator), so a
+    construction with a mismatched count is rejected. Truncated or
+    corrupt DB blobs are caught separately, on read, by the store's
+    ``_unpack_vector`` length check.
 
     ``model`` is the embed model tag that produced the vector.
     The similarity-query path filters on this column so cross-

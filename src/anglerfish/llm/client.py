@@ -610,9 +610,9 @@ def _parse_usage(data: dict[str, Any]) -> TokenUsage:
     """Pull ``prompt_eval_count`` + ``eval_count`` from Ollama's response.
 
     Both fields are optional in the Ollama protocol; missing or non-
-    integer values default to 0. Used by Stage 5's token-budget
-    machinery in a later slice; in slice 1 it's parsed and discarded
-    by call sites that don't yet consult it.
+    integer values default to 0. The returned usage feeds Stage 5's
+    token-budget machinery: chat/stream call sites consume it via
+    ``TokenBudget.consume`` to debit the per-session budget.
     """
     return TokenUsage(
         prompt_tokens=_int_or_zero(data.get("prompt_eval_count")),

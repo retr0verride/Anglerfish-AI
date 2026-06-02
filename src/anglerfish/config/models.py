@@ -231,8 +231,9 @@ class OllamaConfig(BaseModel):
         ``ANGLERFISH_OLLAMA__MODEL=<tag>`` in their env file. Pydantic-
         settings passes it as ``model=`` on construction; this validator
         renames it to ``fast_model`` if ``fast_model`` is not already
-        supplied. After one release cycle the shim is removed and the
-        wizard's ``--reconfigure`` writes both new keys.
+        supplied. Retained as a backward-compat alias; drop it in a
+        future release once env files have migrated to the explicit
+        ``fast_model`` / ``deep_model`` keys.
         """
         if not isinstance(data, dict) or "model" not in data:
             return data
