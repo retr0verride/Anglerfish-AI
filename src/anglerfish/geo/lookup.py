@@ -18,6 +18,8 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol, Self
 
+from pydantic import ValidationError
+
 from anglerfish.config.models import GeoConfig
 from anglerfish.models.geo import GeoRecord
 
@@ -91,7 +93,16 @@ class GeoLookup:
             self._lookup_one(self._city_reader, ip),
             self._lookup_one(self._asn_reader, ip),
         )
-        return self._build_record(ip, city_payload, asn_payload)
+        try:
+            return self._build_record(ip, city_payload, asn_payload)
+        except ValidationError as exc:
+            # Audit review R4b (follow-up): a hostile / corrupt MMDB can
+            # return a well-formed dict carrying out-of-range values
+            # (latitude 999, NaN, an oversized ASN). GeoRecord's field
+            # bounds then reject them with a ValidationError. lookup()
+            # promises never to raise, so degrade to an unenriched record.
+            self._logger.warning("geo.lookup_failed ip=%s: malformed record: %s", ip, exc)
+            return GeoRecord(ip=ip, looked_up=True)
 
     async def _lookup_one(
         self,
@@ -102,7 +113,12 @@ class GeoLookup:
             return None
         try:
             result = await asyncio.to_thread(reader.get, ip)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
+            # Audit review R4b: a corrupt / truncated MMDB raises
+            # maxminddb.InvalidDatabaseError, which subclasses RuntimeError.
+            # lookup() promises never to raise, so include RuntimeError
+            # here rather than let a bad database file propagate out and
+            # crash the caller mid-enrichment.
             self._logger.warning(
                 "geo.lookup_failed ip=%s error=%s",
                 ip,

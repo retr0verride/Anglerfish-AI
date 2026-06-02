@@ -425,11 +425,13 @@ def test_alerts_surfaces_honeytoken_callback_event(
     assert "orig 203.0.113.7" in detail
 
 
-def test_alerts_honeytoken_callback_omits_orig_when_static_base(
+def test_alerts_honeytoken_callback_omits_orig_when_no_registered_ip(
     client: TestClient,
     audit_path: Path,
 ) -> None:
-    """Static-base tokens carry registered_source_ip=None; the renderer omits 'orig'."""
+    """A callback whose token has no registered source IP carries
+    registered_source_ip=None; the renderer omits the 'orig' clause.
+    """
     _write_events(
         audit_path,
         [

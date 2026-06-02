@@ -307,7 +307,7 @@ def create_bridge_app(
         # installs for this source IP. Returns an empty list when
         # engaged_persistence is disabled or no reader is wired.
         prior_events = await service.load_persistence_for_source_ip(req.source_ip)
-        # Stage 11: load static-base + per-IP honeytokens for the
+        # Stage 11: load the per-source-IP honeytokens for the
         # fakefs_overlay merge. Returns an empty list when
         # honeytokens.enabled=False or no reader is wired.
         honeytokens = await service.load_honeytokens_for_source_ip(req.source_ip)

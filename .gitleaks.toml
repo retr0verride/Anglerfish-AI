@@ -1,0 +1,20 @@
+# gitleaks configuration.
+#
+# Anglerfish is a local-LLM SSH honeypot. Synthetic credentials are the
+# product's domain, so its TEST fixtures necessarily contain credential-
+# shaped literals that are not real secrets: AWS-shaped honeytoken access
+# keys (AKIA...), OpenSSH private-key armor, fake MaxMind licence keys.
+# The repo already marks these inline with `# gitleaks:allow`, but the
+# pull_request scan walks the whole commit range, so a literal introduced
+# in one commit is flagged even after a later commit annotates it. Scope a
+# path allowlist to tests/ so source-tree scanning stays fully active
+# while test fixtures do not trip the secret scan.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic credential fixtures under tests/ are not real secrets."
+paths = [
+  '''tests/.*''',
+]

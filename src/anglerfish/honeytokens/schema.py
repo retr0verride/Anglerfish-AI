@@ -122,26 +122,18 @@ class Honeytoken(BaseModel):
         default=None,
         max_length=64,
         description=(
-            "Source IP of the session that triggered placement; NULL on "
-            "static-base tokens that ship to every session. The "
-            "registry lookup at session-open filters by this column."
+            "Source IP of the session that triggered placement. The "
+            "registry lookup at session-open filters by this column "
+            "(the cross-session join key). Nullable in the schema; every "
+            "token a producer writes today sets it."
         ),
     )
     session_id: UUID | None = Field(
         default=None,
         description=(
-            "Session that triggered placement; NULL on static-base tokens. "
-            "Persisted for operator triage; the bridge does NOT use it for "
-            "lookup (source_ip is the cross-session join key)."
+            "Session that triggered placement. Persisted for operator "
+            "triage; the bridge does NOT use it for lookup (source_ip is "
+            "the cross-session join key)."
         ),
     )
     created_at: datetime
-
-    def is_static_base(self) -> bool:
-        """True iff this honeytoken ships to every session.
-
-        Static-base tokens have ``source_ip`` and ``session_id`` both
-        :data:`None`. The bridge registers them once at startup and
-        merges them into every ``SessionStartResponse``.
-        """
-        return self.source_ip is None and self.session_id is None

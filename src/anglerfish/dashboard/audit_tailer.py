@@ -315,9 +315,10 @@ class AuditTailer:
         event_type = event.get("event_type")
         if not isinstance(event_type, str):
             return
-        # Stage 11: honeytoken_placed events for static-base tokens
-        # carry session_id=null intentionally. Dispatch before the
-        # session_id parse so those don't fall through the gate.
+        # Stage 11: honeytoken_placed is registry-bound, not
+        # session-update-bound, so route it by event_type here, before
+        # the session_id-keyed dispatch below (which has no handler for
+        # it and would drop it).
         if event_type == "bridge.honeytoken_placed":
             await self._handle_honeytoken_placed(event)
             return
@@ -418,21 +419,51 @@ class AuditTailer:
             return
         snapshot = self._accumulators.get(session_id)
         if snapshot is None:
-            # Command-before-open: synthesize a placeholder session
-            # row from the command event. If a real session_opened
-            # arrives later it will overwrite source_ip/username.
-            source_ip = _str_field(event, "source_ip", default="unknown")
-            snapshot = SessionSnapshot(
-                session_id=session_id,
-                source_ip=source_ip,
-                username=_PLACEHOLDER_USERNAME,
-                fake_hostname=_PLACEHOLDER_HOSTNAME,
-                fake_username=_PLACEHOLDER_USERNAME,
-                fake_cwd=_PLACEHOLDER_CWD,
-                started_at=ts,
-                last_activity_at=ts,
-                turns=(),
-            )
+            # Accumulator miss. Two cases:
+            #  - a command on a session opened before a process restart:
+            #    the in-memory accumulator does not survive a restart, but
+            #    the persisted turns do. Rehydrate them from the store so
+            #    the cumulative `turns` tuple stays complete. Without this,
+            #    update_session's positional diff (snapshot.turns[len(
+            #    existing):]) slices the new turn to () and never records
+            #    it, and the published snapshot regresses the live view to
+            #    a single turn (audit review R1).
+            #  - a genuine command-before-open (no session row yet):
+            #    synthesize a placeholder; a later session_opened upgrades
+            #    source_ip/username.
+            persisted = await self._state.store.get_session(session_id)
+            if persisted is not None:
+                # Idempotent replay guard (review R1 follow-up): the offset
+                # cache and the per-turn store write are not atomic, so a
+                # crash between record_turn and the offset save rewinds the
+                # tailer over already-recorded command lines. On restart
+                # those lines re-read as accumulator misses. If this turn
+                # (same timestamp + command + source) is already persisted,
+                # it is such a replay - skip it WITHOUT caching the
+                # accumulator, so the next re-read line is re-checked the
+                # same way and a genuinely new command (absent from the
+                # persisted turns) still records and seeds the accumulator.
+                if any(
+                    t.timestamp == turn.timestamp
+                    and t.command == turn.command
+                    and t.source == turn.source
+                    for t in persisted.turns
+                ):
+                    return
+                snapshot = persisted
+            else:
+                source_ip = _str_field(event, "source_ip", default="unknown")
+                snapshot = SessionSnapshot(
+                    session_id=session_id,
+                    source_ip=source_ip,
+                    username=_PLACEHOLDER_USERNAME,
+                    fake_hostname=_PLACEHOLDER_HOSTNAME,
+                    fake_username=_PLACEHOLDER_USERNAME,
+                    fake_cwd=_PLACEHOLDER_CWD,
+                    started_at=ts,
+                    last_activity_at=ts,
+                    turns=(),
+                )
         snapshot = snapshot.model_copy(
             update={
                 "last_activity_at": ts,
@@ -922,10 +953,8 @@ def _parse_honeytoken_placed_event(event: dict[str, Any]) -> Honeytoken | None:
 
     Returns :data:`None` (with a warning log) when any required
     field is missing or type-mismatched. Mirrors the slice 10.2
-    persistence parser shape.
-
-    Static-base tokens carry ``source_ip=null`` + ``session_id=null``
-    intentionally; the parser preserves that.
+    persistence parser shape. ``source_ip`` / ``session_id`` are
+    nullable in the event shape and the parser preserves a null.
     """
     token_id = event.get("token_id")
     kind = event.get("kind")

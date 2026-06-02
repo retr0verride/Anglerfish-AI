@@ -141,9 +141,24 @@ def _fetch_one(
     sha_url = f"{base_url}?edition_id={edition}&license_key={license_key}&suffix=tar.gz.sha256"
 
     logger.info("fetching %s manifest", edition)
-    sha_resp = client.get(sha_url)
-    sha_resp.raise_for_status()
-    expected_sha = sha_resp.text.split()[0].strip().lower()
+    # Audit review R4a: convert transport errors (timeout, refused),
+    # 4xx/5xx (raise_for_status -> httpx.HTTPStatusError, a HTTPError
+    # subclass), and an empty manifest body (.split()[0] -> IndexError)
+    # into FetchError. fetch_geolite_databases documents a FetchError-only
+    # contract and the CLI handler catches only FetchError; a bare
+    # httpx/IndexError would crash `anglerfish geo update` and skip the
+    # geo.update_failed audit record (the operator's only failure signal
+    # under the systemd timer).
+    try:
+        sha_resp = client.get(sha_url)
+        sha_resp.raise_for_status()
+        expected_sha = sha_resp.text.split()[0].strip().lower()
+    except httpx.HTTPError as exc:
+        raise FetchError(
+            f"{edition}: sha256 manifest fetch failed: {type(exc).__name__}: {exc}",
+        ) from exc
+    except IndexError as exc:
+        raise FetchError(f"{edition}: sha256 manifest was empty") from exc
     if len(expected_sha) != 64 or not all(c in "0123456789abcdef" for c in expected_sha):
         raise FetchError(f"{edition}: malformed sha256 manifest {expected_sha!r}")
 
@@ -152,17 +167,27 @@ def _fetch_one(
         archive_path = Path(tmpdir) / f"{edition}.tar.gz"
         actual_sha = hashlib.sha256()
         bytes_seen = 0
-        with (
-            client.stream("GET", base_url, params=params) as response,
-            archive_path.open("wb") as out,
-        ):
-            response.raise_for_status()
-            for chunk in response.iter_bytes(_CHUNK):
-                bytes_seen += len(chunk)
-                if bytes_seen > _MAX_BYTES:
-                    raise FetchError(f"{edition}: archive exceeded {_MAX_BYTES} byte ceiling")
-                actual_sha.update(chunk)
-                out.write(chunk)
+        # Audit review R4a: same FetchError-only contract on the download
+        # leg. The size-ceiling FetchError below is not an httpx error, so
+        # it passes through this handler unchanged.
+        try:
+            with (
+                client.stream("GET", base_url, params=params) as response,
+                archive_path.open("wb") as out,
+            ):
+                response.raise_for_status()
+                for chunk in response.iter_bytes(_CHUNK):
+                    bytes_seen += len(chunk)
+                    if bytes_seen > _MAX_BYTES:
+                        raise FetchError(
+                            f"{edition}: archive exceeded {_MAX_BYTES} byte ceiling",
+                        )
+                    actual_sha.update(chunk)
+                    out.write(chunk)
+        except httpx.HTTPError as exc:
+            raise FetchError(
+                f"{edition}: archive download failed: {type(exc).__name__}: {exc}",
+            ) from exc
 
         if actual_sha.hexdigest() != expected_sha:
             raise FetchError(
@@ -170,16 +195,28 @@ def _fetch_one(
                 f"got {actual_sha.hexdigest()})",
             )
 
-        extracted = _extract_mmdb(archive_path, edition=edition)
-        if extracted is None:
-            raise FetchError(f"{edition}: archive did not contain a .mmdb payload")
-
-        # Stage the file in the destination directory so the final
-        # rename is on the same filesystem.
-        staged = destination.with_suffix(destination.suffix + ".new")
-        shutil.copyfile(extracted, staged)
-        staged.chmod(0o644)
-        staged.replace(destination)
+        # Audit review R4a (follow-up): extraction + install also honor the
+        # FetchError-only contract. A sha-matching but non-gzip/corrupt
+        # archive raises tarfile.ReadError, and the staging copy/rename can
+        # raise OSError (ENOSPC, EACCES); both would otherwise crash
+        # `anglerfish geo update` and skip the geo.update_failed audit.
+        try:
+            extracted = _extract_mmdb(archive_path, edition=edition)
+            if extracted is None:
+                raise FetchError(f"{edition}: archive did not contain a .mmdb payload")
+            # Stage the file in the destination directory so the final
+            # rename is on the same filesystem.
+            staged = destination.with_suffix(destination.suffix + ".new")
+            shutil.copyfile(extracted, staged)
+            staged.chmod(0o644)
+            staged.replace(destination)
+        except FetchError:
+            raise
+        except (tarfile.TarError, OSError) as exc:
+            raise FetchError(
+                f"{edition}: extracting/installing the database failed: "
+                f"{type(exc).__name__}: {exc}",
+            ) from exc
         return FetchResult(
             edition=edition,
             destination=destination,

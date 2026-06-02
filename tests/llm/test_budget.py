@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from typing import cast
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from anglerfish.config.models import OllamaConfig
 from anglerfish.llm import (
     BudgetExhaustedError,
+    ChatChunk,
     ChatMessage,
     LLMClient,
     LLMRole,
@@ -328,3 +330,58 @@ async def test_distinct_budgets_run_concurrently_without_blocking() -> None:
     # All five succeed; each distinct budget consumed its own 2 tokens.
     assert len(results) == 5
     assert all(b.consumed_fast == 2 for b in budgets)
+
+
+async def test_stream_chat_early_break_does_not_hold_budget_lock() -> None:
+    """An abandoned stream must not keep the per-session budget lock held
+    (audit review R3).
+
+    The previous code held ``budget.lock`` across the stream's ``yield``s,
+    so a consumer that broke out early suspended the generator with the
+    lock still held; the next command on the same session then deadlocked
+    acquiring the same per-session lock.
+    """
+    ndjson = (
+        json.dumps({"message": {"content": "a"}, "done": False})
+        + "\n"
+        + json.dumps({"message": {"content": "b"}, "done": False})
+        + "\n"
+        + json.dumps(
+            {"message": {"content": "c"}, "done": True, "prompt_eval_count": 1, "eval_count": 1},
+        )
+        + "\n"
+    )
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=ndjson.encode("utf-8"))
+
+    client = _make_client(handler)
+    budget = TokenBudget(fast_token_cap=100_000)
+    # stream_chat is an async generator; cast so .aclose() type-checks
+    # (its declared return type is the narrower AsyncIterator).
+    gen = cast(
+        "AsyncGenerator[ChatChunk, None]",
+        client.stream_chat([ChatMessage(role="user", content="hi")], budget=budget),
+    )
+    try:
+        # Take one chunk, then abandon the generator (the realistic
+        # early-break case: a `break` out of an `async for`).
+        first = await gen.__anext__()
+        assert first.delta == "a"
+
+        async def _second() -> list[str]:
+            return [
+                chunk.delta
+                async for chunk in client.stream_chat(
+                    [ChatMessage(role="user", content="hi")],
+                    budget=budget,
+                )
+            ]
+
+        # Must not block on the lock the suspended first generator would
+        # otherwise be holding.
+        deltas = await asyncio.wait_for(_second(), timeout=2.0)
+        assert deltas == ["a", "b", "c"]
+    finally:
+        await gen.aclose()
+        await client.aclose()

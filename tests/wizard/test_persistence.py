@@ -210,7 +210,9 @@ def test_atomic_write_private_never_world_readable_temp(
         seen.setdefault("creation_mode", stat.S_IMODE(os.stat(target).st_mode))  # type: ignore[arg-type]
         real_chmod(target, mode, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(persistence.os, "chmod", _spy_chmod)
+    # Patch the shared os module (persistence calls os.chmod), not
+    # persistence.os, which mypy strict rejects as an implicit re-export.
+    monkeypatch.setattr(os, "chmod", _spy_chmod)
 
     target = tmp_path / "cfg" / "anglerfish.env"
     persistence.atomic_write_private(target, "SESSION_SECRET=topsecret\n", mode=0o600)

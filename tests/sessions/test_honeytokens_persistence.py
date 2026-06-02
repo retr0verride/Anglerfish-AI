@@ -97,18 +97,21 @@ async def test_get_honeytoken_returns_none_for_unknown_id(tmp_path: Path) -> Non
     assert loaded is None
 
 
-async def test_static_base_honeytoken_round_trips_with_nulls(tmp_path: Path) -> None:
-    """source_ip=None + session_id=None persist as NULL columns."""
+async def test_honeytoken_with_null_provenance_round_trips(tmp_path: Path) -> None:
+    """source_ip=None + session_id=None persist + load as NULL columns.
+
+    The schema columns stay nullable; this pins the defensive round-trip
+    even though every producer sets source_ip today.
+    """
     config = SessionStoreConfig(database_path=tmp_path / "store.db")
     async with SessionStore(config) as store:
         await store.register_honeytoken(
-            _token(token_id="STATICAAAAAAAAAA", source_ip=None, session_id=None),
+            _token(token_id="NULLPROVAAAAAAAA", source_ip=None, session_id=None),
         )
-        loaded = await store.get_honeytoken("STATICAAAAAAAAAA")
+        loaded = await store.get_honeytoken("NULLPROVAAAAAAAA")
     assert loaded is not None
     assert loaded.source_ip is None
     assert loaded.session_id is None
-    assert loaded.is_static_base()
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +125,8 @@ async def test_list_honeytokens_for_source_ip_filters_correctly(
     config = SessionStoreConfig(database_path=tmp_path / "store.db")
     async with SessionStore(config) as store:
         sid = uuid4()
-        # IP 7: one token. IP 8: one token. Static base: one.
+        # IP 7: one token. IP 8: one token. A null-source_ip row that the
+        # exact-match IP filter must never return.
         await store.register_honeytoken(
             _token(token_id="AAAAAAAAAAAAAAAA", source_ip="203.0.113.7", session_id=sid),
         )
@@ -138,32 +142,19 @@ async def test_list_honeytokens_for_source_ip_filters_correctly(
     assert [t.id for t in ip_8] == ["BBBBBBBBBBBBBBBB"]
 
 
-async def test_list_honeytokens_for_source_ip_excludes_static_base(
+async def test_list_honeytokens_for_source_ip_excludes_null_source_ip(
     tmp_path: Path,
 ) -> None:
-    """Static-base tokens have NULL source_ip; lookup by IP must not return them."""
+    """A row with NULL source_ip must not be returned by an exact-match
+    IP lookup (`WHERE source_ip = ?`).
+    """
     config = SessionStoreConfig(database_path=tmp_path / "store.db")
     async with SessionStore(config) as store:
         await store.register_honeytoken(
-            _token(token_id="STATICAAAAAAAAAA", source_ip=None, session_id=None),
+            _token(token_id="NULLPROVAAAAAAAA", source_ip=None, session_id=None),
         )
         per_ip = await store.list_honeytokens_for_source_ip("203.0.113.7")
     assert per_ip == []
-
-
-async def test_list_static_honeytokens_returns_null_source_ip_rows_only(
-    tmp_path: Path,
-) -> None:
-    config = SessionStoreConfig(database_path=tmp_path / "store.db")
-    async with SessionStore(config) as store:
-        await store.register_honeytoken(
-            _token(token_id="STATICAAAAAAAAAA", source_ip=None, session_id=None),
-        )
-        await store.register_honeytoken(
-            _token(token_id="DYNAMICBBBBBBBBB", source_ip="203.0.113.7", session_id=uuid4()),
-        )
-        static = await store.list_static_honeytokens()
-    assert [t.id for t in static] == ["STATICAAAAAAAAAA"]
 
 
 async def test_list_honeytokens_orders_oldest_first(tmp_path: Path) -> None:
@@ -222,8 +213,6 @@ async def test_reader_round_trips_honeytoken(tmp_path: Path) -> None:
     async with SessionStoreReader(config) as reader:
         loaded = await reader.get_honeytoken("READERAAAAAAAAAA")
         ip_tokens = await reader.list_honeytokens_for_source_ip("203.0.113.7")
-        static_tokens = await reader.list_static_honeytokens()
     assert loaded is not None
     assert loaded.id == "READERAAAAAAAAAA"
     assert [t.id for t in ip_tokens] == ["READERAAAAAAAAAA"]
-    assert static_tokens == []

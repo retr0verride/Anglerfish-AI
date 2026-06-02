@@ -270,7 +270,7 @@ async def test_record_threat_assessment_no_source_ip_skipped(
 async def opened_reader_with_seed(
     tmp_path: Path,
 ) -> AsyncIterator[tuple[SessionStoreReader, Path]]:
-    """Seed one per-IP + one static-base token, then yield (reader, db_path)."""
+    """Seed per-IP tokens for two different source IPs, yield (reader, db)."""
     sessions_db = tmp_path / "sessions.db"
     config = SessionStoreConfig(database_path=sessions_db)
     writer = SessionStore(config)
@@ -289,13 +289,13 @@ async def opened_reader_with_seed(
     )
     await writer.register_honeytoken(
         Honeytoken(
-            id="STATICAAAAAAAAAA",
+            id="OTHERIPAAAAAAAAA",
             kind="ssh_key",
-            payload="-----BEGIN OPENSSH PRIVATE KEY-----\nstatic\n",
-            callback_url="https://honey.example.com/cb/STATICAAAAAAAAAA",
+            payload="-----BEGIN OPENSSH PRIVATE KEY-----\nother\n",
+            callback_url="https://honey.example.com/cb/OTHERIPAAAAAAAAA",
             placed_at="/root/.ssh/id_rsa",
-            source_ip=None,
-            session_id=None,
+            source_ip="203.0.113.8",
+            session_id=uuid4(),
             created_at=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
         ),
     )
@@ -308,7 +308,7 @@ async def opened_reader_with_seed(
         await reader.aclose()
 
 
-async def test_load_honeytokens_merges_static_and_per_ip(
+async def test_load_honeytokens_returns_only_matching_source_ip(
     session_secret: str,
     encryption_key_b64: str,
     opened_reader_with_seed: tuple[SessionStoreReader, Path],
@@ -328,8 +328,8 @@ async def test_load_honeytokens_merges_static_and_per_ip(
         tokens = await service.load_honeytokens_for_source_ip("203.0.113.7")
     finally:
         await service.aclose()
-    # Static first (sorted by created_at), then per-IP.
-    assert [t.id for t in tokens] == ["STATICAAAAAAAAAA", "PERSESSIONAAAAAA"]
+    # Only this IP's token; the .8 token belongs to a different attacker.
+    assert [t.id for t in tokens] == ["PERSESSIONAAAAAA"]
 
 
 async def test_load_honeytokens_empty_when_disabled(
@@ -391,13 +391,13 @@ def test_session_open_merges_honeytokens_into_overlay(
         await writer.open()
         await writer.register_honeytoken(
             Honeytoken(
-                id="STATICAAAAAAAAAA",
+                id="PERSESSIONBBBBBB",
                 kind="aws",
-                payload="[default]\naws_access_key_id = AKIASTATICAAAAAAAAAA\n",
-                callback_url="https://honey.example.com/cb/STATICAAAAAAAAAA",
+                payload="[default]\naws_access_key_id = AKIAPERSESSIONBBBBBB\n",  # gitleaks:allow - synthetic honeytoken, not a real key
+                callback_url="https://honey.example.com/cb/PERSESSIONBBBBBB",
                 placed_at="/root/.aws/credentials",
-                source_ip=None,
-                session_id=None,
+                source_ip="203.0.113.99",
+                session_id=uuid4(),
                 created_at=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
             ),
         )
@@ -425,4 +425,6 @@ def test_session_open_merges_honeytokens_into_overlay(
         ).json()
     overlay = body["persona_overlay"]
     assert "/root/.aws/credentials" in overlay
-    assert "AKIASTATICAAAAAAAAAA" in overlay["/root/.aws/credentials"]
+    assert (
+        "AKIAPERSESSIONBBBBBB" in overlay["/root/.aws/credentials"]
+    )  # gitleaks:allow - synthetic honeytoken, not a real key

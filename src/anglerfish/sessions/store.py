@@ -634,12 +634,10 @@ class SessionStore:
         self,
         source_ip: str,
     ) -> list[Honeytoken]:
-        """Return per-session honeytokens generated for ``source_ip``.
+        """Return the honeytokens generated for ``source_ip``.
 
-        Excludes static-base tokens (those have ``source_ip IS NULL``)
-        - the bridge merges those separately into every session's
-        overlay. This query feeds the slice 11.3 session-open
-        seeding.
+        Ordered oldest first. Feeds the slice 11.3 session-open seeding:
+        the bridge merges these into the session's fakefs overlay.
         """
         self._require_open()
         async with self._lock:
@@ -662,36 +660,12 @@ class SessionStore:
         )
         return [_row_to_honeytoken(row) for row in cur.fetchall()]
 
-    async def list_static_honeytokens(self) -> list[Honeytoken]:
-        """Return the operator-defined static-base tokens (source_ip IS NULL).
-
-        Shipped to every session via the bridge's session-open
-        overlay merge alongside any per-source-IP rows.
-        """
-        self._require_open()
-        async with self._lock:
-            return await asyncio.to_thread(self._list_static_honeytokens_locked)
-
-    def _list_static_honeytokens_locked(self) -> list[Honeytoken]:
-        assert self._conn is not None  # noqa: S101
-        cur = self._conn.execute(
-            """
-            SELECT id, kind, payload, callback_url, placed_at,
-                   source_ip, session_id, created_at
-            FROM honeytokens
-            WHERE source_ip IS NULL
-            ORDER BY created_at ASC, id ASC
-            """,
-        )
-        return [_row_to_honeytoken(row) for row in cur.fetchall()]
-
     async def list_all_honeytokens(self) -> list[Honeytoken]:
         """Return every registered honeytoken, newest placement first.
 
-        The whole registry regardless of ``source_ip`` (static-base and
-        per-session alike). Feeds the dashboard registry view (slice
-        13.3); the per-source-IP and static-only queries above feed the
-        bridge's session-open overlay seeding.
+        The whole registry regardless of ``source_ip``. Feeds the
+        dashboard registry view (slice 13.3); the per-source-IP query
+        above feeds the bridge's session-open overlay seeding.
         """
         self._require_open()
         async with self._lock:

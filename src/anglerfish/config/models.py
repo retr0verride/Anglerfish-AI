@@ -1076,24 +1076,9 @@ class HoneytokensConfig(BaseModel):
         le=100,
         description=(
             "ThreatAssessment.score threshold that triggers per-session "
-            "honeytoken generation. Below: no fresh tokens (the static "
-            "base set still ships to every session). 0 = generate for "
-            "every session; 100 = effectively never. Mirrors the threat "
-            "scorer's [0, 100] scoring range."
-        ),
-    )
-    static_base_paths: tuple[str, ...] = Field(
-        default=(
-            "/root/.aws/credentials",
-            "/root/.ssh/id_rsa",
-        ),
-        description=(
-            "Operator-defined fakefs paths the static-base honeytoken "
-            "set seeds at bridge startup. The slice 11.3 placement "
-            "service ensures one token per kind per path exists in the "
-            "registry on the first session-open after enabled=True "
-            "flips. Empty tuple = static base disabled (rare; per-"
-            "session-only mode)."
+            "honeytoken generation. Below: no fresh tokens for the "
+            "session. 0 = generate for every session; 100 = effectively "
+            "never. Mirrors the threat scorer's [0, 100] scoring range."
         ),
     )
 

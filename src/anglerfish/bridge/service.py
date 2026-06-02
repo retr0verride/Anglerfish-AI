@@ -741,23 +741,19 @@ class AIBridgeService:
     ) -> list[Honeytoken]:
         """Return honeytokens to merge into this session's fakefs_overlay.
 
-        Combines static-base tokens (visible to every session)
-        with per-source-IP tokens previously generated for this
-        IP. Returns an empty list when honeytokens are disabled
-        or no reader is wired. Used by the bridge HTTP server at
-        session-open to seed the lure ``SessionStartResponse``
-        with the AWS/SSH bait payloads at their configured
-        ``placed_at`` paths.
+        The per-source-IP tokens previously generated for this IP.
+        Returns an empty list when honeytokens are disabled or no reader
+        is wired. Used by the bridge HTTP server at session-open to seed
+        the lure ``SessionStartResponse`` with the AWS/SSH bait payloads
+        at their configured ``placed_at`` paths.
         """
         if not self._settings.honeytokens.enabled:
             return []
         if self._session_store_reader is None:
             return []
-        static = await self._session_store_reader.list_static_honeytokens()
-        per_ip = await self._session_store_reader.list_honeytokens_for_source_ip(
+        return await self._session_store_reader.list_honeytokens_for_source_ip(
             source_ip,
         )
-        return [*static, *per_ip]
 
     async def classify_command(
         self,

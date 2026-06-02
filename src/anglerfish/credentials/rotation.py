@@ -15,6 +15,7 @@ confirmation) before running.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import sqlite3
@@ -28,6 +29,27 @@ __all__ = ["RotationError", "RotationResult", "rotate_key"]
 
 
 _logger = logging.getLogger(__name__)
+
+
+def _fold_wal_and_drop_sidecars(path: Path) -> None:
+    """Checkpoint any WAL into ``path`` and remove its -wal/-shm sidecars.
+
+    Audit review R6: rotation renames only the main DB file. The store
+    runs in WAL mode, so a -wal (from normal operation or an unclean
+    shutdown) sits beside the DB. If that stale -wal is left next to the
+    swapped-in database, SQLite replays it on the next open and can
+    silently revert the freshly rotated data. Folding the WAL into the
+    main file - before the read and before the swap - leaves a single
+    self-contained file, so the backup is complete and no journal is
+    orphaned at the live path.
+    """
+    with closing(sqlite3.connect(str(path))) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.commit()
+    for suffix in ("-wal", "-shm"):
+        with contextlib.suppress(FileNotFoundError):
+            path.with_name(path.name + suffix).unlink()
 
 
 _SCHEMA = """
@@ -111,6 +133,14 @@ def rotate_key(
             f"backup file already exists at {backup_path}; remove it first",
         )
 
+    # Audit review R6: fold the source DB's WAL into its main file and
+    # drop the sidecars before reading + swapping, so the backup is
+    # complete and no stale -wal orphans beside the swapped-in DB.
+    try:
+        _fold_wal_and_drop_sidecars(db_path)
+    except sqlite3.Error as exc:
+        raise RotationError(f"rotation failed to checkpoint source DB: {exc}") from exc
+
     rows_rotated = 0
     rows_skipped = 0
 
@@ -181,9 +211,20 @@ def rotate_key(
             new_path.unlink()
         raise RotationError(f"rotation failed: {exc}") from exc
 
+    # Audit review R6: fold the freshly written DB's WAL into its main
+    # file too, so the file we move into place is self-contained (its
+    # committed rows live in the main file, not an unmoved -wal sidecar).
+    try:
+        _fold_wal_and_drop_sidecars(new_path)
+    except sqlite3.Error as exc:
+        with contextlib.suppress(FileNotFoundError):
+            new_path.unlink()
+        raise RotationError(f"rotation failed to checkpoint new DB: {exc}") from exc
+
     # Atomic-ish swap. POSIX rename(2) is atomic on the same filesystem,
     # but two renames in a row are not transactional: a crash between them
-    # leaves db_path missing but recoverable from backup_path.
+    # leaves db_path missing but recoverable from backup_path. Both files
+    # were folded above, so each move carries the whole database.
     try:
         shutil.move(str(db_path), str(backup_path))
         shutil.move(str(new_path), str(db_path))

@@ -216,8 +216,8 @@ CREATE INDEX IF NOT EXISTS idx_fps_kind      ON fake_persistence_state(kind);
 # callback can land months later, well after the session row
 # was pruned. session_id is stored as a denormalised TEXT for
 # operator triage; the cross-session lookup join key is
-# source_ip (NULL on static-base tokens that ship to every
-# session).
+# source_ip. The column is nullable in the schema; every token a
+# producer writes today sets it.
 _MIGRATION_6: Final[str] = """
 CREATE TABLE IF NOT EXISTS honeytokens (
     id            TEXT PRIMARY KEY,
