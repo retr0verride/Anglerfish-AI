@@ -100,7 +100,7 @@ class HoneytokenGenerator:
             id=lookup_id,
             kind="aws",
             payload=payload,
-            callback_url=self._aws_callback_url(lookup_id),
+            callback_url=self._callback_url(lookup_id),
             placed_at=placed_at,
             source_ip=source_ip,
             session_id=session_id,
@@ -147,7 +147,7 @@ class HoneytokenGenerator:
             id=lookup_id,
             kind="ssh_key",
             payload=payload,
-            callback_url=self._ssh_callback_url(lookup_id),
+            callback_url=self._callback_url(lookup_id),
             placed_at=placed_at,
             source_ip=source_ip,
             session_id=session_id,
@@ -158,13 +158,11 @@ class HoneytokenGenerator:
     # Internals
     # ------------------------------------------------------------------
 
-    def _aws_callback_url(self, lookup_id: str) -> str:
-        return f"{self._callback_base_url}/cb/{lookup_id}"
-
-    def _ssh_callback_url(self, lookup_id: str) -> str:
-        # SSH callbacks share the /cb/{id} path; operators looking
-        # for the public-key comment in pastes find the lookup ID
-        # and hit the same endpoint manually for triage.
+    def _callback_url(self, lookup_id: str) -> str:
+        # Every honeytoken kind shares the single /cb/{id} receiver path:
+        # the AWS key fires it automatically, and operators who spot the
+        # SSH public-key comment in a paste hit the same endpoint manually
+        # for triage. One builder, no per-kind drift.
         return f"{self._callback_base_url}/cb/{lookup_id}"
 
 
