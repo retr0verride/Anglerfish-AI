@@ -180,6 +180,32 @@ def test_dashboard_secret_accepted() -> None:
     assert cfg.port == 8420
 
 
+def test_dashboard_accepts_valid_bcrypt_hash() -> None:
+    valid = "$2b$12$" + "a" * 53  # 60 chars, the bcrypt length
+    cfg = DashboardConfig(
+        session_secret=SecretStr("x" * 32),
+        admin_password_hash=SecretStr(valid),
+    )
+    assert cfg.admin_password_hash is not None
+    assert cfg.admin_password_hash.get_secret_value() == valid
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "plaintextpassword",  # no bcrypt prefix
+        "$1$" + "a" * 56,  # 59 chars, wrong algo prefix (md5crypt)
+        "$2b$12$" + "a" * 52,  # 59 chars: one short of bcrypt's 60
+    ],
+)
+def test_dashboard_rejects_non_bcrypt_password_hash(bad: str) -> None:
+    with pytest.raises(ValidationError, match="bcrypt"):
+        DashboardConfig(
+            session_secret=SecretStr("x" * 32),
+            admin_password_hash=SecretStr(bad),
+        )
+
+
 # ---------------------------------------------------------------------------
 # BridgeConfig
 # ---------------------------------------------------------------------------

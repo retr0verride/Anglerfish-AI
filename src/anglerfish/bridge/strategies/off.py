@@ -32,6 +32,8 @@ class OffStrategy(WastingStrategyBase):
         self,
         ctx: StrategyContext,
         chunk: BridgeChunk,
+        *,
+        chunk_index: int,
     ) -> float:
-        del ctx, chunk
+        del ctx, chunk, chunk_index
         return 0.0

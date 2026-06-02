@@ -80,8 +80,124 @@ a later pass.
   attribution model (shared tokens dilute per-session correlation) and
   the static-vs-per-session path-conflict resolved first._
 
+## Low pass
+
+The ~69 Low findings were first reconciled against current `main` (both
+prior passes merged) by parallel verification readers, so already-closed
+items are not re-touched.
+
+### Already closed by the High/Medium passes
+
+systemctl unit truncation (M5), oversized regex capture (M4), intent/embed
+token caps (M6), `data_dir` rebase (M9), tailer literal sets (M10), bridge
+`cwd` consumption (M1), threat cross-command negative test (R2), callback
+production-lifespan test (M11), `HoneytokensConfig` enabled-requires-callback
+test (M12), `models/embedding.py` co-located test (M13), rotation
+`sqlite3.Error`/`OSError` branch tests, geo `_MAX_BYTES` + HTTP-error tests
+(R4). The HASSH non-ASCII path has a test but only asserts length/hex.
+
+### Open buckets (worked in risk order)
+
+**Bucket 0 - cleanup**
+
+| ID | Finding | Status |
+|----|---------|--------|
+| L0 | Stray `.intel_tests.txt` artifact committed by accident | **closed** `cf32871` |
+
+**Bucket 1 - behaviour/fidelity** (all test-first)
+
+| ID | Finding | File | Status |
+|----|---------|------|--------|
+| B1 | Wasting jitter identical per chunk (fixed cadence) | `bridge/strategies/*` | **closed** `0bdb313` |
+| B2 | `cd -` / `~user` produced `<cwd>/-`, `<cwd>/~user` | `bridge/service.py` | **closed** `d0f5fca` |
+| B3 | `structured_chat` stashed bad output only on ValidationError | `llm/client.py` | **closed** `f3b7a60` |
+| B4 | `_wasting_stats` scanned the whole log (continue vs break) | `dashboard/health.py` | **closed** `89cae7f` |
+| B5 | `/api/threats` advertised 500 but facade caps at 200 | `dashboard/routes.py` | **closed** `97e9cda` |
+| B6 | `_suppress_get_nowait` convoluted backpressure helper | `dashboard/state.py` | **closed** `971ab23` |
+| B7 | Username trim inconsistent across auth records | `lure/server.py` | **closed** `a4c4288` |
+| B8 | `ls -l` hardcoded the date, ignored `FakeEntry.mtime` | `lure/commands.py` | **closed** `84cd502` |
+| B9 | `FetchResult.bytes_written` reported compressed size | `geo/fetch.py` | **closed** `b267faf` |
+| B10 | Callback reject path reflected unescaped input into XML | `callback/routes.py` | **closed** `8975f58` |
+| B11 | Audit `ts` stamped outside the lock + reserved-key clobber | `audit.py` | **closed** `9813948` |
+
+B10 keeps the redundant `request_path` audit field (rendered by the
+dashboard) with a comment. B11 also closed the audit concurrency / fsync /
+reserved-key test gaps.
+
+**Bucket 2 - dead code**
+
+Deleted (clearly accidental, no production caller):
+
+| Finding | File | Status |
+|---------|------|--------|
+| Never-raised `IntentExtractionError` / `EmbeddingExtractionError` + unused loggers | `intel/` | **closed** `b6163fb` |
+| Dead `_utcnow` (read-only reader) + unused module `_logger` | `sessions/reader.py`, `persona/selector.py` | **closed** `0027385` |
+| Unread `StrategyContext.command` / `wasted_ms_so_far` | `bridge/strategies/base.py` | **closed** `0b8a9cb` |
+
+Kept and marked as deliberate, currently-unwired extension points (owner
+decision), with the false "used by..." docstrings corrected: `GeoLookup`,
+the threat scoring->alerting pipeline (`ThreatEngine`/`ThreatAlerter`),
+the JA3 surface (`compute_ja3`), `PersonaRegistry.get_or_default`, the
+`AuditLog` context manager, and the `BridgeStreamChunk.done` wire flag
+(`2c1f8a4`).
+
+**Bucket 3 - duplication / drift**
+
+| Finding | File | Status |
+|---------|------|--------|
+| Byte-identical AWS/SSH callback-URL builders | `honeytokens/generators.py` | **closed** `9065902` |
+| `_DEFAULT_SCAN_MAX_CHARS` duplicate of the config default (unused) | `bridge/defense.py` | **closed** `9f8437d` |
+| `RotationResult.new_path` held the live DB path, not the `.new` file | `credentials/rotation.py` | **closed** `00beab3` |
+| `_SCHEMA` (attempts DDL) duplicated rotation vs storage | `credentials/rotation.py` | **closed** `b3cff21` |
+| `_row_to_honeytoken` duplicated + drifted across facades | `sessions/` | **closed** `3f49bc1` |
+| Persistence-list method name drift across facades | `sessions/reader.py` | **closed** `2cf58ae` |
+
+**Bucket 4 - docstring / comment drift**
+
+| Finding | File | Status |
+|---------|------|--------|
+| Placement dedup mislabelled per-source-IP (it is per-session) | `honeytokens/placement.py`, `bridge/service.py` | **closed** `1d632eb` |
+| Shipped honeytoken/persistence work framed as future slices | `honeytokens/__init__.py`, `persistence/classifier.py` | **closed** `0b798c4` |
+| selector get_or_default/stale-pin claim + wrong modulo-bias comment; sshkey key-type list; tarfile "no-op"; intent "two cases" | `persona/selector.py`, `wizard/sshkey.py`, `geo/fetch.py`, `intel/intent.py` | **closed** `1f499ef` |
+| `_parse_usage` "discarded"; embedding truncation attribution; audit tailer events; legacy shim promise; MODEL_SETUP keys | `llm/client.py`, `models/embedding.py`, `audit.py`, `config/models.py`, `docs/MODEL_SETUP.md` | **closed** `582ef27` |
+| config `__all__` lists disagreed + incomplete | `config/__init__.py`, `config/models.py` | **closed** `a2134d6` |
+
+Deferred (cosmetic API-style, catalogued for a follow-up): `NarratorConfig.model_role`
+re-declaring the role vocabulary as a `Literal` instead of reusing `LLMRole`;
+the `HoneytokensConfig`/`CounterDeceptionConfig` `model_post_init` raise vs the
+`@model_validator` idiom; the `source_ip`/`ip` field-constraint convention; and
+completing the `models/__init__` facade (bypassed by production today).
+
+**Bucket 5 - test-gap backfill**
+
+| Gap | File | Status |
+|-----|------|--------|
+| Audit concurrent-record + fsync assertion + reserved-key clobber | `tests/test_audit.py` | **closed** (with B11) `9813948` |
+| `admin_password_hash` reject branch + bound tightened to 60 | `config/models.py`, `tests/config/test_models.py` | **closed** `434fa7a` |
+| Crypto non-UTF-8 decrypt branch | `tests/credentials/test_crypto.py` | **closed** `89a1289` |
+| Persona stale-pin + valid-recurrence ordering | `tests/persona/test_selector.py` | **closed** `860e134` |
+| CLI callback-serve disabled-honeytokens guard | `tests/cli/test_callback_subcommand.py` | **closed** `99d8ccd` |
+| Wizard preflight plumbing (was a kwargs-discarding stub) | `tests/wizard/test_wizard.py` | **closed** `be63fe0` |
+| Geo owned-reader close + default-client branch | `tests/geo/` | **closed** `c084d8d` |
+| HASSH UTF-8 hardening pinned explicitly | `tests/fingerprint/test_hashes.py` | **closed** `e645860` |
+
+The rotation `sqlite3.Error`/`OSError` branches and the geo `_MAX_BYTES` +
+HTTP-error paths were already covered by prior passes (see the
+already-closed list above).
+
+## Outcome (Low pass)
+
+All five open buckets are closed. The behaviour/fidelity bucket and the
+two correctness items the test-gap pass surfaced (the bcrypt bound, the
+audit ts/reserved-key) were test-first, single green commits with
+audit-notes blocks; dead-code/extension-point and docstring buckets are
+behaviour-preserving. Deferred: the cosmetic models-surface API tweaks
+listed under bucket 4. PR #15.
+
 ## Process
 
 Test-first per fix, single-purpose commit, green at commit, audit-notes
 block. The Highs (R1, R2, R3, R4a) are re-verified by an independent
-adversarial pass before closure. CI watched after push.
+adversarial pass before closure. CI watched after push. Low-pass dead-code
+deletions vs. deliberate-extension-point markers are an owner decision,
+captured under Owner decisions.

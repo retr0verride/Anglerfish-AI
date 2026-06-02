@@ -23,12 +23,10 @@ from anglerfish.models.session import BridgeChunk, ResponseSource
 _FIXED_SESSION = UUID("00000000-0000-0000-0000-000000000002")
 
 
-def _ctx(*, command: str = "ls", command_count: int = 0) -> StrategyContext:
+def _ctx(*, command_count: int = 0) -> StrategyContext:
     return StrategyContext(
         session_id=_FIXED_SESSION,
-        command=command,
         command_count=command_count,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
     )
 
@@ -85,16 +83,26 @@ async def test_between_chunks_returns_in_documented_range() -> None:
     s = AggressiveStrategy()
     chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
     for n in range(50):
-        delay = await s.between_chunks(_ctx(command_count=n), chunk)
+        delay = await s.between_chunks(_ctx(command_count=n), chunk, chunk_index=0)
         assert _CHUNK_DELAY_MIN_S <= delay <= _CHUNK_DELAY_MAX_S
 
 
 async def test_between_chunks_is_deterministic_for_same_seed() -> None:
     s = AggressiveStrategy()
     chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
-    a = await s.between_chunks(_ctx(command_count=3), chunk)
-    b = await s.between_chunks(_ctx(command_count=3), chunk)
+    a = await s.between_chunks(_ctx(command_count=3), chunk, chunk_index=2)
+    b = await s.between_chunks(_ctx(command_count=3), chunk, chunk_index=2)
     assert a == b
+
+
+async def test_between_chunks_varies_across_chunk_index() -> None:
+    # Regression: identical delay for every chunk in a command (fixed
+    # cadence). Distinct chunk indices must yield more than one value.
+    s = AggressiveStrategy()
+    chunk = BridgeChunk(delta="x", source=ResponseSource.AI, done=False)
+    ctx = _ctx(command_count=3)
+    delays = {await s.between_chunks(ctx, chunk, chunk_index=i) for i in range(8)}
+    assert len(delays) > 1
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +151,7 @@ async def test_clarification_skipped_immediately_after_prior_clarification() -> 
     # pass-through regardless of what the dice would have rolled.
     follow_up = StrategyContext(
         session_id=_FIXED_SESSION,
-        command="anything",
         command_count=fired_at + 1,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
         last_clarification_command_count=fired_at,
     )
@@ -160,9 +166,7 @@ async def test_clarification_rate_zero_disables_the_mode() -> None:
     for n in range(200):
         ctx = StrategyContext(
             session_id=_FIXED_SESSION,
-            command="x",
             command_count=n,
-            wasted_ms_so_far=0,
             bridge_config=config,
         )
         effect = await s.pre_command(ctx)

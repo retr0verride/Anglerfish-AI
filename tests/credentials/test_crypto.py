@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from anglerfish.credentials.crypto import CredentialCipher
 
@@ -30,6 +31,19 @@ def test_encrypt_handles_unicode() -> None:
     cipher = CredentialCipher(_key())
     ct, nonce = cipher.encrypt("pässword🔑")
     assert cipher.decrypt(ct, nonce) == "pässword🔑"
+
+
+def test_decrypt_rejects_non_utf8_plaintext() -> None:
+    # Callers that skip mixed-key rows rely on decrypt() raising ValueError
+    # when the GCM tag verifies but the bytes are not UTF-8. Forge that case
+    # by encrypting raw non-UTF-8 bytes with the same key (a tag-valid
+    # ciphertext that cannot decode).
+    raw = base64.b64decode(_key())
+    nonce = b"\x01" * 12
+    bad_ct = AESGCM(raw).encrypt(nonce, b"\xff\xfe\xfd", None)
+    cipher = CredentialCipher(_key())
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        cipher.decrypt(bad_ct, nonce)
 
 
 def test_fingerprint_deterministic() -> None:

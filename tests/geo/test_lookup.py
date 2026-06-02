@@ -51,6 +51,34 @@ async def test_lookup_disabled_returns_unenriched_record() -> None:
     assert lookup.enabled is False
 
 
+async def test_aclose_closes_owned_readers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # When GeoLookup opens its own readers from config paths (_owns_* True),
+    # aclose() must close them. Monkeypatch _open_reader so no real MMDB is
+    # needed.
+    from anglerfish.geo import lookup as lookup_mod
+
+    opened: list[_StubReader] = []
+
+    def _fake_open(_path: Path) -> _StubReader:
+        reader = _StubReader({})
+        opened.append(reader)
+        return reader
+
+    monkeypatch.setattr(lookup_mod, "_open_reader", _fake_open)
+    lookup = GeoLookup(GeoConfig(city_db_path=Path("/x.mmdb"), asn_db_path=Path("/y.mmdb")))
+    assert len(opened) == 2  # both readers opened + owned
+    await lookup.aclose()
+    assert all(r.closed for r in opened)
+
+
+async def test_aclose_leaves_injected_readers_open() -> None:
+    # Injected readers belong to the caller; aclose() must not close them.
+    city = _StubReader({})
+    lookup = GeoLookup(GeoConfig(city_db_path=Path("/x.mmdb")), city_reader=city)
+    await lookup.aclose()
+    assert city.closed is False
+
+
 async def test_lookup_with_both_readers() -> None:
     cfg = GeoConfig(city_db_path=Path("/x.mmdb"), asn_db_path=Path("/y.mmdb"))
     city = _StubReader({"203.0.113.7": _city_payload()})

@@ -6,9 +6,11 @@ format strictly to prevent two things:
 
 * Multi-line input (an attacker pasting an extra ``\\n`` followed by
   arbitrary text would extend the file with anything they want).
-* Unsupported key types — ED25519 and RSA are accepted; everything
-  else is rejected, on the grounds that an operator pasting an
-  unusual key is probably making a mistake we'd rather catch now.
+* Unsupported key types — Ed25519, RSA, the three ECDSA NIST curves,
+  and the sk-* (FIDO security-key) Ed25519/ECDSA variants are
+  accepted; everything else is rejected, on the grounds that an
+  operator pasting an unusual key is probably making a mistake we'd
+  rather catch now. The authoritative set is ``_ALLOWED_TYPES``.
 
 This module never touches the filesystem. The wizard's render layer
 formats the key into the ``authorized_keys`` body; this module only

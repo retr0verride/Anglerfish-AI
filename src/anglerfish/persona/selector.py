@@ -28,7 +28,6 @@ audit it as bridge.persona_selected with selection_reason in
 from __future__ import annotations
 
 import hashlib
-import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -37,9 +36,6 @@ from anglerfish.persona.schema import Persona
 from anglerfish.sessions.reader import SessionStoreReader
 
 __all__ = ["PersonaSelector", "SelectionReason", "SelectionResult"]
-
-
-_logger = logging.getLogger(__name__)
 
 
 SelectionReason = Literal["pin", "source_ip_recurrence", "hash_fallback"]
@@ -76,11 +72,11 @@ class PersonaSelector:
         Never raises on the happy path:
 
         * An operator pin that names a persona the registry has
-          since dropped falls through to recurrence + hash (the
-          pin is logged as stale via :meth:`PersonaRegistry.get_or_default`
-          which silently returns the default; the selector
-          attributes the result to its real source so the audit
-          event stays honest).
+          since dropped is ignored - the ``pin in self._registry``
+          guard fails - and selection falls through to recurrence,
+          then the hash fallback. The result is attributed to its
+          real source (``source_ip_recurrence`` / ``hash_fallback``),
+          not ``pin``, so the audit event stays honest.
         * A recurrence query whose persona column references a
           deleted name falls through the same way.
         * The hash fallback always returns a persona because the
@@ -113,10 +109,9 @@ class PersonaSelector:
         """
         names = self._registry.names()
         digest = hashlib.sha256(source_ip.encode("utf-8")).digest()
-        # First 8 bytes as a big-endian unsigned int is plenty of
-        # entropy for a four-persona ring; the modulo over
-        # len(names) is unbiased for any practical persona count
-        # (the worst-case bias of `2**64 mod len` is 0 below 2^32
-        # which we'll never hit).
+        # First 8 bytes as a big-endian unsigned int gives a 64-bit
+        # value. `% len(names)` has a modulo bias bounded by
+        # len(names) / 2**64 (the residues that get one extra value),
+        # which is negligible for any realistic persona count.
         index = int.from_bytes(digest[:8], "big") % len(names)
         return self._registry.get(names[index])

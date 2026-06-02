@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anglerfish.credentials.crypto import CredentialCipher
+from anglerfish.credentials.storage import _SCHEMA
 
 __all__ = ["RotationError", "RotationResult", "rotate_key"]
 
@@ -52,31 +53,9 @@ def _fold_wal_and_drop_sidecars(path: Path) -> None:
             path.with_name(path.name + suffix).unlink()
 
 
-_SCHEMA = """
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS attempts (
-    id              INTEGER PRIMARY KEY,
-    source_ip       TEXT NOT NULL,
-    session_id      TEXT NOT NULL,
-    username_ct     BLOB NOT NULL,
-    username_nonce  BLOB NOT NULL,
-    password_ct     BLOB NOT NULL,
-    password_nonce  BLOB NOT NULL,
-    username_fp     BLOB NOT NULL,
-    password_fp     BLOB NOT NULL,
-    first_seen      TEXT NOT NULL,
-    last_seen       TEXT NOT NULL,
-    attempt_count   INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_unique
-    ON attempts(source_ip, username_fp, password_fp);
-CREATE INDEX IF NOT EXISTS idx_attempts_last_seen ON attempts(last_seen);
-CREATE INDEX IF NOT EXISTS idx_attempts_source_ip ON attempts(source_ip);
-"""
+# Rotation rebuilds the attempts table in a fresh DB, so it reuses the
+# canonical schema from the storage module rather than keeping a second
+# copy that could drift from it.
 
 
 class RotationError(RuntimeError):
@@ -90,7 +69,9 @@ class RotationResult:
     rows_rotated: int
     rows_skipped: int
     backup_path: Path
-    new_path: Path
+    # The live rotated database path (the work file was already moved into
+    # place); named db_path, not new_path, since it is not the ".new" file.
+    db_path: Path
 
 
 def rotate_key(
@@ -241,5 +222,5 @@ def rotate_key(
         rows_rotated=rows_rotated,
         rows_skipped=rows_skipped,
         backup_path=backup_path,
-        new_path=db_path,
+        db_path=db_path,
     )

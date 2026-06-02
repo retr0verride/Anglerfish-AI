@@ -40,14 +40,17 @@ from pydantic import (
 __all__ = [
     "AuditConfig",
     "BridgeConfig",
+    "CounterDeceptionConfig",
     "CredentialsConfig",
     "DashboardConfig",
     "DefenseConfig",
     "FingerprintConfig",
     "GeoConfig",
+    "HoneytokensConfig",
     "LogLevel",
     "NarratorConfig",
     "OllamaConfig",
+    "PersonaConfig",
     "RateLimitConfig",
     "SessionStoreConfig",
     "ThreatConfig",
@@ -231,8 +234,9 @@ class OllamaConfig(BaseModel):
         ``ANGLERFISH_OLLAMA__MODEL=<tag>`` in their env file. Pydantic-
         settings passes it as ``model=`` on construction; this validator
         renames it to ``fast_model`` if ``fast_model`` is not already
-        supplied. After one release cycle the shim is removed and the
-        wizard's ``--reconfigure`` writes both new keys.
+        supplied. Retained as a backward-compat alias; drop it in a
+        future release once env files have migrated to the explicit
+        ``fast_model`` / ``deep_model`` keys.
         """
         if not isinstance(data, dict) or "model" not in data:
             return data
@@ -359,11 +363,12 @@ class DashboardConfig(BaseModel):
         if v is None:
             return None
         raw = v.get_secret_value()
-        # bcrypt hashes start with $2a$, $2b$, or $2y$ — sanity check format.
-        if not (raw.startswith(("$2a$", "$2b$", "$2y$")) and len(raw) >= 59):
+        # bcrypt hashes start with $2a$/$2b$/$2y$ and are exactly 60 chars
+        # ($2x$ + 2-digit cost + $ + 22-char salt + 31-char digest).
+        if not (raw.startswith(("$2a$", "$2b$", "$2y$")) and len(raw) == 60):
             raise ValueError(
-                "dashboard.admin_password_hash must be a bcrypt hash "
-                "(starts with $2a$, $2b$, or $2y$).",
+                "dashboard.admin_password_hash must be a 60-character bcrypt "
+                "hash (starts with $2a$, $2b$, or $2y$).",
             )
         return v
 
@@ -745,7 +750,7 @@ class DefenseConfig(BaseModel):
         ),
     )
     scan_max_chars: int = Field(
-        default=8192,  # mirrors _DEFAULT_SCAN_MAX_CHARS in bridge.defense
+        default=8192,  # the single default cap on bytes scanned per pattern
         ge=512,
         le=65536,
         description=(

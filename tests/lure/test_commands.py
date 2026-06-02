@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from uuid import uuid4
 
 import pytest
@@ -204,6 +205,18 @@ async def test_ls_long_form_includes_mode_string() -> None:
     assert result.handled is True
     # rwxr-xr-x style perms appear in long form.
     assert "rw-r--r--" in result.text or "rwxr-xr-x" in result.text
+
+
+async def test_ls_long_form_renders_entry_mtime_not_hardcoded_date() -> None:
+    s = _session()
+    s.update_cwd("/etc")
+    result = await _commands().dispatch(s, "ls -l")
+    assert result.handled is True
+    # The hardcoded "May 23 14:01" placeholder must be gone, replaced by
+    # the entry's mtime rendered in ls's recent format.
+    assert "May 23 14:01" not in result.text
+    expected = time.strftime("%b %e %H:%M", time.gmtime(1715000000))
+    assert expected in result.text
 
 
 async def test_ls_hidden_files_only_with_dash_a() -> None:

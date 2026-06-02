@@ -20,9 +20,7 @@ from anglerfish.models.session import BridgeChunk, ResponseSource
 def _ctx() -> StrategyContext:
     return StrategyContext(
         session_id=uuid4(),
-        command="ls",
         command_count=0,
-        wasted_ms_so_far=0,
         bridge_config=BridgeConfig(),
     )
 
@@ -40,7 +38,7 @@ async def test_off_pre_command_returns_empty_effect() -> None:
 
 async def test_off_between_chunks_returns_zero() -> None:
     chunk = BridgeChunk(delta="hi", source=ResponseSource.AI, done=False)
-    delay = await OffStrategy().between_chunks(_ctx(), chunk)
+    delay = await OffStrategy().between_chunks(_ctx(), chunk, chunk_index=0)
     assert delay == 0.0
 
 

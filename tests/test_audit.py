@@ -96,3 +96,65 @@ def test_record_fsyncs(tmp_path: Path) -> None:
     AuditLog(target).record("event")
     assert target.exists()
     assert target.read_text("utf-8").strip()
+
+
+def test_record_rejects_reserved_ts_field(tmp_path: Path) -> None:
+    # A caller passing ts= in **fields must not be able to forge the
+    # canonical timestamp via last-write-wins; record() rejects it.
+    target = tmp_path / "audit.jsonl"
+    log = AuditLog(target)
+    with pytest.raises(ValueError, match="reserved"):
+        log.record("x", ts="2000-01-01T00:00:00+00:00")
+    assert not target.exists()  # rejected before any write
+
+
+def test_record_canonical_ts_is_not_overridable(tmp_path: Path) -> None:
+    # Even if a future path allowed it, the recorded ts is the canonical
+    # stamp, never the caller's value.
+    target = tmp_path / "audit.jsonl"
+    log = AuditLog(target)
+    log.record("ok", note="hi")
+    entry = json.loads(target.read_text("utf-8").strip())
+    assert entry["ts"] != "2000-01-01T00:00:00+00:00"
+    assert entry["note"] == "hi"
+
+
+def test_record_is_thread_safe_under_concurrency(tmp_path: Path) -> None:
+    import threading
+
+    target = tmp_path / "audit.jsonl"
+    log = AuditLog(target)
+    count = 50
+
+    def worker(i: int) -> None:
+        log.record("concurrent", i=i)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    lines = target.read_text("utf-8").splitlines()
+    assert len(lines) == count  # no lost writes
+    # Every line is intact JSON (no torn/interleaved writes under the lock).
+    ids = sorted(json.loads(line)["i"] for line in lines)
+    assert ids == list(range(count))
+
+
+def test_record_calls_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    real_fsync = os.fsync
+    calls: list[int] = []
+
+    def _spy(fd: int) -> None:
+        calls.append(fd)
+        real_fsync(fd)
+
+    # audit.py calls os.fsync against the shared stdlib module, so patching
+    # os.fsync here is observed there (avoids the implicit-reexport of
+    # anglerfish.audit.os that bare mypy rejects).
+    monkeypatch.setattr(os, "fsync", _spy)
+    AuditLog(tmp_path / "audit.jsonl").record("x")
+    assert len(calls) == 1

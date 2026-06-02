@@ -234,8 +234,10 @@ def _wasting_stats(audit_path: Path, static_strategy: str) -> dict[str, Any]:
         ):
             continue
         ts = parse_event_timestamp(event)
-        if ts is None or ts < cutoff:
+        if ts is None:
             continue
+        if ts < cutoff:
+            break  # newest-first iteration; older events are out of the window
         session_id = event.get("session_id")
         if not isinstance(session_id, str):
             continue

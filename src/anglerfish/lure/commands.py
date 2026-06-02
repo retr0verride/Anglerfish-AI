@@ -24,6 +24,7 @@ import asyncio
 import math
 import random
 import shlex
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -252,6 +253,15 @@ async def _cd(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
     return DispatchResult(handled=True, text="")
 
 
+def _format_ls_time(mtime: int) -> str:
+    """Render an mtime epoch the way ``ls -l`` does (recent ``%b %e %H:%M``).
+
+    UTC and per-entry, so the column reflects the entry's own frozen
+    mtime instead of one hardcoded date repeated for every row.
+    """
+    return time.strftime("%b %e %H:%M", time.gmtime(mtime))
+
+
 async def _ls(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
     long_form = False
     show_hidden = False
@@ -286,7 +296,7 @@ async def _ls(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
         link_target = f" -> {e.target}" if e.is_symlink and e.target else ""
         lines.append(
             f"{kind}{perms} 1 {e.owner:>8} {e.group:>8} "
-            f"{e.size:>8} May 23 14:01 {e.name}{link_target}",
+            f"{e.size:>8} {_format_ls_time(e.mtime)} {e.name}{link_target}",
         )
     text = "\n".join(lines) + ("\n" if lines else "")
     return DispatchResult(handled=True, text=text)

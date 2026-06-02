@@ -88,6 +88,11 @@ async def test_handle_command_via_ai(settings: AnglerfishSettings) -> None:
         ("cd subdir", "/root/subdir"),
         ("cd .", "/root"),
         ("cd ..", "/"),
+        # tilde forms must expand, not append literally under cwd.
+        ("cd ~root", "/root"),
+        ("cd ~alice", "/home/alice"),
+        ("cd ~/projects", "/root/projects"),
+        ("cd ~alice/work", "/home/alice/work"),
     ],
 )
 async def test_cd_handled_locally(
@@ -111,6 +116,38 @@ async def test_cd_handled_locally(
     assert called is False
     assert response.text == ""
     assert session.cwd == expected_cwd
+
+
+async def test_cd_dash_returns_to_previous_dir(settings: AnglerfishSettings) -> None:
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(lambda _r: httpx.Response(500)),
+    )
+    session = _make_session()  # starts at /root
+    try:
+        await service.handle_command(session, "cd /etc")
+        assert session.cwd == "/etc"
+        await service.handle_command(session, "cd -")  # back to /root
+        assert session.cwd == "/root"
+        await service.handle_command(session, "cd -")  # toggles back to /etc
+        assert session.cwd == "/etc"
+    finally:
+        await service.aclose()
+
+
+async def test_cd_dash_without_oldpwd_stays_put(settings: AnglerfishSettings) -> None:
+    service = AIBridgeService(
+        settings,
+        client=_mock_ollama_client(lambda _r: httpx.Response(500)),
+    )
+    session = _make_session()  # /root, no prior cd -> OLDPWD unset
+    try:
+        response = await service.handle_command(session, "cd -")
+    finally:
+        await service.aclose()
+    # No "/root/-" garbage path: handled, cwd unchanged.
+    assert response.text == ""
+    assert session.cwd == "/root"
 
 
 async def test_cd_bare_goes_home_for_root(settings: AnglerfishSettings) -> None:

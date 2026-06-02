@@ -168,6 +168,26 @@ async def test_structured_chat_retries_on_validation_error() -> None:
     assert any(m["role"] == "assistant" for m in msgs)
 
 
+async def test_structured_chat_stashes_invalid_json_in_context() -> None:
+    """A non-JSON reply (the common small-model failure) is stashed as an
+    assistant message too, so the correction turn shows the model its own
+    offending output - not just a "could not be parsed" note."""
+    bad = "definitely not json"
+    handler = _scripted_responses([bad, '{"intent": "scan", "confidence": 0.5}'])
+    client = _make_client(handler)
+    try:
+        await client.structured_chat(
+            [ChatMessage(role="user", content="x")],
+            _Sample,
+            max_retries=1,
+        )
+    finally:
+        await client.aclose()
+    seen = handler.seen  # type: ignore[attr-defined]
+    msgs = seen[1]["messages"]
+    assert any(m["role"] == "assistant" and m["content"] == bad for m in msgs)
+
+
 # ---------------------------------------------------------------------------
 # Failure modes
 # ---------------------------------------------------------------------------

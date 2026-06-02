@@ -6,16 +6,17 @@ keypairs) in the lure's fakefs so an attacker who exfiltrates
 source-session correlation when they try the AWS key against a
 sinkhole or paste the SSH public key publicly.
 
-Slice 11.1 ships the in-process pieces only:
+This package provides the in-process pieces:
 
 * :class:`Honeytoken` - the shared frozen data model.
 * :class:`HoneytokenGenerator` - AWS + SSH generators.
+* :class:`HoneytokenPlacementService` - the threat-threshold hook
+  that schedules per-session placement.
 
-Slice 11.2 adds the SQLite schema + SessionStore CRUD + the
-audit-tailer dispatch. Slice 11.3 wires the bridge integration
-(threat-scorer threshold hook + fakefs_overlay merge). Slice
-11.4 ships the bundled callback receiver + the wizard prompt +
-the THREAT_MODEL update.
+The SQLite schema + SessionStore CRUD + audit-tailer dispatch live
+in :mod:`anglerfish.sessions`, the bridge wiring in
+:mod:`anglerfish.bridge.service`, and the public callback receiver in
+:mod:`anglerfish.callback`.
 """
 
 from __future__ import annotations

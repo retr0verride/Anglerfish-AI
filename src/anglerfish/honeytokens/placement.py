@@ -10,11 +10,12 @@ one SSH token for the source IP, audit each as
 ``bridge.honeytoken_placed``, return. The dashboard tailer
 (slice 11.2) registers each into the ``honeytokens`` table.
 
-The placement service holds no persistent state. Per-source-IP
-deduplication is intentional: if the same source IP crosses the
-threshold twice in two sessions, two pairs of tokens get
-generated. Operators see the attacker's iteration history;
-older tokens stay valid for callback receivers.
+The placement service holds no persistent state. Deduplication is
+per session, not per source IP: a session places at most one token
+pair however many times its score crosses the threshold, but the
+same source IP across two sessions gets two pairs. That cross-session
+repeat is intentional: operators see the attacker's iteration
+history, and older tokens stay valid for callback receivers.
 """
 
 from __future__ import annotations

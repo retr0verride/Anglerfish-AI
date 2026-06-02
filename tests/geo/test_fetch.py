@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import tarfile
 from pathlib import Path
 
@@ -56,6 +57,18 @@ def test_fetch_no_key_is_noop(tmp_path: Path) -> None:
     assert results == []
 
 
+def test_maybe_client_opens_and_closes_a_default_client() -> None:
+    # The http_client=None branch (production default) constructs and closes
+    # its own httpx.Client. Exercise it directly - constructing a client does
+    # not touch the network.
+    from anglerfish.geo.fetch import _maybe_client
+
+    with _maybe_client(None) as client:
+        assert isinstance(client, httpx.Client)
+        assert client.follow_redirects is True
+    assert client.is_closed
+
+
 def test_fetch_downloads_and_installs_both_editions(tmp_path: Path) -> None:
     city_mmdb = b"\x00\xab" * 64
     asn_mmdb = b"\x00\xcd" * 64
@@ -87,6 +100,42 @@ def test_fetch_downloads_and_installs_both_editions(tmp_path: Path) -> None:
     assert {r.edition for r in results} == {"GeoLite2-City", "GeoLite2-ASN"}
     assert (tmp_path / "city.mmdb").read_bytes() == city_mmdb
     assert (tmp_path / "asn.mmdb").read_bytes() == asn_mmdb
+
+
+def test_fetch_bytes_written_is_installed_size_not_compressed(tmp_path: Path) -> None:
+    # os.urandom is incompressible, so the gzip archive size differs
+    # clearly from the extracted .mmdb size. bytes_written is printed next
+    # to the destination, so it must report the on-disk installed size.
+    city_mmdb = os.urandom(8192)
+    asn_mmdb = os.urandom(8192)
+    city_archive = _build_archive("GeoLite2-City", city_mmdb)
+    asn_archive = _build_archive("GeoLite2-ASN", asn_mmdb)
+    assert len(city_archive) != len(city_mmdb)  # compressed != installed
+
+    client = _mock_client(
+        {
+            "GeoLite2-City&license_key=licensekey1234&suffix=tar.gz.sha256": (
+                200,
+                f"{_sha256(city_archive)}  GeoLite2-City.tar.gz".encode(),
+            ),
+            "GeoLite2-ASN&license_key=licensekey1234&suffix=tar.gz.sha256": (
+                200,
+                f"{_sha256(asn_archive)}  GeoLite2-ASN.tar.gz".encode(),
+            ),
+            "edition_id=GeoLite2-City&license_key=licensekey1234&suffix=tar.gz": (
+                200,
+                city_archive,
+            ),
+            "edition_id=GeoLite2-ASN&license_key=licensekey1234&suffix=tar.gz": (
+                200,
+                asn_archive,
+            ),
+        },
+    )
+    results = {r.edition: r for r in fetch_geolite_databases(_config(tmp_path), http_client=client)}
+    city = results["GeoLite2-City"]
+    assert city.bytes_written == len(city_mmdb)
+    assert city.bytes_written == (tmp_path / "city.mmdb").stat().st_size
 
 
 def test_fetch_refuses_sha_mismatch(tmp_path: Path) -> None:

@@ -7,11 +7,11 @@ streaming response; the strategy's return values tell the bridge
 what to emit and how long to pace.
 
 :class:`StrategyContext` carries the per-command information a
-strategy needs to decide (session id, attacker command text,
-wasted-ms-so-far for the session, bridge config snapshot) without
-reaching into bridge internals. :class:`StrategyPreEffect`
-captures the pre-command output: an optional pre-message, the
-delay before it, and the delay before the LLM call begins.
+strategy needs to decide (session id, command count, clarification
+history, bridge config snapshot) without reaching into bridge
+internals. :class:`StrategyPreEffect` captures the pre-command
+output: an optional pre-message, the delay before it, and the delay
+before the LLM call begins.
 """
 
 from __future__ import annotations
@@ -30,10 +30,6 @@ __all__ = ["StrategyContext", "StrategyPreEffect", "WastingStrategyBase"]
 class StrategyContext:
     """Per-command information passed to the strategy.
 
-    ``wasted_ms_so_far`` is the running per-session total of time
-    the strategy has added. Strategies consult it to honour the
-    session cap (slice 6.5 ships the cap; earlier slices pass 0).
-
     ``command_count`` is the 0-based index of this command within
     the session (0 for the first command, 1 for the second, ...).
     Strategies use it together with ``session_id`` to seed a
@@ -48,9 +44,7 @@ class StrategyContext:
     """
 
     session_id: UUID
-    command: str
     command_count: int
-    wasted_ms_so_far: int
     bridge_config: BridgeConfig
     last_clarification_command_count: int | None = None
 
@@ -103,5 +97,14 @@ class WastingStrategyBase(ABC):
         self,
         ctx: StrategyContext,
         chunk: BridgeChunk,
+        *,
+        chunk_index: int,
     ) -> float:
-        """Return the inter-chunk sleep in seconds (``0.0`` for no delay)."""
+        """Return the inter-chunk sleep in seconds (``0.0`` for no delay).
+
+        ``chunk_index`` is the 0-based position of this chunk in the
+        command's streamed response. Strategies fold it into the PRNG seed
+        so each chunk draws its own jittered delay; without it the seed is
+        constant per command and every chunk gets the identical delay (a
+        fixed cadence, a cleaner fingerprint than the jitter intended).
+        """

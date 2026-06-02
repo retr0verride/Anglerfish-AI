@@ -23,28 +23,17 @@ Public surface:
   :data:`None` when the session is below the configured
   min-commands threshold.
 
-Errors:
-
-* :class:`IntentExtractionError` - base class for intent-side
-  failures. Underlying LLM-layer failures propagate unchanged.
-* :class:`EmbeddingExtractionError` - base class for embedding-
-  side failures with the same propagation contract.
+Both producers let underlying LLM-layer failures
+(OllamaUnavailableError, BudgetExhaustedError, StructuredOutputError)
+propagate unchanged to the bridge caller.
 """
 
 from __future__ import annotations
 
-from anglerfish.intel.embeddings import (
-    EmbeddingExtractionError,
-    EmbeddingGenerator,
-)
-from anglerfish.intel.intent import (
-    IntentExtractionError,
-    IntentExtractor,
-)
+from anglerfish.intel.embeddings import EmbeddingGenerator
+from anglerfish.intel.intent import IntentExtractor
 
 __all__ = [
-    "EmbeddingExtractionError",
     "EmbeddingGenerator",
-    "IntentExtractionError",
     "IntentExtractor",
 ]

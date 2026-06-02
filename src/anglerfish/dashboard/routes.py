@@ -49,7 +49,7 @@ from anglerfish.dashboard.health import (
     sessions_health,
 )
 from anglerfish.dashboard.overrides import RuntimeOverrides, WastingStrategy
-from anglerfish.dashboard.state import DashboardState
+from anglerfish.dashboard.state import _DEFAULT_THREAT_HISTORY, DashboardState
 from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.credentials import CredentialRecord, CredentialStats
 from anglerfish.models.intent import IntentSummary
@@ -945,7 +945,9 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
 
     @router.get("/api/threats", dependencies=[Depends(require_auth)])
     async def recent_threats(
-        limit: int = Query(default=50, ge=1, le=500),
+        # Cap matches the facade's history size so an over-cap request is a
+        # clear 422 rather than a silent truncation to the cap.
+        limit: int = Query(default=50, ge=1, le=_DEFAULT_THREAT_HISTORY),
         state: DashboardState = Depends(_get_state),  # noqa: B008
     ) -> list[dict[str, Any]]:
         threats: list[ThreatAssessment] = await state.get_recent_threats(limit=limit)

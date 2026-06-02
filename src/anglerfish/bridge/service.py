@@ -194,11 +194,10 @@ class AIBridgeService:
         # set at session-open from the registry, mirroring Stage 10's
         # cross-session pattern).
         self._honeytoken_placement = honeytoken_placement
-        # Set tracking source IPs we have already triggered placement
-        # for; placement service de-dupes per session, this set
-        # bounds duplicate audits within a single bridge process
-        # lifetime when the threat scorer fires repeatedly for the
-        # same session above the threshold.
+        # Set tracking session IDs we have already triggered placement
+        # for; dedup is per session, so this set bounds duplicate audits
+        # within a single bridge process lifetime when the threat scorer
+        # fires repeatedly for the same session above the threshold.
         self._honeytoken_placed_for: set[UUID] = set()
         # Stage 11: parallel map of session_id -> source_ip the HTTP
         # server populates at session-open via
@@ -382,8 +381,8 @@ class AIBridgeService:
         ``settings.honeytokens.enabled`` AND threat.score crosses
         ``settings.honeytokens.placement_threshold``, schedule a
         fire-and-forget placement task for this session's source
-        IP. Per-source-IP de-dup via ``_honeytoken_placed_for``
-        bounds the audit-log noise when the scorer fires
+        IP. Per-session de-dup via ``_honeytoken_placed_for`` (a set of
+        session IDs) bounds the audit-log noise when the scorer fires
         repeatedly above the threshold for the same session.
 
         Stage 12: after honeytoken placement, ``engage_counter_deception``
@@ -731,7 +730,7 @@ class AIBridgeService:
             return []
         if self._session_store_reader is None:
             return []
-        return await self._session_store_reader.list_persistence_for_source_ip(
+        return await self._session_store_reader.list_persistence_events_for_source_ip(
             source_ip,
         )
 
@@ -1257,9 +1256,7 @@ class AIBridgeService:
         strategy = self._current_strategy(session.session_id)
         strategy_ctx = StrategyContext(
             session_id=session.session_id,
-            command=sanitised,
             command_count=session.command_count,
-            wasted_ms_so_far=self._wasted_ms.get(session.session_id, 0),
             bridge_config=self._settings.bridge,
             last_clarification_command_count=self._last_clarification.get(
                 session.session_id,
@@ -1309,6 +1306,7 @@ class AIBridgeService:
                 # record matches what shipped.
                 response_cap = self._settings.ollama.max_response_chars
                 accumulated_chars = 0
+                chunk_index = 0
                 try:
                     async for chunk in self._client.stream_chat(messages, budget=budget):
                         if chunk.delta:
@@ -1327,7 +1325,12 @@ class AIBridgeService:
                                 done=False,
                             )
                             yield bridge_chunk
-                            delay = await strategy.between_chunks(strategy_ctx, bridge_chunk)
+                            delay = await strategy.between_chunks(
+                                strategy_ctx,
+                                bridge_chunk,
+                                chunk_index=chunk_index,
+                            )
+                            chunk_index += 1
                             if delay > 0:
                                 wasted_ms += int(delay * 1000.0)
                                 await self._sleep(delay)
@@ -1683,9 +1686,16 @@ class AIBridgeService:
             return False
 
         if len(tokens) == 1 or tokens[1] == "~":
-            target = (
-                f"/home/{session.fake_username}" if session.fake_username != "root" else "/root"
-            )
+            target = self._home_dir(session)
+        elif tokens[1] == "-":
+            # `cd -` returns to OLDPWD; with none set (no prior cd) bash
+            # prints an error and stays. Treat as handled with no move so
+            # the path never becomes "<cwd>/-".
+            if session.oldpwd is None:
+                return True
+            target = session.oldpwd
+        elif tokens[1].startswith("~"):
+            target = self._expand_tilde(session, tokens[1])
         elif tokens[1].startswith("/"):
             target = tokens[1]
         else:
@@ -1693,6 +1703,28 @@ class AIBridgeService:
             target = f"{base}/{tokens[1]}"
         session.update_cwd(normalise_path(target))
         return True
+
+    @staticmethod
+    def _home_dir(session: SessionContext) -> str:
+        """The home directory for the session's fake user."""
+        if session.fake_username != "root":
+            return f"/home/{session.fake_username}"
+        return "/root"
+
+    @classmethod
+    def _expand_tilde(cls, session: SessionContext, token: str) -> str:
+        """Expand a leading ``~``/``~user`` in a cd target.
+
+        ``~`` / ``~/path`` resolve to the session user's home; ``~user`` /
+        ``~user/path`` resolve to that user's home (``/root`` for root,
+        ``/home/<user>`` otherwise).
+        """
+        body = token[1:]
+        if body == "" or body.startswith("/"):
+            return cls._home_dir(session) + body
+        name, _, tail = body.partition("/")
+        home = "/root" if name == "root" else f"/home/{name}"
+        return f"{home}/{tail}" if tail else home
 
     @staticmethod
     def _first_token(command: str) -> str:

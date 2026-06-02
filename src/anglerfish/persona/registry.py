@@ -119,10 +119,11 @@ class PersonaRegistry:
     def get_or_default(self, name: str | None) -> Persona:
         """Return ``name``'s persona, falling back to the default on miss.
 
-        Used by the selector when a source-IP recurrence query
-        returns a persona name that the operator has since
-        deleted from the registry. Returning the default keeps
-        the session-open path total over the persona surface.
+        A deliberate, currently-unwired convenience: the selector
+        resolves missing/deleted persona names with its own ``in``-check
+        against the registry rather than calling this. Kept as a
+        total-over-the-surface lookup for callers that want the default
+        without branching.
         """
         if name is None:
             return self.default()

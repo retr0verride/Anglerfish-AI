@@ -66,7 +66,11 @@ Events recorded today (dot-namespaced: ``<subsystem>.<verb>_<noun>``):
 
 The Stage 4.2 audit-log tailer in
 :mod:`anglerfish.dashboard.audit_tailer` consumes the per-session
-``lure.*`` events to populate the persistent session store.
+``lure.*`` events (session open/close, native/bridge commands,
+fallbacks) plus the ``bridge.*`` enrichment events
+(``persistence_attempt``, ``honeytoken_placed``, ``intent_extracted``,
+``embedding_generated``, ``cluster_match``, ``persona_rebound``) to
+populate the persistent session store.
 
 The log is best-effort: a write failure logs a warning but never raises.
 The audit log MUST NOT itself crash the application — losing it would
@@ -98,6 +102,10 @@ class AuditLog:
     because the disk write happens under the lock and is short.
     """
 
+    # Keys record() owns; a caller cannot set them via **fields, or a
+    # last-write-wins update would let ts be forged.
+    _RESERVED_FIELDS = frozenset({"ts", "event_type"})
+
     def __init__(self, path: Path | None = None) -> None:
         self._path = path if path is not None else DEFAULT_AUDIT_PATH
         self._lock = threading.RLock()
@@ -107,27 +115,39 @@ class AuditLog:
         return self._path
 
     def record(self, event_type: str, **fields: Any) -> None:
-        """Append one event. Never raises — write failures are logged."""
+        """Append one event.
+
+        Raises ``ValueError`` for an empty ``event_type`` or a reserved
+        field key (``ts``/``event_type``); write failures are logged, not
+        raised.
+        """
         if not event_type:
             raise ValueError("event_type cannot be empty")
-        record: dict[str, Any] = {
-            "ts": datetime.now(tz=UTC).isoformat(),
-            "event_type": event_type,
-        }
-        record.update(fields)
-
-        try:
-            payload = json.dumps(record, default=str, separators=(",", ":"))
-        except (TypeError, ValueError) as exc:
-            _logger.warning(
-                "audit.record: payload not JSON-serialisable: %s field-keys=%s",
-                exc,
-                sorted(fields),
+        clashes = self._RESERVED_FIELDS & fields.keys()
+        if clashes:
+            raise ValueError(
+                f"reserved audit field(s) cannot be set via **fields: {sorted(clashes)}",
             )
-            return
 
-        line = (payload + "\n").encode("utf-8")
         with self._lock:
+            # Stamp ts inside the lock so the timestamp order matches the
+            # physical append order the tamper-evidence contract relies on.
+            record: dict[str, Any] = {
+                "ts": datetime.now(tz=UTC).isoformat(),
+                "event_type": event_type,
+                **fields,
+            }
+            try:
+                payload = json.dumps(record, default=str, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                _logger.warning(
+                    "audit.record: payload not JSON-serialisable: %s field-keys=%s",
+                    exc,
+                    sorted(fields),
+                )
+                return
+
+            line = (payload + "\n").encode("utf-8")
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 with self._path.open("ab") as fp:
@@ -152,6 +172,9 @@ class AuditLog:
                 )
 
     def __enter__(self) -> Self:
+        # Convenience context manager (tested, no production caller): there
+        # is no persistent handle, so it exists only so callers may `with`
+        # an AuditLog symmetrically with other resources.
         return self
 
     def __exit__(self, *_exc: object) -> None:

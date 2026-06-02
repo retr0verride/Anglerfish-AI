@@ -40,7 +40,14 @@ def _open_reader(path: Path) -> _GeoReader:
 
 
 class GeoLookup:
-    """Geographic + ASN enrichment for IP addresses."""
+    """Geographic + ASN enrichment for IP addresses.
+
+    Deliberate, currently-unwired extension point: the ``geo update``
+    CLI fetches and installs the MaxMind databases, but no production
+    path performs runtime lookups yet. Kept (with its tests) so the
+    session-enrichment stage that consumes it can wire it in without
+    rebuilding the reader/contract.
+    """
 
     def __init__(
         self,

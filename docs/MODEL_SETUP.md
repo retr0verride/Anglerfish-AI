@@ -261,11 +261,15 @@ Set or update these lines:
 # Loopback Ollama - co-located with the bridge, no trusted_remote_host needed
 ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/
 
-# Fast-tier model (the only one Stage 1 needs; Stage 3 adds the multi-model layer)
-ANGLERFISH_OLLAMA__MODEL=qwen3:14b
+# Per-role models (fast + deep tiers). The pre-Stage-5 single-key
+# aliases ANGLERFISH_OLLAMA__MODEL / ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH
+# still work as deprecated shims, but use the explicit keys below.
+ANGLERFISH_OLLAMA__FAST_MODEL=qwen3:14b
+ANGLERFISH_OLLAMA__DEEP_MODEL=phi-4
 
-# Stage 1 defense - pin the fast model's layer hash
-ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
+# Stage 1 defense - pin each model's layer hash
+ANGLERFISH_DEFENSE__FAST_MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
+ANGLERFISH_DEFENSE__DEEP_MODEL_EXPECTED_HASH=sha256:<paste deep hash from step 6>
 
 # REQUIRED when MODEL_EXPECTED_HASH is set: where to find the manifest.
 # Common values:
@@ -388,10 +392,11 @@ reasoning. Short version:
   enough that we can re-embed sessions cheaply when the model is
   swapped.
 
-**Operator override is one env var.** Nothing about Stage 1's defense
-layer is model-specific; if you have an internal preference (an
+**Operator override is one env var per tier.** Nothing about Stage 1's
+defense layer is model-specific; if you have an internal preference (an
 in-house fine-tune, a different upstream you trust) just set
-`ANGLERFISH_OLLAMA__MODEL` and capture the new hash per step 6.
+`ANGLERFISH_OLLAMA__FAST_MODEL` (and/or `__DEEP_MODEL`) and capture the
+new hash per step 6.
 
 If a future model meaningfully beats one of these on the relevant axis
 (shell knowledge, summarization quality, embedding cluster purity),
