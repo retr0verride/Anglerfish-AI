@@ -1689,9 +1689,16 @@ class AIBridgeService:
             return False
 
         if len(tokens) == 1 or tokens[1] == "~":
-            target = (
-                f"/home/{session.fake_username}" if session.fake_username != "root" else "/root"
-            )
+            target = self._home_dir(session)
+        elif tokens[1] == "-":
+            # `cd -` returns to OLDPWD; with none set (no prior cd) bash
+            # prints an error and stays. Treat as handled with no move so
+            # the path never becomes "<cwd>/-".
+            if session.oldpwd is None:
+                return True
+            target = session.oldpwd
+        elif tokens[1].startswith("~"):
+            target = self._expand_tilde(session, tokens[1])
         elif tokens[1].startswith("/"):
             target = tokens[1]
         else:
@@ -1699,6 +1706,28 @@ class AIBridgeService:
             target = f"{base}/{tokens[1]}"
         session.update_cwd(normalise_path(target))
         return True
+
+    @staticmethod
+    def _home_dir(session: SessionContext) -> str:
+        """The home directory for the session's fake user."""
+        if session.fake_username != "root":
+            return f"/home/{session.fake_username}"
+        return "/root"
+
+    @classmethod
+    def _expand_tilde(cls, session: SessionContext, token: str) -> str:
+        """Expand a leading ``~``/``~user`` in a cd target.
+
+        ``~`` / ``~/path`` resolve to the session user's home; ``~user`` /
+        ``~user/path`` resolve to that user's home (``/root`` for root,
+        ``/home/<user>`` otherwise).
+        """
+        body = token[1:]
+        if body == "" or body.startswith("/"):
+            return cls._home_dir(session) + body
+        name, _, tail = body.partition("/")
+        home = "/root" if name == "root" else f"/home/{name}"
+        return f"{home}/{tail}" if tail else home
 
     @staticmethod
     def _first_token(command: str) -> str:

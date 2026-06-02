@@ -43,6 +43,7 @@ class SessionContext:
         "_fake_username",
         "_history",
         "_last_activity_at",
+        "_oldpwd",
         "_persistence_events",
         "_persona",
         "_session_id",
@@ -78,6 +79,9 @@ class SessionContext:
         self._fake_hostname = fake_hostname
         self._fake_username = fake_username
         self._cwd = fake_cwd
+        # Shell OLDPWD: the directory the attacker came from, set on each
+        # successful cd so `cd -` can toggle back. None until the first cd.
+        self._oldpwd: str | None = None
         # Stage 9: assigned at session-open by PersonaSelector. None
         # when the bridge runs without persona support
         # (PersonaConfig.enabled=False rollback path). The full
@@ -201,10 +205,16 @@ class SessionContext:
         self._command_count += 1
         self._last_activity_at = timestamp
 
+    @property
+    def oldpwd(self) -> str | None:
+        """The previous working directory (shell ``OLDPWD``), or None."""
+        return self._oldpwd
+
     def update_cwd(self, new_cwd: str) -> None:
         """Move the fake shell to a new absolute working directory."""
         if not new_cwd.startswith("/"):
             raise ValueError(f"cwd must be absolute, got {new_cwd!r}")
+        self._oldpwd = self._cwd
         self._cwd = new_cwd
 
     def snapshot(self) -> SessionSnapshot:
