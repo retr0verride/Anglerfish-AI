@@ -363,11 +363,12 @@ class DashboardConfig(BaseModel):
         if v is None:
             return None
         raw = v.get_secret_value()
-        # bcrypt hashes start with $2a$, $2b$, or $2y$ — sanity check format.
-        if not (raw.startswith(("$2a$", "$2b$", "$2y$")) and len(raw) >= 59):
+        # bcrypt hashes start with $2a$/$2b$/$2y$ and are exactly 60 chars
+        # ($2x$ + 2-digit cost + $ + 22-char salt + 31-char digest).
+        if not (raw.startswith(("$2a$", "$2b$", "$2y$")) and len(raw) == 60):
             raise ValueError(
-                "dashboard.admin_password_hash must be a bcrypt hash "
-                "(starts with $2a$, $2b$, or $2y$).",
+                "dashboard.admin_password_hash must be a 60-character bcrypt "
+                "hash (starts with $2a$, $2b$, or $2y$).",
             )
         return v
 
