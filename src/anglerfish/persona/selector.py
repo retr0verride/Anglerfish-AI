@@ -28,7 +28,6 @@ audit it as bridge.persona_selected with selection_reason in
 from __future__ import annotations
 
 import hashlib
-import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -37,9 +36,6 @@ from anglerfish.persona.schema import Persona
 from anglerfish.sessions.reader import SessionStoreReader
 
 __all__ = ["PersonaSelector", "SelectionReason", "SelectionResult"]
-
-
-_logger = logging.getLogger(__name__)
 
 
 SelectionReason = Literal["pin", "source_ip_recurrence", "hash_fallback"]

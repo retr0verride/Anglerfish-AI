@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Self
 from uuid import UUID
 
@@ -281,10 +281,6 @@ class SessionStoreReader:
     def _require_open(self) -> None:
         if self._conn is None:
             raise RuntimeError("SessionStoreReader.open() must be awaited first")
-
-
-def _utcnow() -> datetime:  # pragma: no cover - reserved for future writers
-    return datetime.now(tz=UTC)
 
 
 def _row_to_honeytoken(row: tuple[object, ...]) -> Honeytoken:
