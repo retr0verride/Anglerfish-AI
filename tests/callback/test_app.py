@@ -160,7 +160,7 @@ def test_aws_403_body_escapes_xml_metacharacters() -> None:
     from anglerfish.callback.routes import _aws_403_response
 
     resp = _aws_403_response("<script>&x")
-    body = resp.body.decode("utf-8")
+    body = bytes(resp.body).decode("utf-8")
     assert "<script>" not in body
     assert "AKIA&lt;script&gt;&amp;x" in body
 

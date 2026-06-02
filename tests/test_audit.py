@@ -143,15 +143,18 @@ def test_record_is_thread_safe_under_concurrency(tmp_path: Path) -> None:
 
 
 def test_record_calls_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import anglerfish.audit as audit_mod
+    import os
 
-    real_fsync = audit_mod.os.fsync
+    real_fsync = os.fsync
     calls: list[int] = []
 
     def _spy(fd: int) -> None:
         calls.append(fd)
         real_fsync(fd)
 
-    monkeypatch.setattr(audit_mod.os, "fsync", _spy)
+    # audit.py calls os.fsync against the shared stdlib module, so patching
+    # os.fsync here is observed there (avoids the implicit-reexport of
+    # anglerfish.audit.os that bare mypy rejects).
+    monkeypatch.setattr(os, "fsync", _spy)
     AuditLog(tmp_path / "audit.jsonl").record("x")
     assert len(calls) == 1
