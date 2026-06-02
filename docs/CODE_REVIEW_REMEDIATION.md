@@ -152,7 +152,23 @@ the JA3 surface (`compute_ja3`), `PersonaRegistry.get_or_default`, the
 | `_row_to_honeytoken` duplicated + drifted across facades | `sessions/` | **closed** `3f49bc1` |
 | Persistence-list method name drift across facades | `sessions/reader.py` | **closed** `2cf58ae` |
 
-_Docstring-drift and test-gap buckets land below as they complete._
+**Bucket 4 - docstring / comment drift**
+
+| Finding | File | Status |
+|---------|------|--------|
+| Placement dedup mislabelled per-source-IP (it is per-session) | `honeytokens/placement.py`, `bridge/service.py` | **closed** `1d632eb` |
+| Shipped honeytoken/persistence work framed as future slices | `honeytokens/__init__.py`, `persistence/classifier.py` | **closed** `0b798c4` |
+| selector get_or_default/stale-pin claim + wrong modulo-bias comment; sshkey key-type list; tarfile "no-op"; intent "two cases" | `persona/selector.py`, `wizard/sshkey.py`, `geo/fetch.py`, `intel/intent.py` | **closed** `1f499ef` |
+| `_parse_usage` "discarded"; embedding truncation attribution; audit tailer events; legacy shim promise; MODEL_SETUP keys | `llm/client.py`, `models/embedding.py`, `audit.py`, `config/models.py`, `docs/MODEL_SETUP.md` | **closed** `582ef27` |
+| config `__all__` lists disagreed + incomplete | `config/__init__.py`, `config/models.py` | **closed** `a2134d6` |
+
+Deferred (cosmetic API-style, catalogued for a follow-up): `NarratorConfig.model_role`
+re-declaring the role vocabulary as a `Literal` instead of reusing `LLMRole`;
+the `HoneytokensConfig`/`CounterDeceptionConfig` `model_post_init` raise vs the
+`@model_validator` idiom; the `source_ip`/`ip` field-constraint convention; and
+completing the `models/__init__` facade (bypassed by production today).
+
+_Test-gap bucket lands below as it completes._
 
 ## Process
 
