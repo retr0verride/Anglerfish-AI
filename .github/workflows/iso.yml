@@ -27,7 +27,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             live-build debootstrap squashfs-tools xorriso \
-            isolinux syslinux-common dpkg-dev mtools
+            isolinux syslinux-common dpkg-dev mtools \
+            debian-archive-keyring
 
       - name: Stage repo into chroot include path
         run: |
