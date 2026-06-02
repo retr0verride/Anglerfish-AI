@@ -57,6 +57,18 @@ def test_fetch_no_key_is_noop(tmp_path: Path) -> None:
     assert results == []
 
 
+def test_maybe_client_opens_and_closes_a_default_client() -> None:
+    # The http_client=None branch (production default) constructs and closes
+    # its own httpx.Client. Exercise it directly - constructing a client does
+    # not touch the network.
+    from anglerfish.geo.fetch import _maybe_client
+
+    with _maybe_client(None) as client:
+        assert isinstance(client, httpx.Client)
+        assert client.follow_redirects is True
+    assert client.is_closed
+
+
 def test_fetch_downloads_and_installs_both_editions(tmp_path: Path) -> None:
     city_mmdb = b"\x00\xab" * 64
     asn_mmdb = b"\x00\xcd" * 64
