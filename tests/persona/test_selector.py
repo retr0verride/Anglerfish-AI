@@ -229,6 +229,29 @@ async def test_select_pin_ignores_unknown_persona_names(tmp_path: Path) -> None:
         await store.aclose()
 
 
+async def test_select_stale_pin_falls_through_to_recurrence(tmp_path: Path) -> None:
+    """A pin naming a deleted persona is skipped, but a valid recurrence
+    still wins over the hash fallback - locking the pin -> recurrence ->
+    hash ordering when the pin is stale."""
+    reader, store = await _opened_reader(tmp_path)
+    try:
+        ip = "203.0.113.20"
+        await _set_pin(store, ip, "deleted-persona")
+        await _seed_session_with_persona(
+            store,
+            source_ip=ip,
+            persona_name="dev-laptop",
+            started_at=datetime(2026, 5, 25, tzinfo=UTC),
+        )
+        selector = PersonaSelector(_registry(), reader)
+        result = await selector.select(ip)
+        assert result.persona.name == "dev-laptop"
+        assert result.reason == "source_ip_recurrence"
+    finally:
+        await reader.aclose()
+        await store.aclose()
+
+
 async def test_select_empty_source_ip_raises(tmp_path: Path) -> None:
     reader, store = await _opened_reader(tmp_path)
     try:
