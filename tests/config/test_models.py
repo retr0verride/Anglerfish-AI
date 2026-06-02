@@ -193,6 +193,20 @@ def test_bridge_defaults() -> None:
     assert cfg.enable_fallback is True
 
 
+def test_bridge_intent_and_embedding_token_caps_are_configurable() -> None:
+    """The Stage 7/8 generator budgets are reachable from config (M6)."""
+    cfg = BridgeConfig()
+    assert cfg.intent_extraction_token_cap == 4000
+    assert cfg.embedding_token_cap == 2000
+    custom = BridgeConfig(intent_extraction_token_cap=9000, embedding_token_cap=512)
+    assert custom.intent_extraction_token_cap == 9000
+    assert custom.embedding_token_cap == 512
+    with pytest.raises(ValidationError):
+        BridgeConfig(intent_extraction_token_cap=0)
+    with pytest.raises(ValidationError):
+        BridgeConfig(embedding_token_cap=0)
+
+
 def test_bridge_invalid_hostname() -> None:
     with pytest.raises(ValidationError):
         BridgeConfig(fake_hostname="bad_hostname")
@@ -545,3 +559,15 @@ def test_defense_frozen() -> None:
 def test_defense_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         DefenseConfig(secret_setting="oops")  # type: ignore[call-arg]
+
+
+def test_honeytokens_enabled_requires_callback_base_url() -> None:
+    """enabled=True without callback_base_url is rejected at config load
+    (audit review M12): tokens pointing at nothing are operator-confusing."""
+    from anglerfish.config.models import HoneytokensConfig
+
+    with pytest.raises(ValidationError):
+        HoneytokensConfig(enabled=True)
+    # With a callback URL it is accepted; disabled needs no URL.
+    HoneytokensConfig(enabled=True, callback_base_url="https://honey.example.com")
+    HoneytokensConfig(enabled=False)

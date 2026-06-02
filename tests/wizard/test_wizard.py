@@ -475,3 +475,88 @@ def test_prompt_for_answers_invalid_webhook_raises() -> None:
             available_interfaces=[],
             output=lambda _s: None,
         )
+
+
+def test_prompt_for_answers_ollama_hostname_endpoint_rejected() -> None:
+    """A non-loopback endpoint with a hostname is rejected at wizard time,
+    matching OllamaConfig's runtime rule (audit review M8)."""
+    confirms = [True, True, True]
+    prompts = [
+        "anglerfish-vm",
+        "eth0",
+        "eth1",
+        "anglerfish-ops",
+        "",
+        "admin",
+        "",
+        "http://gpu.example.com:11434/",  # hostname endpoint
+    ]
+    _prompt, _confirm = _make_prompter(confirms=confirms, prompts=prompts)
+    with pytest.raises(ValueError, match="not an IP literal"):
+        prompt_for_answers(
+            prompt=_prompt,
+            confirm=_confirm,
+            available_interfaces=[],
+            output=lambda _s: None,
+        )
+
+
+def test_prompt_for_answers_ollama_trusted_ip_mismatch_rejected() -> None:
+    """A trusted IP that does not match the endpoint host is rejected (M8)."""
+    confirms = [True, True, True]
+    prompts = [
+        "anglerfish-vm",
+        "eth0",
+        "eth1",
+        "anglerfish-ops",
+        "",
+        "admin",
+        "",
+        "http://10.0.0.5:11434/",  # IP endpoint
+        "10.0.0.9",  # trusted IP that does not match
+    ]
+    _prompt, _confirm = _make_prompter(confirms=confirms, prompts=prompts)
+    with pytest.raises(ValueError, match="does not match"):
+        prompt_for_answers(
+            prompt=_prompt,
+            confirm=_confirm,
+            available_interfaces=[],
+            output=lambda _s: None,
+        )
+
+
+def test_prompt_for_answers_remote_ollama_matching_ip_accepted() -> None:
+    """A matching IP endpoint + trusted IP is accepted and produces a config
+    the runtime OllamaConfig validator also accepts (audit review M8)."""
+    from anglerfish.config.models import OllamaConfig
+
+    confirms = [True, True, True, False, False]
+    prompts = [
+        "anglerfish-vm",
+        "eth0",
+        "eth1",
+        "anglerfish-ops",
+        "",
+        "admin",
+        "",
+        "http://10.0.0.5:11434/",  # IP endpoint
+        "10.0.0.5",  # trusted IP matching the endpoint
+        "qwen3:14b",
+        "srv-prod-01",
+        "root",
+        "",
+        "",
+    ]
+    _prompt, _confirm = _make_prompter(confirms=confirms, prompts=prompts)
+    answers = prompt_for_answers(
+        prompt=_prompt,
+        confirm=_confirm,
+        available_interfaces=["eth0", "eth1"],
+        output=lambda _s: None,
+    )
+    assert str(answers.ollama_trusted_remote_host) == "10.0.0.5"
+    # The wizard's output must pass the runtime validator (the M8 point).
+    OllamaConfig(
+        base_url=answers.ollama_endpoint,
+        trusted_remote_host=answers.ollama_trusted_remote_host,
+    )

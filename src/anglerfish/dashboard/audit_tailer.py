@@ -54,10 +54,14 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from anglerfish.audit import AuditLog
-from anglerfish.honeytokens.schema import Honeytoken
+from anglerfish.honeytokens.schema import HONEYTOKEN_KINDS, Honeytoken
 from anglerfish.models.embedding import SessionEmbedding
-from anglerfish.models.intent import IntentSummary
-from anglerfish.models.persistence import PersistenceEvent
+from anglerfish.models.intent import ACTOR_PROFILES, INTENT_CONFIDENCES, IntentSummary
+from anglerfish.models.persistence import (
+    PERSISTENCE_KINDS,
+    PERSISTENCE_SOURCES,
+    PersistenceEvent,
+)
 from anglerfish.models.session import CommandTurn, ResponseSource, SessionSnapshot
 
 if TYPE_CHECKING:
@@ -729,8 +733,11 @@ def _str_field(event: dict[str, Any], key: str, *, default: str) -> str:
     return value if isinstance(value, str) and value else default
 
 
-_VALID_ACTOR_PROFILES = frozenset({"opportunistic", "automated", "targeted", "exploratory"})
-_VALID_CONFIDENCES = frozenset({"low", "medium", "high"})
+# Audit review M10: derive from the model Literals (not hand-maintained
+# frozensets) so a new ActorProfile / IntentConfidence member cannot
+# silently drift out of the tailer's validation.
+_VALID_ACTOR_PROFILES = ACTOR_PROFILES
+_VALID_CONFIDENCES = INTENT_CONFIDENCES
 
 
 def _parse_intent_event(
@@ -865,8 +872,8 @@ def _parse_embedding_event(
         return None
 
 
-_VALID_PERSISTENCE_KINDS = frozenset({"crontab", "systemctl", "authorized_keys"})
-_VALID_PERSISTENCE_SOURCES = frozenset({"regex", "llm"})
+_VALID_PERSISTENCE_KINDS = PERSISTENCE_KINDS  # audit review M10: derive from the Literal
+_VALID_PERSISTENCE_SOURCES = PERSISTENCE_SOURCES
 
 
 def _parse_persistence_attempt_event(
@@ -945,7 +952,7 @@ def _parse_persistence_attempt_event(
     return persistence_event, source_ip, created_at
 
 
-_VALID_HONEYTOKEN_KINDS = frozenset({"aws", "ssh_key"})
+_VALID_HONEYTOKEN_KINDS = HONEYTOKEN_KINDS  # audit review M10: derive from the Literal
 
 
 def _parse_honeytoken_placed_event(event: dict[str, Any]) -> Honeytoken | None:

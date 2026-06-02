@@ -36,14 +36,40 @@ gap in three and each was closed with a follow-up commit:
 | R2b | T1098 stopped matching `cp`/`mv`/`install`/`dd` writes to credential files (caught pre-fix) | `6328889` destination-anchored verbs |
 | R4 | `tarfile.ReadError`/`OSError` still escaped FetchError-only; `ValidationError` still escaped lookup never-raises | `b9c1484` wrap extract/install + `_build_record` |
 
-## Outcome
+## Outcome (High pass)
 
 All six recommended fixes landed test-first on `review/code-review-remediation`,
 each a single green commit with an audit-notes block, plus three
-verification-driven follow-ups. Full suite: 2028 passed, 1 skipped,
-93.6% coverage; mypy strict + ruff clean. The remaining Medium/Low
-findings from the review stay catalogued in
-[`CODE_REVIEW_2026-06-01.md`](CODE_REVIEW_2026-06-01.md) for a later pass.
+verification-driven follow-ups. mypy strict + ruff clean. PR #12.
+
+## Medium pass
+
+The 13 Medium findings not already closed by the High pass were fixed on
+`review/code-review-medium` (stacked on the High branch), test-first,
+single-purpose commits. Two were owner-decision forks (resolved to
+"finish the feature"): M3 fs_context wired into the prompt, M9 data_dir
+made the single base for all on-disk state.
+
+| ID | Finding | Commit |
+|----|---------|--------|
+| M1 | Bridge-reported cwd never applied to the lure session | `c915db8` |
+| M2 | `ls -l` size 0 for files `cat` serves content for | `2fb16e4` |
+| M3 | `fs_context` sent every command but discarded by the bridge | `2566b54` |
+| M4 | Oversized regex capture raised uncaught ValidationError | `cf20795` |
+| M5 | systemctl unit names truncated at `-`/`.` | `cf20795` |
+| M6 | Intent/embed generator token budgets unreachable from config | `4caf42e` |
+| M7 | `/api/clusters` N+1 (2 queries per node) | `b2bbb2b` |
+| M8 | Wizard accepted a remote-Ollama config the runtime rejects | `072ab0f` |
+| M9 | `data_dir` half-wired base dir | `4b61b61` |
+| M10 | Literal membership sets hand-duplicated in the tailer | `654318d` |
+| M11 | Callback factory-owned-reader lifespan untested | (M11-M13) |
+| M12 | HoneytokensConfig enabled-requires-callback invariant untested | (M11-M13) |
+| M13 | `models/embedding.py` had no co-located test | (M11-M13) |
+
+Full suite after both passes: 2051 passed, 1 skipped, 93.6% coverage;
+bare mypy (incl. tests) + ruff clean. The ~69 Low findings remain
+catalogued in [`CODE_REVIEW_2026-06-01.md`](CODE_REVIEW_2026-06-01.md) for
+a later pass.
 
 ## Owner decisions
 

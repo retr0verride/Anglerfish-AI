@@ -985,6 +985,8 @@ class AIBridgeService:
         self,
         session: SessionContext,
         command: str,
+        *,
+        fs_context: str | None = None,
     ) -> BridgeResponse:
         """Return the shell response to display for ``command``.
 
@@ -993,6 +995,9 @@ class AIBridgeService:
         when fallbacks are disabled in configuration, the response text
         is empty and ``source`` is :attr:`ResponseSource.REJECTED`.
 
+        ``fs_context`` is the lure's fakefs summary (audit review M3),
+        threaded into the LLM system prompt as ground truth.
+
         Audit M6: the inner handler maps the known LLM/limiter failures
         to fallback itself; this outer guard catches anything it does
         not (sanitisation, the injection scorer, ``cd`` handling, a
@@ -1000,7 +1005,7 @@ class AIBridgeService:
         rather than propagating an exception to the attacker.
         """
         try:
-            return await self._run_command(session, command)
+            return await self._run_command(session, command, fs_context=fs_context)
         except Exception as exc:  # noqa: BLE001 - the attacker must never see an exception
             self._record_handler_error(session, exc)
             text, source = self._fail_closed(session, command, exc)
@@ -1010,6 +1015,8 @@ class AIBridgeService:
         self,
         session: SessionContext,
         command: str,
+        *,
+        fs_context: str | None = None,
     ) -> BridgeResponse:
         sanitised = sanitize_command(
             command,
@@ -1077,6 +1084,7 @@ class AIBridgeService:
                     history=session.history(),
                     persona=session.persona,
                     persistence_events=session.persistence_events,
+                    fs_context=fs_context,
                 )
                 # Stage 12: time-bomb prompt amendment (no-op unless this
                 # session engaged counter-deception above the threshold).
@@ -1138,6 +1146,8 @@ class AIBridgeService:
         self,
         session: SessionContext,
         command: str,
+        *,
+        fs_context: str | None = None,
     ) -> AsyncIterator[BridgeChunk]:
         """Stream the shell response for ``command`` as :class:`BridgeChunk`s.
 
@@ -1164,7 +1174,11 @@ class AIBridgeService:
         """
         streamed_ai = False
         try:
-            async for chunk in self._run_command_stream(session, command):
+            async for chunk in self._run_command_stream(
+                session,
+                command,
+                fs_context=fs_context,
+            ):
                 if chunk.source == ResponseSource.AI and chunk.delta:
                     streamed_ai = True
                 yield chunk
@@ -1180,6 +1194,8 @@ class AIBridgeService:
         self,
         session: SessionContext,
         command: str,
+        *,
+        fs_context: str | None = None,
     ) -> AsyncIterator[BridgeChunk]:
         sanitised = sanitize_command(
             command,
@@ -1273,6 +1289,7 @@ class AIBridgeService:
                     history=session.history(),
                     persona=session.persona,
                     persistence_events=session.persistence_events,
+                    fs_context=fs_context,
                 )
                 # Stage 12: time-bomb prompt amendment (no-op unless this
                 # session engaged counter-deception above the threshold).

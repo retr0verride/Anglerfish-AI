@@ -127,14 +127,17 @@ async def _stream_command(
     service: AIBridgeService,
     ctx: SessionContext,
     command: str,
+    *,
+    fs_context: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Render :meth:`AIBridgeService.handle_command_stream` as NDJSON bytes.
 
     One JSON object per line. Terminal line (``done=true``) carries
     ``latency_ms`` and ``cwd`` so the lure can update its prompt without
-    a separate request.
+    a separate request. ``fs_context`` (the lure's fakefs summary) is
+    threaded into the LLM prompt (audit review M3).
     """
-    async for chunk in service.handle_command_stream(ctx, command):
+    async for chunk in service.handle_command_stream(ctx, command, fs_context=fs_context):
         payload: dict[str, object] = {
             "delta": chunk.delta,
             "source": str(chunk.source),
@@ -414,10 +417,10 @@ def create_bridge_app(
         await service.classify_command(req.command, session=ctx)
         if stream:
             return StreamingResponse(
-                _stream_command(service, ctx, req.command),
+                _stream_command(service, ctx, req.command, fs_context=req.fs_context),
                 media_type="application/x-ndjson",
             )
-        result = await service.handle_command(ctx, req.command)
+        result = await service.handle_command(ctx, req.command, fs_context=req.fs_context)
         return CommandResponse(
             text=result.text,
             source=str(result.source),

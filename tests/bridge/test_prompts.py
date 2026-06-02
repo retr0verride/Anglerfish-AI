@@ -29,6 +29,39 @@ def test_system_prompt_fills_environment() -> None:
     assert "Debian" in prompt
 
 
+def test_system_prompt_includes_fs_context_when_provided() -> None:
+    """The lure's fakefs summary is surfaced as prompt ground truth (M3)."""
+    cfg = BridgeConfig()
+    summary = "Files (cat returns stored content):\n- /etc/passwd: FSCONTEXT-MARKER"
+    prompt = build_system_prompt(cfg, cwd="/root", fs_context=summary)
+    assert "FSCONTEXT-MARKER" in prompt
+    assert "Filesystem ground truth" in prompt
+
+
+def test_system_prompt_omits_fs_context_block_when_absent() -> None:
+    cfg = BridgeConfig()
+    assert "Filesystem ground truth" not in build_system_prompt(cfg, cwd="/root")
+    # An empty/whitespace summary also renders no block.
+    assert "Filesystem ground truth" not in build_system_prompt(
+        cfg,
+        cwd="/root",
+        fs_context="   ",
+    )
+
+
+def test_build_messages_threads_fs_context_into_system_message() -> None:
+    cfg = BridgeConfig()
+    messages = build_messages(
+        "ls /etc",
+        config=cfg,
+        cwd="/root",
+        history=(),
+        fs_context="- /etc/passwd: FSCONTEXT-MARKER",
+    )
+    assert messages[0].role == "system"
+    assert "FSCONTEXT-MARKER" in messages[0].content
+
+
 def test_build_messages_no_history() -> None:
     cfg = BridgeConfig()
     messages = build_messages("ls /etc", config=cfg, cwd="/root", history=())

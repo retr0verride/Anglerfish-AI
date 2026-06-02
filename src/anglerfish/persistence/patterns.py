@@ -38,8 +38,34 @@ pre-Stage-10 bridge had).
 from __future__ import annotations
 
 import re
+from typing import Final
 
-from anglerfish.models.persistence import PersistenceEvent
+from anglerfish.models.persistence import PersistenceEvent, PersistenceKind
+
+# Mirror PersistenceEvent's field bounds (audit review M4). An attacker can
+# pad an authorized_keys / crontab line past these caps; truncating the
+# regex captures here keeps an oversized payload from raising
+# ValidationError out of the synchronous classifier hot path.
+_PAYLOAD_MAX_CHARS: Final = 4096
+_SUB_KEY_MAX_CHARS: Final = 256
+
+
+def _regex_event(
+    kind: PersistenceKind,
+    *,
+    sub_key: str | None,
+    payload: str,
+) -> PersistenceEvent:
+    """Build a regex-sourced PersistenceEvent with captures clamped to the
+    model's field bounds (audit review M4) so a padded capture is recorded
+    truncated rather than crashing the classifier."""
+    return PersistenceEvent(
+        kind=kind,
+        sub_key=sub_key[:_SUB_KEY_MAX_CHARS] if sub_key is not None else None,
+        payload=payload[:_PAYLOAD_MAX_CHARS],
+        source="regex",
+    )
+
 
 __all__ = ["extract_event", "looks_write_shape"]
 
@@ -201,14 +227,17 @@ _CRONTAB_RAW_WRITE = re.compile(
 
 # Captures the unit name from `systemctl enable|start [--now] <unit>`.
 # Skips any leading dash-prefixed flags (--now, --no-reload, etc.)
-# before capturing. group 1 = unit (with optional .service suffix).
+# before capturing. group 1 = the whole unit token; the caller strips an
+# optional .service suffix. Audit review M5: the previous lazy
+# `(\S+?)(?:\.service)?\b` stopped at the first word boundary, so
+# `my-backdoor.service` recorded sub_key `my` and broke status-replay
+# lookups. Capture greedily (a unit is a single non-space token) instead.
 _SYSTEMCTL_ENABLE_START = re.compile(
     r"""
     \bsystemctl\s+
     (?:enable|start)\s+
     (?:--\S+\s+)*                                # optional dash-flags
-    (\S+?)                                       # group 1: unit name
-    (?:\.service)?\b
+    (\S+)                                        # group 1: full unit token
     """,
     re.VERBOSE,
 )
@@ -275,11 +304,10 @@ def _try_authorized_keys(command: str) -> PersistenceEvent | None:
         key = _first_non_none(match.group(1), match.group(2), match.group(3))
         sub_key = match.group(4)
         if key:
-            return PersistenceEvent(
-                kind="authorized_keys",
+            return _regex_event(
+                "authorized_keys",
                 sub_key=sub_key,
                 payload=key.strip(),
-                source="regex",
             )
 
     match = _AUTHORIZED_KEYS_PRINTF.search(command)
@@ -287,11 +315,10 @@ def _try_authorized_keys(command: str) -> PersistenceEvent | None:
         key = _first_non_none(match.group(1), match.group(2))
         sub_key = match.group(3)
         if key:
-            return PersistenceEvent(
-                kind="authorized_keys",
+            return _regex_event(
+                "authorized_keys",
                 sub_key=sub_key,
                 payload=key.strip(),
-                source="regex",
             )
 
     return None
@@ -302,40 +329,24 @@ def _try_crontab(command: str) -> PersistenceEvent | None:
     if match is not None:
         line = _first_non_none(match.group(1), match.group(2))
         if line:
-            return PersistenceEvent(
-                kind="crontab",
-                sub_key=None,
-                payload=line.strip(),
-                source="regex",
-            )
+            return _regex_event("crontab", sub_key=None, payload=line.strip())
 
     match = _CRONTAB_RAW_WRITE.search(command)
     if match is not None:
         line = _first_non_none(match.group(1), match.group(2))
         if line:
-            return PersistenceEvent(
-                kind="crontab",
-                sub_key=None,
-                payload=line.strip(),
-                source="regex",
-            )
+            return _regex_event("crontab", sub_key=None, payload=line.strip())
 
     match = _CRONTAB_INTERACTIVE.search(command)
     if match is not None:
-        return PersistenceEvent(
-            kind="crontab",
-            sub_key=None,
-            payload="<interactive edit>",
-            source="regex",
-        )
+        return _regex_event("crontab", sub_key=None, payload="<interactive edit>")
 
     match = _CRONTAB_REPLACE_FROM_FILE.search(command)
     if match is not None:
-        return PersistenceEvent(
-            kind="crontab",
+        return _regex_event(
+            "crontab",
             sub_key=None,
             payload=f"<replace from {match.group(1)}>",
-            source="regex",
         )
 
     return None
@@ -344,35 +355,27 @@ def _try_crontab(command: str) -> PersistenceEvent | None:
 def _try_systemctl(command: str) -> PersistenceEvent | None:
     match = _SYSTEMCTL_ENABLE_START.search(command)
     if match is not None:
-        unit = match.group(1)
+        # Audit review M5: capture the whole unit token, then strip an
+        # optional .service suffix - so `my-backdoor.service` records
+        # `my-backdoor`, not `my`.
+        unit = match.group(1).removesuffix(".service")
         if unit:
-            return PersistenceEvent(
-                kind="systemctl",
-                sub_key=unit,
-                payload=unit,
-                source="regex",
-            )
+            return _regex_event("systemctl", sub_key=unit, payload=unit)
 
     match = _SERVICE_START.search(command)
     if match is not None:
         unit = match.group(1)
         if unit:
-            return PersistenceEvent(
-                kind="systemctl",
-                sub_key=unit,
-                payload=unit,
-                source="regex",
-            )
+            return _regex_event("systemctl", sub_key=unit, payload=unit)
 
     match = _SYSTEMD_UNIT_WRITE.search(command)
     if match is not None:
         path = match.group(1)
         unit = match.group(2)
-        return PersistenceEvent(
-            kind="systemctl",
+        return _regex_event(
+            "systemctl",
             sub_key=unit,
             payload=f"<unit file written to {path}>",
-            source="regex",
         )
 
     return None

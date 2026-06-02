@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -124,6 +124,75 @@ class AnglerfishSettings(BaseSettings):
                 "and lets one chunk smuggle more bytes than the stream allows.",
             )
         return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _rebase_state_paths_under_data_dir(cls, data: Any) -> Any:
+        """Make data_dir the single base for runtime state (audit review M9).
+
+        data_dir previously governed only the audit-tailer offset cache;
+        the three on-disk state paths (sessions.db, credentials.db, the
+        Tor-exit cache) embedded /var/lib/anglerfish independently, so
+        ANGLERFISH_DATA_DIR moved almost nothing. When data_dir is set away
+        from its default and a state path is still at its packaged
+        /var/lib/anglerfish default, rebase it under data_dir so one knob
+        relocates everything; an explicit override is left untouched. The
+        audit LOG stays under /var/log by convention (logs, not data).
+
+        Runs in ``before`` mode (and returns the input, not ``self``)
+        because pydantic-settings ignores a non-self return from a
+        top-level after-validator during ``__init__``.
+        """
+        if not isinstance(data, dict):
+            return data
+        default_base = Path("/var/lib/anglerfish")
+        data_dir = Path(data.get("data_dir") or default_base)
+        if data_dir == default_base:
+            return data
+        _rebase_subpath(
+            data,
+            "sessions",
+            "database_path",
+            default_base / "sessions.db",
+            data_dir / "sessions.db",
+        )
+        _rebase_subpath(
+            data,
+            "credentials",
+            "database_path",
+            default_base / "credentials.db",
+            data_dir / "credentials.db",
+        )
+        _rebase_subpath(
+            data,
+            "fingerprint",
+            "tor_exit_list_path",
+            default_base / "tor-exits.txt",
+            data_dir / "tor-exits.txt",
+        )
+        return data
+
+
+def _rebase_subpath(
+    data: dict[str, Any],
+    key: str,
+    field: str,
+    default_path: Path,
+    new_path: Path,
+) -> None:
+    """Set ``data[key][field]`` to ``new_path`` only if it is currently
+    absent or still at its packaged default (audit review M9). Handles the
+    sub-config being absent, a dict (env / .env source), or a model
+    instance (init kwarg); an explicit override is left untouched.
+    """
+    cur = data.get(key)
+    if cur is None:
+        data[key] = {field: str(new_path)}
+    elif isinstance(cur, dict):
+        if field not in cur or Path(cur[field]) == default_path:
+            cur[field] = str(new_path)
+    elif getattr(cur, field, None) == default_path:
+        data[key] = cur.model_copy(update={field: new_path})
 
 
 @lru_cache(maxsize=1)

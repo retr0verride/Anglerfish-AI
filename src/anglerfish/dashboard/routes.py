@@ -526,16 +526,26 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         threat_by_session: dict[str, int] = {}
         for assessment in threats:
             threat_by_session.setdefault(str(assessment.session_id), assessment.score)
+        # Audit review M7: batch the per-node session + intent metadata into
+        # two queries instead of two per node (up to 2x1000 lock-serialised
+        # SQLite hops). get_cluster_graph already scanned the graph in one
+        # pass; enrich its nodes from id-keyed maps.
+        node_ids = [embedding.session_id for embedding in embeddings]
+        meta_by_id = await state.store.get_session_node_metadata(node_ids)
+        intent_by_id = {
+            intent.session_id: intent
+            for intent in await state.get_intents_in_range(start=start, end=end)
+        }
         nodes: list[dict[str, Any]] = []
         for embedding in embeddings:
             sid = embedding.session_id
-            session = await state.get_session(sid)
-            intent = await state.get_intent(sid)
+            meta = meta_by_id.get(sid)
+            intent = intent_by_id.get(sid)
             nodes.append(
                 {
                     "session_id": str(sid),
-                    "source_ip": session.source_ip if session else None,
-                    "persona": session.persona_name if session else None,
+                    "source_ip": meta[0] if meta else None,
+                    "persona": meta[1] if meta else None,
                     "threat_score": threat_by_session.get(str(sid), 0),
                     "intent_label": intent.intent if intent else None,
                 },
