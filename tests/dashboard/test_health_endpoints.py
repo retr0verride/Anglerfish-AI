@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from anglerfish.audit import AuditLog
 from anglerfish.config import AnglerfishSettings
-from anglerfish.dashboard import create_app
+from anglerfish.dashboard import create_app, health
 
 
 @pytest.fixture
@@ -223,3 +223,26 @@ def test_sessions_endpoint_wasting_drops_closed_capped_sessions(
     # The session hit the cap then closed; no longer counted as
     # "currently at cap".
     assert body["wasting"]["sessions_at_budget_cap"] == 0
+
+
+def test_wasting_stats_stops_at_window_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # iter_events yields newest-first, so the first event older than the
+    # cutoff means every remaining event is older too. _wasting_stats must
+    # break there like its _command_rate_per_minute sibling, not continue
+    # and scan the whole log. A poison in-window event placed AFTER the
+    # boundary proves the loop stopped: with `continue` it would be counted
+    # and wreck the average; with `break` it is never reached.
+    now = datetime.now(tz=UTC)
+    recent = now.isoformat()
+    stale = (now - timedelta(minutes=health._WASTING_WINDOW_MIN + 60)).isoformat()
+    sid = "11111111-1111-1111-1111-111111111111"
+    events = [
+        {"event_type": "bridge.wasting_applied", "ts": recent, "session_id": sid, "wasted_ms": 100},
+        {"event_type": "bridge.wasting_applied", "ts": stale, "session_id": sid, "wasted_ms": 5},
+        {"event_type": "bridge.wasting_applied", "ts": recent, "session_id": sid, "wasted_ms": 9999},
+    ]
+    monkeypatch.setattr(health, "iter_events", lambda _path: iter(events))
+    stats = health._wasting_stats(Path("ignored"), "light")
+    assert stats["avg_wasted_ms_per_session"] == 100
