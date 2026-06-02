@@ -154,9 +154,14 @@ class DashboardState:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Drop the oldest event in this subscriber's queue to make
-                # space - slow consumers should fall behind, not stall.
-                with _suppress_get_nowait(queue):
+                # Drop the oldest event to make space, then enqueue the new
+                # one - slow consumers fall behind rather than stall the
+                # publisher. Both steps are best-effort: a racing consumer
+                # may have drained or refilled the queue in between, so each
+                # is guarded independently and fan-out always continues.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+                with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait(event)
 
     async def update_session(self, snapshot: SessionSnapshot) -> None:
@@ -464,11 +469,3 @@ class DashboardState:
     async def subscriber_count(self) -> int:
         async with self._subscribers_lock:
             return len(self._subscribers)
-
-
-def _suppress_get_nowait(queue: asyncio.Queue[DashboardEvent]) -> Any:
-    """Context manager that drains one element from ``queue`` if present."""
-    with contextlib.suppress(asyncio.QueueEmpty):
-        queue.get_nowait()
-        return contextlib.suppress(asyncio.QueueFull)
-    return contextlib.nullcontext()
