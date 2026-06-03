@@ -296,3 +296,121 @@ and closed all six deferred items in the locked order TODO-6 →
 TODO-9 → TODO-8 → TODO-3 → TODO-2 → TODO-7. Each landed as its
 own commit with a documented audit-notes block. Backlog is empty
 as of this commit.
+
+# Audit backlog (opened 2026-06-03)
+
+The multi-agent security + deception audit (2026-06-03) surfaced the items
+below. Unlike TODO-1..9 these are net-new findings, not Stage-2 deferrals.
+They are numbered so source and commits can reference them by `TODO-N`.
+None are started; severity is the audit's, not a promise of order.
+
+## TODO-10: kernel identity is multi-sourced and inconsistent
+
+The synthetic kernel string is hard-coded in several places with TWO
+different releases, so an attacker who cross-checks them detects the
+deception:
+
+- `bridge/fallback.py:18-19` and `bridge/prompts.py:38` claim
+  `6.1.0-26-amd64` (build `Debian 6.1.112-1 (2024-09-30)`).
+- `lure/commands.py:202,209`, `lure/fakefs.py:237-239`, and
+  `lure/fakefs.py:757` claim `6.1.0-18-amd64`
+  (build `Debian 6.1.76-1 (2024-02-01)`).
+
+`uname -r` served by the lure (6.1.0-18) disagrees with the bridge
+fallback's `uname` (6.1.0-26, used during an Ollama outage) and with what
+the LLM is told it is running (prompts.py → 6.1.0-26), so AI-narrated
+kernel references contradict `/proc/version`. A scanner comparing
+`uname -a`, `cat /proc/version`, and model-generated kernel mentions sees
+more than one kernel.
+
+Fix sketch: single-source the kernel identity (release, build string,
+build date, compiler, the `/proc/version` line) into one module that all
+consumers import (lure commands, fakefs, bridge fallback, the LLM prompt
+context). Add a cross-source consistency test that fails if any consumer
+drifts. Fold the persona overlay in: today an overlay only overrides
+os-release, so persona swaps leave the kernel/uptime/uid story unchanged.
+
+## TODO-11: native date / time / session commands
+
+The fake shell lacks (or statically fakes) `date`, `timedatectl`, `uptime`,
+`w`, and `last`. On a real box these advance and agree with each other and
+with boot time; static or missing output is a tell, and `last`/`w` with no
+plausible session history is suspicious.
+
+Fix sketch: implement them as deterministic synthetic commands driven by a
+per-session synthetic clock and a synthetic wtmp/utmp, consistent with the
+boot time and uptime the persona claims.
+
+## TODO-12: off-box audit-log shipping
+
+`/var/log/anglerfish/audit.jsonl` is the only tamper-evidence surface. An
+attacker who roots the box can alter it before it is shipped anywhere.
+install-to-disk persists it, but on-box only.
+
+Fix sketch: an optional shipper (syslog/TLS, HTTPS, or object store) that
+streams audit records off-box append-only, with backpressure and a
+documented trust model. The on-box log stays the live surface; off-box is
+the durable copy.
+
+## TODO-13: in-memory counters reset on reboot
+
+The per-IP rate limiter and per-session budgets live in memory. A reboot
+(or the now-supported install-to-disk) resets them, so an attacker can
+clear throttling by forcing a restart, and longitudinal per-IP counts
+reset.
+
+Fix sketch: persist the limiter and budget state to the sessions DB (now on
+the durable data partition) with a periodic flush and a reload on start.
+
+## TODO-14: --with-ollama model-pull orchestration
+
+The ISO `--with-ollama` path installs Ollama and opens tcp/443 egress, but
+nothing pulls the model, so the box boots with no model loaded. Verified:
+no code calls `ollama pull`; it is only a hook comment. The egress fix is
+necessary but not sufficient.
+
+Fix sketch: either pre-pull the configured model into the image at build
+time (size cost) or a first-boot oneshot that pulls it with progress and
+retry. The wizard already captures the model name.
+
+## TODO-15: curl|sh Ollama install is unpinned
+
+The Ollama install hook uses the upstream `curl | sh` installer with no
+version pin or checksum, a supply-chain and reproducibility gap.
+
+Fix sketch: pin to a specific Ollama release (a versioned `.deb` or a
+checksum-verified tarball from a pinned URL) and drop `curl | sh`.
+
+## TODO-16: dashboard WebSocket has no Origin allow-list
+
+The dashboard WebSocket does not check `Origin` on upgrade. Safe while
+bound to localhost, but an operator who exposes it on a management NIC is
+open to cross-site WebSocket hijacking.
+
+Fix sketch: a configurable allowed-origins list checked at the WS upgrade,
+defaulting to localhost-only, documented in the runbook.
+
+## TODO-17: ProtectProc + per-service user isolation
+
+The services share the `anglerfish` user and do not set
+`ProtectProc=invisible` / `ProcSubset=pid`, so a compromise of one service
+can see the others' processes.
+
+Fix sketch: dedicated users (or `DynamicUser`) per service plus
+`ProtectProc=invisible` and `ProcSubset=pid` in the unit hardening,
+re-verifying the ReadWritePaths still line up.
+
+## TODO-18: bit-for-bit reproducible ISO
+
+The build is pinned (container digest, dated bookworm) but not
+bit-reproducible: timestamps and apt ordering vary run to run.
+
+Fix sketch: set `SOURCE_DATE_EPOCH`, pin apt to a snapshot.debian.org
+timestamp, and make the squashfs deterministic (sorted entries, fixed
+mtimes). Verify two clean builds hash-match.
+
+## TODO-19: models-surface API cosmetic tweaks
+
+The cosmetic API / response-shape tweaks on the dashboard models surface
+deferred from the 2026-06-01 code review (bucket 4, non-behavioural). See
+`docs/CODE_REVIEW_2026-06-01.md` for the specific items.
