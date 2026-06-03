@@ -1,7 +1,9 @@
 #!/bin/sh
 # live-build auto/clean — invoked by `lb clean`.
 
-set -e
+set -eu
 
 lb clean noauto "${@}"
-rm -rf binary chroot cache live-image-*.hybrid.iso
+# Match the --image-name (anglerfish-ai), not the live-build default name,
+# so a prior run's ISO is genuinely purged.
+rm -rf binary chroot cache anglerfish-ai-*.hybrid.iso

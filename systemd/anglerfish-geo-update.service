@@ -32,6 +32,10 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
+# Pin the seccomp filter to the native ABI (the @system-service allowlist
+# is otherwise ABI-bypassable). The fetcher only needs IP sockets.
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadWritePaths=/var/lib/anglerfish/geo /var/log/anglerfish

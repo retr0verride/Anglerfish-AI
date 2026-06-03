@@ -1,7 +1,10 @@
 [Unit]
 Description=Anglerfish AI bridge — LLM middleware for the native SSH lure
 Documentation=https://github.com/retr0verride/Anglerfish-AI
-After=network-online.target ollama.service
+# Fail closed on the firewall: do not start the bridge if the nftables
+# ruleset failed to load.
+After=network-online.target anglerfish-firewall.service ollama.service
+Requires=anglerfish-firewall.service
 Wants=network-online.target
 
 [Service]
@@ -33,6 +36,18 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
+# Pin the seccomp filter to the native ABI; a secondary x32/i386 ABI would
+# otherwise bypass the @system-service allowlist.
+SystemCallArchitectures=native
+# Only the socket families the service actually uses.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+RemoveIPC=yes
+# Resource ceilings: a flood cannot OOM / fd-exhaust the box. Conservative
+# defaults; raise per deployment.
+MemoryMax=1G
+TasksMax=512
+LimitNOFILE=8192
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadWritePaths=/var/lib/anglerfish /var/log/anglerfish

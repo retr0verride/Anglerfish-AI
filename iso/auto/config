@@ -2,17 +2,31 @@
 # live-build auto/config — invoked by `lb config`. Sets distribution
 # parameters, image format, and component selection.
 
-set -e
+set -eu
 
+# --mode debian + explicit Debian mirrors: the build runs inside the pinned
+# bookworm container (iso/Dockerfile), but pin the distro + mirrors anyway
+# so the result never depends on a host's live-build defaults.
+#
+# --bootloaders syslinux,grub-efi makes a true BIOS+UEFI hybrid: syslinux
+# (isolinux) provides the BIOS El Torito boot, grub-efi the UEFI boot.
+# syslinux alone (the previous value) leaves EFI unset = BIOS-only.
 lb config noauto \
+    --mode debian \
     --distribution bookworm \
     --architectures amd64 \
     --binary-images iso-hybrid \
-    --bootloaders syslinux \
+    --bootloaders syslinux,grub-efi \
     --linux-flavours amd64 \
     --image-name "anglerfish-ai" \
     --debian-installer false \
     --memtest none \
     --apt-recommends false \
+    --security true \
+    --mirror-bootstrap "http://deb.debian.org/debian/" \
+    --mirror-chroot "http://deb.debian.org/debian/" \
+    --mirror-chroot-security "http://security.debian.org/debian-security/" \
+    --mirror-binary "http://deb.debian.org/debian/" \
+    --mirror-binary-security "http://security.debian.org/debian-security/" \
     --bootappend-live "boot=live components quiet splash" \
     "${@}"

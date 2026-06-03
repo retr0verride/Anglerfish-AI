@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+#
+# anglerfish-install -- persist the running Anglerfish live appliance to a
+# disk, converting it to a normal (non-live) bootable Debian system so all
+# captured intel, the wizard secrets, the credentials AES key, the SSH host
+# keys, and the append-only audit log survive reboots.
+#
+# The live image already contains the fully-built appliance (the venv at
+# /opt/anglerfish, the systemd units, the firewall), so "install" copies the
+# live root filesystem to the target, drops the live-boot machinery,
+# regenerates a normal initramfs, and installs GRUB for BIOS + UEFI.
+#
+# Layout: the OS root and the durable state live on SEPARATE partitions so
+# the OS can be reimaged without losing intel. The state directories
+# (/etc/anglerfish, /var/lib/anglerfish, /var/log/anglerfish) are bind-mounted
+# off a dedicated "anglerfish-data" partition.
+#
+#   p1  ef02  BIOS-boot (1M)   GRUB core image for legacy BIOS
+#   p2  ef00  ESP (512M)       UEFI
+#   p3  8300  anglerfish-root  the OS (reimageable)
+#   p4  8300  anglerfish-data  /etc + /var/lib + /var/log anglerfish
+#
+# On reinstall the existing anglerfish-data partition is detected by label
+# and PRESERVED (only the OS root + ESP are reformatted), so reimaging keeps
+# every captured session. Pass --wipe-data to purge it for a clean start.
+#
+# Usage:
+#     anglerfish-install [--yes] [--wipe-data] [--root-size SIZE] /dev/sdX
+#
+#     --yes         skip the confirmation prompt (automation/testing)
+#     --wipe-data   reformat the data partition too (purge stale intel)
+#     --root-size   OS root partition size (default 16G); the data partition
+#                   takes the rest of the disk
+#
+# WARNING: this ERASES the OS root + ESP (and, with --wipe-data, the data
+# partition) on the target disk.
+#
+# Recommended flow: boot the ISO, complete the first-boot wizard (so its
+# config is captured), then run this to persist it; on the next boot the box
+# comes up from disk with the wizard already done.
+
+set -euo pipefail
+
+ASSUME_YES=0
+WIPE_DATA=0
+ROOT_SIZE="16G"
+TARGET=""
+expect_size=0
+for arg in "$@"; do
+    if [[ "${expect_size}" -eq 1 ]]; then
+        ROOT_SIZE="${arg}"; expect_size=0; continue
+    fi
+    case "${arg}" in
+        --yes) ASSUME_YES=1 ;;
+        --wipe-data) WIPE_DATA=1 ;;
+        --root-size) expect_size=1 ;;
+        --root-size=*) ROOT_SIZE="${arg#*=}" ;;
+        -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+        /dev/*) TARGET="${arg}" ;;
+        *) echo "unknown argument: ${arg}" >&2; exit 64 ;;
+    esac
+done
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo "anglerfish-install must run as root." >&2
+    exit 1
+fi
+if [[ -z "${TARGET}" || ! -b "${TARGET}" ]]; then
+    echo "usage: anglerfish-install [--yes] [--wipe-data] [--root-size SIZE] /dev/sdX" >&2
+    exit 64
+fi
+if [[ ! "${ROOT_SIZE}" =~ ^[0-9]+[MG]$ ]]; then
+    echo "--root-size must look like 16G or 8192M (got: ${ROOT_SIZE})." >&2
+    exit 64
+fi
+
+# Refuse to install onto the live media itself.
+live_src="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
+if [[ -n "${live_src}" && "${live_src}" == "${TARGET}"* ]]; then
+    echo "refusing to install onto the live media (${TARGET})." >&2
+    exit 1
+fi
+
+# Partition device names: sdX -> sdX1, nvme0n1 -> nvme0n1p1.
+partdev() {
+    local disk="$1" num="$2"
+    if [[ "${disk}" =~ [0-9]$ ]]; then
+        echo "${disk}p${num}"
+    else
+        echo "${disk}${num}"
+    fi
+}
+# p1 BIOS-boot (grub finds it by ef02 type, no name needed), p2 ESP,
+# p3 root, p4 data.
+P_ESP="$(partdev "${TARGET}" 2)"
+P_ROOT="$(partdev "${TARGET}" 3)"
+P_DATA="$(partdev "${TARGET}" 4)"
+
+# Preserve mode: the target's 4th partition is already an anglerfish-data
+# partition and the operator did not ask to wipe it. Reimage the OS only.
+MODE="fresh"
+if [[ -b "${P_DATA}" ]]; then
+    data_label="$(blkid -s LABEL -o value "${P_DATA}" 2>/dev/null || true)"
+    if [[ "${data_label}" == "anglerfish-data" && "${WIPE_DATA}" -ne 1 ]]; then
+        MODE="preserve"
+    fi
+fi
+
+echo "Target ${TARGET}:"
+lsblk -o NAME,SIZE,TYPE,LABEL,MOUNTPOINT "${TARGET}" 2>/dev/null || true
+if [[ "${MODE}" == "preserve" ]]; then
+    echo
+    echo "Found an existing anglerfish-data partition: it will be PRESERVED."
+    echo "Only the OS root + ESP will be reformatted (reimage). Pass --wipe-data"
+    echo "to purge captured intel and start clean."
+    confirm_msg="Type the disk name (${TARGET}) to reimage the OS (keeping data): "
+else
+    echo
+    echo "This will ERASE ${TARGET} and create a fresh OS + data layout."
+    confirm_msg="Type the disk name (${TARGET}) to ERASE and install: "
+fi
+if [[ "${ASSUME_YES}" -ne 1 ]]; then
+    read -r -p "${confirm_msg}" reply
+    [[ "${reply}" == "${TARGET}" ]] || { echo "aborted."; exit 1; }
+fi
+
+# Re-read the partition table and wait for the kernel to publish the new
+# partition device nodes. A bare partprobe can race on slow media (USB) and
+# on loop devices, so retry partx/partprobe until the nodes appear.
+wait_for_partitions() {
+    local last="$1"
+    for _ in $(seq 1 15); do
+        partprobe "${TARGET}" 2>/dev/null || true
+        partx -u "${TARGET}" 2>/dev/null || true
+        udevadm settle 2>/dev/null || true
+        if [[ -b "${P_ESP}" && -b "${P_ROOT}" && -b "${last}" ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "partition nodes did not all appear after partitioning." >&2
+    return 1
+}
+
+if [[ "${MODE}" == "fresh" ]]; then
+    echo "[anglerfish-install] partitioning ${TARGET} (bios-boot + ESP + ${ROOT_SIZE} root + data)"
+    wipefs -a "${TARGET}"
+    sgdisk --zap-all "${TARGET}"
+    sgdisk -n1:0:+1M             -t1:ef02 -c1:"BIOS-boot"        "${TARGET}"
+    sgdisk -n2:0:+512M           -t2:ef00 -c2:"ESP"              "${TARGET}"
+    sgdisk -n3:0:"+${ROOT_SIZE}" -t3:8300 -c3:"anglerfish-root"  "${TARGET}"
+    sgdisk -n4:0:0               -t4:8300 -c4:"anglerfish-data"  "${TARGET}"
+    wait_for_partitions "${P_DATA}"
+
+    data_bytes="$(blockdev --getsize64 "${P_DATA}" 2>/dev/null || echo 0)"
+    if [[ "${data_bytes}" -lt 536870912 ]]; then
+        echo "data partition is only ${data_bytes} bytes; disk too small for a" >&2
+        echo "${ROOT_SIZE} root. Use a smaller --root-size or a larger disk." >&2
+        exit 1
+    fi
+
+    echo "[anglerfish-install] formatting (OS root + data)"
+    mkfs.vfat -F32 -n ANGLER-ESP "${P_ESP}"
+    mkfs.ext4 -F -L anglerfish-root "${P_ROOT}"
+    mkfs.ext4 -F -L anglerfish-data "${P_DATA}"
+else
+    echo "[anglerfish-install] reimaging OS (reformatting root + ESP, keeping data)"
+    wait_for_partitions "${P_DATA}"
+    mkfs.vfat -F32 -n ANGLER-ESP "${P_ESP}"
+    mkfs.ext4 -F -L anglerfish-root "${P_ROOT}"
+fi
+
+TGT="/target"
+mkdir -p "${TGT}"
+mount "${P_ROOT}" "${TGT}"
+mkdir -p "${TGT}/boot/efi"
+mount "${P_ESP}" "${TGT}/boot/efi"
+
+echo "[anglerfish-install] copying the live root filesystem (this takes a minute)"
+rsync -aHAXx \
+    --exclude=/proc/ --exclude=/sys/ --exclude=/dev/ --exclude=/run/ \
+    --exclude=/tmp/ --exclude=/mnt/ --exclude=/media/ --exclude=/target/ \
+    --exclude=/data/ \
+    --exclude=/lib/live/ --exclude=/run/live/ \
+    --exclude=/var/cache/apt/archives/ \
+    / "${TGT}/"
+
+# rsync excluded the pseudo-filesystem and scratch directories entirely, so
+# they do not exist on the target. Recreate them as empty mount points; the
+# kernel/systemd mount the real filesystems over them at boot, and the chroot
+# bind-mounts below need /target/proc etc. to exist.
+echo "[anglerfish-install] recreating mount points"
+mkdir -p "${TGT}/proc" "${TGT}/sys" "${TGT}/dev" "${TGT}/run" \
+         "${TGT}/mnt" "${TGT}/media" "${TGT}/tmp" \
+         "${TGT}/var/cache/apt/archives"
+chmod 1777 "${TGT}/tmp"
+
+# Lay the durable state onto the data partition and leave the canonical paths
+# as empty bind targets. State dir -> data subdir:
+#   /etc/anglerfish       -> /data/etc
+#   /var/lib/anglerfish   -> /data/lib
+#   /var/log/anglerfish   -> /data/log
+echo "[anglerfish-install] preparing the data partition"
+mkdir -p "${TGT}/data"
+mount "${P_DATA}" "${TGT}/data"
+for pair in etc:etc/anglerfish lib:var/lib/anglerfish log:var/log/anglerfish; do
+    sub="${pair%%:*}"
+    canon="${pair#*:}"
+    mkdir -p "${TGT}/data/${sub}"
+    if [[ "${MODE}" == "fresh" && -d "${TGT}/${canon}" ]]; then
+        # Move the live state (wizard config etc.) onto the data partition.
+        cp -aT "${TGT}/${canon}" "${TGT}/data/${sub}"
+    fi
+    # Clear the rsynced canonical dir and leave it as an empty bind target.
+    # In preserve mode /data/${sub} already holds the prior install's state;
+    # in fresh mode it now holds the copy made just above.
+    rm -rf "${TGT:?}/${canon}"
+    mkdir -p "${TGT}/${canon}"
+done
+
+echo "[anglerfish-install] writing fstab"
+root_uuid="$(blkid -s UUID -o value "${P_ROOT}")"
+esp_uuid="$(blkid -s UUID -o value "${P_ESP}")"
+data_uuid="$(blkid -s UUID -o value "${P_DATA}")"
+cat > "${TGT}/etc/fstab" <<FSTAB
+# Generated by anglerfish-install.
+UUID=${root_uuid}  /          ext4  errors=remount-ro  0 1
+UUID=${esp_uuid}   /boot/efi  vfat  umask=0077         0 2
+# Durable state on a separate partition so the OS can be reimaged without
+# losing intel. The canonical paths are bind mounts off /data.
+UUID=${data_uuid}  /data      ext4  defaults           0 2
+/data/etc  /etc/anglerfish      none  bind,x-systemd.requires-mounts-for=/data  0 0
+/data/lib  /var/lib/anglerfish  none  bind,x-systemd.requires-mounts-for=/data  0 0
+/data/log  /var/log/anglerfish  none  bind,x-systemd.requires-mounts-for=/data  0 0
+FSTAB
+
+echo "[anglerfish-install] converting to a normal-boot system + installing GRUB"
+for d in proc sys dev dev/pts run; do
+    mount --bind "/${d}" "${TGT}/${d}"
+done
+cat > "${TGT}/root/.anglerfish-chroot-install.sh" <<'CHROOT'
+#!/bin/sh
+set -eu
+disk="$1"
+export DEBIAN_FRONTEND=noninteractive
+# Drop the live-only machinery so the initramfs boots from the real root
+# instead of looking for live media.
+apt-get remove --purge -y \
+    live-boot live-boot-initramfs-tools live-config live-config-systemd \
+    >/dev/null 2>&1 || true
+# live-config regenerated the operator sshd host keys on every live boot;
+# with it removed, generate them once here so ssh.service starts on the
+# installed box. Doing it at install time gives each deployment unique keys
+# (no shared-host-key fingerprint tell across honeypots).
+ssh-keygen -A
+# Regenerate a normal initramfs for every installed kernel.
+update-initramfs -u -k all
+# GRUB for UEFI (removable path so it boots without an NVRAM entry) and for
+# legacy BIOS (core.img into the ef02 partition + MBR).
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --recheck
+grub-install --target=i386-pc --recheck "${disk}"
+update-grub
+CHROOT
+chroot "${TGT}" /bin/sh /root/.anglerfish-chroot-install.sh "${TARGET}"
+rm -f "${TGT}/root/.anglerfish-chroot-install.sh"
+
+echo "[anglerfish-install] syncing + unmounting"
+sync
+umount -R "${TGT}"
+
+echo
+if [[ "${MODE}" == "preserve" ]]; then
+    echo "[anglerfish-install] done (OS reimaged, data preserved). Reboot:"
+else
+    echo "[anglerfish-install] done. Remove the install media and reboot:"
+fi
+echo "    systemctl reboot"

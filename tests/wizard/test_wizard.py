@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from pydantic import HttpUrl
+from pydantic import HttpUrl, ValidationError
 
 from anglerfish.wizard import (
     NetworkConfig,
@@ -46,6 +46,14 @@ def _paths(tmp_path: Path) -> WizardPaths:
         hosts_path=tmp_path / "etc-hosts",
         ops_home=tmp_path / "ops-home",
     )
+
+
+def test_answers_reject_identical_bait_and_service_interface() -> None:
+    # The whole isolation model (attacker traffic on the bait NIC, operator
+    # SSH + dashboard on the service NIC, enforced by the rendered nftables
+    # iifname rules) collapses if both are the same NIC. Reject it up front.
+    with pytest.raises(ValidationError, match=r"must be different|same"):
+        _answers(service_interface="eth0")  # bait defaults to eth0 too
 
 
 # ---------------------------------------------------------------------------

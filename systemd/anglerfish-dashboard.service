@@ -1,7 +1,10 @@
 [Unit]
 Description=Anglerfish AI dashboard — operator UI + WebSocket stream
 Documentation=https://github.com/retr0verride/Anglerfish-AI
-After=network-online.target anglerfish-bridge.service
+# Fail closed on the firewall: the dashboard carries the operator session
+# secret + admin hash, so it must not bind if the nftables ruleset failed.
+After=network-online.target anglerfish-firewall.service anglerfish-bridge.service
+Requires=anglerfish-firewall.service
 Wants=network-online.target
 
 [Service]
@@ -49,6 +52,18 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
+# Pin the seccomp filter to the native ABI; a secondary x32/i386 ABI would
+# otherwise bypass the @system-service allowlist.
+SystemCallArchitectures=native
+# Only the socket families the service actually uses.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+RemoveIPC=yes
+# Resource ceilings: a flood cannot OOM / fd-exhaust the box. Conservative
+# defaults; raise per deployment.
+MemoryMax=1G
+TasksMax=512
+LimitNOFILE=8192
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 ReadWritePaths=/var/lib/anglerfish /var/log/anglerfish

@@ -4,8 +4,11 @@ Documentation=https://github.com/retr0verride/Anglerfish-AI
 # The lure forwards every command to the bridge HTTP API, so the
 # bridge must be ready before we bind the bait listener; the bridge
 # unit handles its own startup ordering relative to ollama.
-After=network-online.target anglerfish-bridge.service
-Requires=anglerfish-bridge.service
+# Fail closed: if the firewall ruleset fails to load, the lure must NOT
+# bind the bait NIC unprotected. Requires propagates a firewall-load
+# failure to this unit so the honeypot does not come up unfiltered.
+After=network-online.target anglerfish-firewall.service anglerfish-bridge.service
+Requires=anglerfish-firewall.service anglerfish-bridge.service
 Wants=network-online.target
 
 [Service]
@@ -50,6 +53,18 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
+# Pin the seccomp filter to the native ABI; a secondary x32/i386 ABI would
+# otherwise bypass the @system-service allowlist.
+SystemCallArchitectures=native
+# Only the socket families the service actually uses.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+RemoveIPC=yes
+# Resource ceilings: a connection flood cannot OOM / fd-exhaust the box.
+# Conservative defaults; raise per deployment.
+MemoryMax=1G
+TasksMax=512
+LimitNOFILE=8192
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 ReadWritePaths=/var/lib/anglerfish /var/log/anglerfish

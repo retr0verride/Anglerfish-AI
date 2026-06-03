@@ -8,8 +8,11 @@
 #     reachable on localhost:8420 (the dashboard).
 #   * Serial console multiplexed onto your tty so you can drive the
 #     first-boot wizard.
-#   * A persistent 20 GB qcow2 disk so the wizard's answers survive
-#     reboots.
+#   * A 20 GB qcow2 disk attached as the future persisted-state target.
+#     NOTE: the ISO currently boots boot=live with NO persistence, so
+#     nothing is written to this disk and the wizard re-runs on every
+#     reboot. The disk becomes meaningful only once live-build persistence
+#     or install-to-disk lands; until then it is attached but unused.
 #
 # Usage:
 #     ./iso/smoke.sh path/to/anglerfish-ai-<version>.iso [--memory 4G] [--cpus 4]

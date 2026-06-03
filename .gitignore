@@ -88,3 +88,6 @@ iso/binary/
 
 # Pre-commit
 .pre-commit-cache/
+
+# ISO build artifacts (./build.sh output)
+/output/

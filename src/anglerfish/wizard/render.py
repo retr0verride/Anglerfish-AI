@@ -135,10 +135,12 @@ def render_env(
         "# --- Audit log (Stage 4.2: writer + tailer share this path) --------------",
         # log_path is read by every AuditLog construction site (bridge,
         # lure, dashboard, CLI) AND by the Stage 4.2 AuditTailer that
-        # populates the session store. Relocate carefully: logrotate
-        # must continue to copytruncate this exact file, and the chattr
-        # +a invariant must be re-applied if it moves between
-        # filesystems.
+        # populates the session store. Relocate carefully: the shipped
+        # /etc/logrotate.d/anglerfish rotates this exact file via
+        # rename+create (clearing/re-applying chattr +a around the
+        # rotation, NOT copytruncate which cannot truncate an append-only
+        # file), and the +a invariant must be re-applied if it moves
+        # between filesystems.
         _line("# ANGLERFISH_AUDIT__LOG_PATH", "/var/log/anglerfish/audit.jsonl"),
         "",
         "# --- Geo enrichment (MaxMind GeoLite2) -----------------------------------",
@@ -262,9 +264,15 @@ table inet anglerfish {{
         oifname {bait} drop
 
         # Service egress: Ollama and the dashboard's own port. DNS+NTP
-        # outbound for system upkeep.
+        # outbound for system upkeep. HTTPS for the box's own upkeep -
+        # MaxMind geo-DB updates (download.maxmind.com) and, on
+        # --with-ollama builds, the on-host model pull (registry.ollama.ai).
+        # Without this the geo-update unit + timer are silently dropped and
+        # the dashboard shows empty geo data forever. The bait NIC gets no
+        # such allowance (it stays DNS-only above).
         oifname {service} tcp dport 11434 accept
         oifname {service} tcp dport {dashboard_port} accept
+        oifname {service} tcp dport 443 accept
         oifname {service} udp dport {{ 53, 123 }} accept
     }}
 }}
