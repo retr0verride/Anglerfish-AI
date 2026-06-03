@@ -61,6 +61,10 @@ echo "==> building builder image ${image}"
 docker build --pull -t "${image}" "${REPO}/iso"
 
 mkdir -p "${OUTPUT_DIR}"
+# Reproducibility (TODO-18): pin SOURCE_DATE_EPOCH to the HEAD commit time so
+# the build's mtimes are deterministic, and pass through an optional
+# snapshot.debian.org timestamp for a byte-stable package set.
+source_date_epoch="$(git -C "${REPO}" log -1 --format=%ct 2>/dev/null || echo 1704067200)"
 echo "==> building ISO (${ollama_flag}) inside the container"
 docker run --rm --privileged \
     -v "${REPO}:/work" \
@@ -69,6 +73,8 @@ docker run --rm --privileged \
     -e OUTPUT_DIR=/work/output \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
+    -e SOURCE_DATE_EPOCH="${source_date_epoch}" \
+    -e ANGLERFISH_DEBIAN_SNAPSHOT="${ANGLERFISH_DEBIAN_SNAPSHOT:-}" \
     "${image}" \
     iso/build.sh "${ollama_flag}" "${passthru[@]}"
 

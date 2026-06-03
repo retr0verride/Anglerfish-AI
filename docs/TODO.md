@@ -544,6 +544,22 @@ Fix sketch: set `SOURCE_DATE_EPOCH`, pin apt to a snapshot.debian.org
 timestamp, and make the squashfs deterministic (sorted entries, fixed
 mtimes). Verify two clean builds hash-match.
 
+Status (partially closed 2026-06-03): the foundations are in.
+`SOURCE_DATE_EPOCH` is set from the HEAD commit time (host `build.sh` ->
+container, fixed-epoch fallback) so mksquashfs mtimes are deterministic, and
+`ANGLERFISH_DEBIAN_SNAPSHOT=<timestamp>` switches every mirror to
+`snapshot.debian.org` (with `Acquire::Check-Valid-Until=false`) for a
+byte-stable package set. Snapshot pinning is opt-in so normal dev builds stay
+on the fast rolling mirror. Build-verified once on the default path (the
+`--without-ollama` container build still produces the ISO with
+SOURCE_DATE_EPOCH set).
+
+Remaining (not closed): true bit-for-bit reproducibility is unproven. it
+needs deterministic mksquashfs ordering, chasing the other nondeterminism
+sources (generated /etc files, initramfs, gzip), and the actual proof (set a
+snapshot timestamp, run two clean builds, diff the sha256). That verification
+loop was not run here.
+
 ## TODO-19: models-surface API cosmetic tweaks
 
 The cosmetic API / response-shape tweaks on the dashboard models surface

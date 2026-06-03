@@ -11,6 +11,24 @@ set -eu
 # --bootloaders syslinux,grub-efi makes a true BIOS+UEFI hybrid: syslinux
 # (isolinux) provides the BIOS El Torito boot, grub-efi the UEFI boot.
 # syslinux alone (the previous value) leaves EFI unset = BIOS-only.
+# Reproducibility (TODO-18). SOURCE_DATE_EPOCH (exported by iso/build.sh,
+# default the HEAD commit time) makes squashfs mtimes deterministic. Setting
+# ANGLERFISH_DEBIAN_SNAPSHOT to a snapshot.debian.org timestamp (e.g.
+# 20250601T000000Z) additionally pins every mirror to that snapshot so the
+# package set is byte-stable across builds. Unset (the default) uses the
+# rolling mirrors for fast dev builds.
+snapshot="${ANGLERFISH_DEBIAN_SNAPSHOT:-}"
+apt_opts=""
+if [ -n "${snapshot}" ]; then
+    mirror="http://snapshot.debian.org/archive/debian/${snapshot}/"
+    mirror_security="http://snapshot.debian.org/archive/debian-security/${snapshot}/"
+    # Snapshot Release files are past their Valid-Until; accept them.
+    apt_opts="-o Acquire::Check-Valid-Until=false"
+else
+    mirror="http://deb.debian.org/debian/"
+    mirror_security="http://security.debian.org/debian-security/"
+fi
+
 lb config noauto \
     --mode debian \
     --distribution bookworm \
@@ -23,10 +41,11 @@ lb config noauto \
     --memtest none \
     --apt-recommends false \
     --security true \
-    --mirror-bootstrap "http://deb.debian.org/debian/" \
-    --mirror-chroot "http://deb.debian.org/debian/" \
-    --mirror-chroot-security "http://security.debian.org/debian-security/" \
-    --mirror-binary "http://deb.debian.org/debian/" \
-    --mirror-binary-security "http://security.debian.org/debian-security/" \
+    --apt-options "--yes ${apt_opts}" \
+    --mirror-bootstrap "${mirror}" \
+    --mirror-chroot "${mirror}" \
+    --mirror-chroot-security "${mirror_security}" \
+    --mirror-binary "${mirror}" \
+    --mirror-binary-security "${mirror_security}" \
     --bootappend-live "boot=live components quiet splash" \
     "${@}"
