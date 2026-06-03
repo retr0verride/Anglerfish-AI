@@ -337,12 +337,19 @@ agree by construction; the fallback `uname -a` no longer emits the triple
 `x86_64`, and the fallback `id` now includes `27(sudo)` to match the lure,
 `/etc/group`, and the auth log. `tests/test_system_identity.py` guards drift.
 
-Remaining under TODO-10: persona-aware identity. The single source is the
-DEFAULT Debian box; personas that present a non-Debian OS (`dev-laptop` =
-Pop!\_OS, `gpu-rig` / `ad-joined-workstation` = jammy) still inherit the
-Debian kernel string and the prompt's "real Debian 12 server" framing, which
-contradicts their os-release overlay. The synthetic clock / uptime spread
-(`uptime` says 7 days in the fallback, ~14 in the fs-context hint) is
+Persona-aware identity (closed 2026-06-03): personas that present a non-Debian
+OS (`dev-laptop` = Pop!\_OS, `gpu-rig` / `ad-joined-workstation` = jammy)
+already overlay `/proc/version`, but the lure `uname` command and the prompt's
+facts still claimed Debian, so `uname -r` contradicted `cat /proc/version`.
+`system_identity.kernel_for()` now derives the kernel from the persona's
+`/proc/version` overlay and `distribution_for()` derives the distro from its
+`/etc/os-release` overlay; the lure `uname` and the prompt's Kernel +
+Distribution facts use them (the prompt intro is now "a real Linux server",
+not Debian). Default persona / no overlay still yields the Debian defaults.
+The bridge fallback `uname` (the rare Ollama-outage path, which has no persona
+handle) stays the Debian default. Covered by `tests/test_system_identity.py`.
+
+The synthetic clock / uptime spread that was also noted here was closed in
 TODO-11.
 
 ## TODO-11: native date / time / session commands

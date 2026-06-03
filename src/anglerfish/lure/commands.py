@@ -194,13 +194,17 @@ async def _hostname(session: LureSessionContext, _tokens: list[str]) -> Dispatch
 
 
 async def _uname(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    # Persona-aware: a persona that overlays /proc/version (e.g. an Ubuntu
+    # box) must report a matching uname, or `uname -r` contradicts
+    # `cat /proc/version` (TODO-10).
+    kernel = system_identity.kernel_for(session.persona_overlay.get("/proc/version"))
     if len(tokens) == 1:
         return DispatchResult(handled=True, text="Linux\n")
     flag = tokens[1]
     if flag == "-a":
-        return DispatchResult(handled=True, text=f"{system_identity.uname_a(session.hostname)}\n")
+        return DispatchResult(handled=True, text=f"{kernel.uname_a(session.hostname)}\n")
     if flag == "-r":
-        return DispatchResult(handled=True, text=f"{system_identity.KERNEL_RELEASE}\n")
+        return DispatchResult(handled=True, text=f"{kernel.release}\n")
     if flag == "-n":
         return DispatchResult(handled=True, text=f"{session.hostname}\n")
     if flag == "-s":
