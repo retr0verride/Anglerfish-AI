@@ -3,9 +3,11 @@ Description=Anglerfish AI bridge — LLM middleware for the native SSH lure
 Documentation=https://github.com/retr0verride/Anglerfish-AI
 # Fail closed on the firewall: do not start the bridge if the nftables
 # ruleset failed to load.
-After=network-online.target anglerfish-firewall.service ollama.service
+After=network-online.target anglerfish-firewall.service ollama.service anglerfish-model-pull.service
 Requires=anglerfish-firewall.service
-Wants=network-online.target
+# Soft-order after the first-boot model pull so the model is present before
+# the bridge serves; a pull failure does not block the bridge (it falls back).
+Wants=network-online.target anglerfish-model-pull.service
 
 [Service]
 Type=exec
@@ -29,6 +31,11 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
+# Hide the host's other-user processes and non-pid /proc surfaces from
+# a compromised service (full per-service-user isolation is TODO-17's
+# remaining piece; see docs/TODO.md).
+ProtectProc=invisible
+ProcSubset=pid
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

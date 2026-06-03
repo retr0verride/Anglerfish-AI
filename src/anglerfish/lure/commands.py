@@ -36,6 +36,7 @@ from anglerfish.lure.config import LureConfig
 from anglerfish.lure.fakefs import listdir, read
 from anglerfish.lure.garble import garble
 from anglerfish.lure.session import LureSessionContext
+from anglerfish.synthetic_clock import clock
 
 __all__ = [
     "DispatchResult",
@@ -193,13 +194,17 @@ async def _hostname(session: LureSessionContext, _tokens: list[str]) -> Dispatch
 
 
 async def _uname(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    # Persona-aware: a persona that overlays /proc/version (e.g. an Ubuntu
+    # box) must report a matching uname, or `uname -r` contradicts
+    # `cat /proc/version` (TODO-10).
+    kernel = system_identity.kernel_for(session.persona_overlay.get("/proc/version"))
     if len(tokens) == 1:
         return DispatchResult(handled=True, text="Linux\n")
     flag = tokens[1]
     if flag == "-a":
-        return DispatchResult(handled=True, text=f"{system_identity.uname_a(session.hostname)}\n")
+        return DispatchResult(handled=True, text=f"{kernel.uname_a(session.hostname)}\n")
     if flag == "-r":
-        return DispatchResult(handled=True, text=f"{system_identity.KERNEL_RELEASE}\n")
+        return DispatchResult(handled=True, text=f"{kernel.release}\n")
     if flag == "-n":
         return DispatchResult(handled=True, text=f"{session.hostname}\n")
     if flag == "-s":
@@ -208,6 +213,57 @@ async def _uname(session: LureSessionContext, tokens: list[str]) -> DispatchResu
         return DispatchResult(handled=True, text=f"{system_identity.MACHINE}\n")
     # Anything else (-o, -v, etc.) goes to the bridge.
     return DispatchResult(handled=False)
+
+
+async def _date(_session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    text = clock().render_date(tokens)
+    if text is None:
+        # Uncommon format string; let the bridge render it.
+        return DispatchResult(handled=False)
+    return DispatchResult(handled=True, text=f"{text}\n")
+
+
+async def _uptime(_session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    c = clock()
+    if len(tokens) == 1:
+        return DispatchResult(handled=True, text=f"{c.render_uptime()}\n")
+    if tokens[1] == "-p":
+        return DispatchResult(handled=True, text=f"{c.render_uptime_pretty()}\n")
+    if tokens[1] == "-s":
+        return DispatchResult(handled=True, text=f"{c.render_uptime_since()}\n")
+    return DispatchResult(handled=False)
+
+
+async def _timedatectl(_session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    # Bare status only; subcommands (set-time, set-ntp, ...) route to the
+    # bridge so the native handler never fakes a state change.
+    if len(tokens) > 1:
+        return DispatchResult(handled=False)
+    return DispatchResult(handled=True, text=f"{clock().render_timedatectl()}\n")
+
+
+async def _w(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    if len(tokens) > 1:
+        return DispatchResult(handled=False)
+    text = clock().render_w(
+        username=session.username,
+        source_ip=session.source_ip,
+        login_at=session.opened_at,
+    )
+    return DispatchResult(handled=True, text=f"{text}\n")
+
+
+async def _last(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
+    # Bare `last` only; flag variants (-f <file>, -n N, ...) route to the
+    # bridge rather than mis-render them.
+    if len(tokens) > 1:
+        return DispatchResult(handled=False)
+    text = clock().render_last(
+        username=session.username,
+        source_ip=session.source_ip,
+        login_at=session.opened_at,
+    )
+    return DispatchResult(handled=True, text=f"{text}\n")
 
 
 async def _echo(_session: LureSessionContext, tokens: list[str]) -> DispatchResult:
@@ -352,6 +408,11 @@ _HANDLERS: Final[dict[str, NativeHandler]] = {
     "pwd": _pwd,
     "hostname": _hostname,
     "uname": _uname,
+    "date": _date,
+    "uptime": _uptime,
+    "timedatectl": _timedatectl,
+    "w": _w,
+    "last": _last,
     "echo": _echo,
     "exit": _exit,
     "logout": _exit,  # alias

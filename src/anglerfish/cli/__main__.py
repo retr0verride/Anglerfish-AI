@@ -64,6 +64,16 @@ dashboard_app = typer.Typer(
     help="Dashboard service commands.",
     no_args_is_help=True,
 )
+audit_app = typer.Typer(
+    name="audit",
+    help="Audit log commands.",
+    no_args_is_help=True,
+)
+ollama_app = typer.Typer(
+    name="ollama",
+    help="Local Ollama model management.",
+    no_args_is_help=True,
+)
 app.add_typer(config_app)
 app.add_typer(bridge_app)
 app.add_typer(credentials_app)
@@ -71,6 +81,8 @@ app.add_typer(geo_app)
 app.add_typer(lure_app)
 app.add_typer(callback_app)
 app.add_typer(dashboard_app)
+app.add_typer(audit_app)
+app.add_typer(ollama_app)
 
 
 def _version_callback(value: bool) -> None:
@@ -514,6 +526,87 @@ def callback_serve(
         proxy_headers=True,
         log_level=settings.log_level.value.lower(),
     )
+
+
+@audit_app.command("ship")
+def audit_ship() -> None:  # pragma: no cover - exercised in integration
+    """Ship the append-only audit log off-box (TODO-12).
+
+    Tails ``audit.log_path`` and POSTs new records to the configured HTTPS
+    collector (``audit.shipper.url``). One shipper per box: the audit log is a
+    single file written by several services, so this runs as its own unit and
+    must not be started more than once. No-op (exit 0) when no collector URL
+    is configured.
+    """
+    import asyncio
+
+    from anglerfish.audit_shipper import AuditShipper
+
+    console = Console()
+    try:
+        settings = load_settings()
+    except ValidationError as exc:
+        console.print(Panel(str(exc), title="[red]Configuration error[/red]"))
+        raise typer.Exit(code=2) from exc
+
+    shipper = AuditShipper(settings.audit.shipper, log_path=settings.audit.log_path)
+    if not shipper.enabled:
+        console.print(
+            Panel(
+                "audit.shipper.url is unset; off-box shipping is disabled. "
+                "Set it (or ANGLERFISH_AUDIT__SHIPPER__URL) to an HTTPS "
+                "collector to enable.",
+                title="[yellow]Audit shipping disabled[/yellow]",
+            ),
+        )
+        return
+    asyncio.run(shipper.run_forever())
+
+
+@ollama_app.command("pull")
+def ollama_pull() -> None:  # pragma: no cover - exercised in integration
+    """Pull the configured Ollama models if missing (TODO-14).
+
+    Run on first boot by ``anglerfish-model-pull.service`` once the wizard
+    has captured the model tags. No-op (exit 0) when Ollama is a trusted
+    remote (operator-managed) or unreachable (not installed). Exits non-zero
+    only if a local pull genuinely fails, so the oneshot unit can retry.
+    """
+    import asyncio
+
+    from anglerfish.model_pull import ModelPuller, PullSummary
+
+    console = Console()
+    try:
+        settings = load_settings()
+    except ValidationError as exc:
+        console.print(Panel(str(exc), title="[red]Configuration error[/red]"))
+        raise typer.Exit(code=2) from exc
+
+    async def _run() -> PullSummary:
+        puller = ModelPuller(settings.ollama)
+        try:
+            return await puller.ensure_models()
+        finally:
+            await puller.aclose()
+
+    summary = asyncio.run(_run())
+    if summary.remote_skipped:
+        console.print("Ollama is a trusted remote; skipping local pull.")
+        return
+    if summary.unreachable:
+        console.print(
+            "Ollama is not reachable locally; skipping (install with "
+            "--with-ollama or pull manually)."
+        )
+        return
+    if summary.already_present:
+        console.print(f"Already present: {', '.join(summary.already_present)}")
+    if summary.pulled:
+        console.print(f"Pulled: {', '.join(summary.pulled)}")
+    if summary.failed:
+        console.print(f"[red]Failed: {', '.join(summary.failed)}[/red]")
+        raise typer.Exit(code=1)
 
 
 @dashboard_app.command("serve")

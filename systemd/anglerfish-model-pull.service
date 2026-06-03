@@ -1,22 +1,28 @@
 [Unit]
-Description=Anglerfish AI — refresh MaxMind GeoLite2 databases
+Description=Anglerfish AI first-boot Ollama model pull (TODO-14)
 Documentation=https://github.com/retr0verride/Anglerfish-AI
-After=network-online.target
+After=network-online.target ollama.service anglerfish-firstboot.service
 Wants=network-online.target
+# Only meaningful once the wizard has captured the model tags. A no-op
+# (exit 0) when Ollama is a trusted remote or not installed.
 ConditionPathExists=/etc/anglerfish/anglerfish.env
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 User=anglerfish
 Group=anglerfish
 EnvironmentFile=/etc/anglerfish/anglerfish.env
-ExecStart=/opt/anglerfish/venv/bin/anglerfish geo update
+ExecStart=/opt/anglerfish/venv/bin/anglerfish ollama pull
+# Model pulls are large and unbounded; the puller retries internally, so do
+# not impose a start timeout.
+TimeoutStartSec=infinity
 
-# Hardening — this unit downloads files and writes them to the geo
-# database directory. It needs network access and write access to one
-# directory, nothing else.
+# Hardening. The puller only talks to the local Ollama API on loopback; the
+# Ollama daemon performs the registry download.
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelTunables=yes
@@ -37,11 +43,15 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# Pin the seccomp filter to the native ABI (the @system-service allowlist
-# is otherwise ABI-bypassable). The fetcher only needs IP sockets.
 SystemCallArchitectures=native
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+RemoveIPC=yes
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=4096
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/anglerfish/geo /var/log/anglerfish
-PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

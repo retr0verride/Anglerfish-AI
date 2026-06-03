@@ -114,6 +114,13 @@ echo "[anglerfish-iso] on-host Ollama: ${WANT_OLLAMA} (1=install, 0=trusted-remo
 # The 0060 chroot hook reads ANGLERFISH_INSTALL_OLLAMA from the build env.
 export ANGLERFISH_INSTALL_OLLAMA="${WANT_OLLAMA}"
 
+# Reproducibility (TODO-18): deterministic mtimes for mksquashfs. The host
+# passes the HEAD commit time; fall back to a fixed epoch (2024-01-01) when
+# the build runs without it. ANGLERFISH_DEBIAN_SNAPSHOT (if set) is read by
+# auto/config to pin the mirrors.
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1704067200}"
+echo "[anglerfish-iso] SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} snapshot=${ANGLERFISH_DEBIAN_SNAPSHOT:-<none>}"
+
 lb config
 lb build
 

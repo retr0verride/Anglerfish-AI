@@ -1,0 +1,60 @@
+[Unit]
+Description=Anglerfish AI audit-log off-box shipper (TODO-12)
+Documentation=https://github.com/retr0verride/Anglerfish-AI
+# Ship after the firewall is up so egress goes through the intended ruleset.
+# Not Requires=: a shipping outage is non-critical and must not block boot.
+After=network-online.target anglerfish-firewall.service
+Wants=network-online.target anglerfish-firewall.service
+
+[Service]
+Type=exec
+User=anglerfish
+Group=anglerfish
+EnvironmentFile=/etc/anglerfish/anglerfish.env
+ExecStart=/opt/anglerfish/venv/bin/anglerfish audit ship
+# No-op exit 0 when no collector URL is configured (default-off); on-failure
+# restart keeps it from looping in that case.
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=10s
+
+# Hardening. The shipper reads the audit log and makes outbound HTTPS only.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Hide the host's other-user processes and non-pid /proc surfaces from
+# a compromised service (full per-service-user isolation is TODO-17's
+# remaining piece; see docs/TODO.md).
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Outbound IP plus AF_UNIX for local name resolution.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+RemoveIPC=yes
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=4096
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Writes only the shipping offset under /var/lib; the audit log under
+# /var/log is read-only to it.
+ReadWritePaths=/var/lib/anglerfish
+
+[Install]
+WantedBy=multi-user.target

@@ -21,6 +21,7 @@ from anglerfish.config.models import BridgeConfig
 from anglerfish.lure.commands import LatencyJitter, NativeCommands
 from anglerfish.lure.fakefs import read
 from anglerfish.lure.session import LureSessionContext
+from anglerfish.persona.schema import Persona
 
 # Stale strings that must never reappear once the surfaces are single-sourced.
 _OLD_RELEASE = "6.1.0-18-amd64"
@@ -122,3 +123,66 @@ def test_no_consumer_carries_the_stale_kernel_strings() -> None:
         text = path.read_text(encoding="utf-8")
         assert _OLD_RELEASE not in text, f"{path.name} still hard-codes {_OLD_RELEASE}"
         assert _OLD_BUILD not in text, f"{path.name} still hard-codes {_OLD_BUILD}"
+
+
+# -- persona-aware kernel (TODO-10 remainder) -------------------------------
+
+_UBUNTU_PROC = (
+    "Linux version 6.5.0-35-generic (buildd@lcy02-amd64-005) "
+    "(x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0) "
+    "#35-Ubuntu SMP PREEMPT_DYNAMIC Fri May 17 16:01:21 UTC 2026"
+)
+_UBUNTU_OSREL = 'PRETTY_NAME="Ubuntu 22.04.4 LTS"\nNAME="Ubuntu"\nID=ubuntu\n'
+
+
+def test_kernel_for_default_when_no_overlay() -> None:
+    assert system_identity.kernel_for(None).release == system_identity.KERNEL_RELEASE
+    assert system_identity.kernel_for("garbage line").release == system_identity.KERNEL_RELEASE
+
+
+def test_kernel_for_parses_persona_proc_version() -> None:
+    kernel = system_identity.kernel_for(_UBUNTU_PROC)
+    assert kernel.release == "6.5.0-35-generic"
+    assert kernel.build.startswith("#35-Ubuntu")
+    assert kernel.uname_a("gpu-rig-04") == (
+        "Linux gpu-rig-04 6.5.0-35-generic #35-Ubuntu SMP PREEMPT_DYNAMIC "
+        "Fri May 17 16:01:21 UTC 2026 x86_64 GNU/Linux"
+    )
+
+
+def test_distribution_for() -> None:
+    assert system_identity.distribution_for(None) == system_identity.DISTRIBUTION
+    assert system_identity.distribution_for(_UBUNTU_OSREL) == "Ubuntu 22.04.4 LTS"
+
+
+async def test_lure_uname_matches_persona_proc_version() -> None:
+    session = LureSessionContext(
+        uuid4(),
+        source_ip="203.0.113.7",
+        username="ml",
+        hostname="gpu-rig-04",
+        cwd="/home/ml",
+        persona_overlay={"/proc/version": _UBUNTU_PROC},
+    )
+    cmds = _commands()
+    assert (await cmds.dispatch(session, "uname -r")).text.strip() == "6.5.0-35-generic"
+    a = await cmds.dispatch(session, "uname -a")
+    assert "6.5.0-35-generic" in a.text
+    assert system_identity.KERNEL_RELEASE not in a.text  # not the Debian default
+
+
+def test_prompt_facts_follow_a_non_debian_persona() -> None:
+    persona = Persona(
+        name="gpu-rig",
+        description="ML workstation",
+        hostname="gpu-rig-04",
+        username="ml",
+        cwd="/home/ml",
+        prompt_block="Dual-GPU ML workstation running Ubuntu.",
+        fakefs_overlay={"/proc/version": _UBUNTU_PROC, "/etc/os-release": _UBUNTU_OSREL},
+    )
+    prompt = build_system_prompt(BridgeConfig(), cwd="/home/ml", persona=persona)
+    assert "- Kernel: 6.5.0-35-generic" in prompt
+    assert "- Distribution: Ubuntu 22.04.4 LTS" in prompt
+    assert "Debian 12 server" not in prompt
+    assert system_identity.KERNEL_RELEASE not in prompt

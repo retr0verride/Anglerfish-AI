@@ -24,6 +24,7 @@ from typing import Final, Literal
 
 from anglerfish import system_identity
 from anglerfish.lure.session import LureSessionContext
+from anglerfish.synthetic_clock import clock
 
 __all__ = [
     "FakeEntry",
@@ -614,6 +615,19 @@ def _resolve_user_path(path: str, *, user: str) -> str:
     return path.replace("{user}", user)
 
 
+def _dynamic_proc_content(path: str) -> str | None:
+    """Clock-driven content for the pseudo-files that must not be frozen.
+
+    Returns ``None`` for everything else so the caller falls through to the
+    static table.
+    """
+    if path == "/proc/uptime":
+        return clock().proc_uptime()
+    if path == "/proc/loadavg":
+        return clock().proc_loadavg()
+    return None
+
+
 def read(path: str, session: LureSessionContext) -> ReadResult:
     """Return the contents of ``path`` from the static filesystem.
 
@@ -639,6 +653,14 @@ def read(path: str, session: LureSessionContext) -> ReadResult:
 
     if path in _PERMISSION_DENIED:
         return ReadResult(status="permission_denied")
+
+    # Clock-driven pseudo-files. /proc/uptime advances with the synthetic
+    # clock instead of being frozen (a frozen uptime read twice is a tell),
+    # and /proc/loadavg shares the single load-average source with the
+    # `uptime` and `w` commands. The persona overlay above still wins.
+    dynamic = _dynamic_proc_content(path)
+    if dynamic is not None:
+        return ReadResult(status="content", content=dynamic)
 
     # Template paths keyed under "/home/{user}/..." live in the
     # _FILES dict with the literal placeholder. Look up both raw

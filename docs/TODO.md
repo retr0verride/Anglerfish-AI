@@ -337,12 +337,19 @@ agree by construction; the fallback `uname -a` no longer emits the triple
 `x86_64`, and the fallback `id` now includes `27(sudo)` to match the lure,
 `/etc/group`, and the auth log. `tests/test_system_identity.py` guards drift.
 
-Remaining under TODO-10: persona-aware identity. The single source is the
-DEFAULT Debian box; personas that present a non-Debian OS (`dev-laptop` =
-Pop!\_OS, `gpu-rig` / `ad-joined-workstation` = jammy) still inherit the
-Debian kernel string and the prompt's "real Debian 12 server" framing, which
-contradicts their os-release overlay. The synthetic clock / uptime spread
-(`uptime` says 7 days in the fallback, ~14 in the fs-context hint) is
+Persona-aware identity (closed 2026-06-03): personas that present a non-Debian
+OS (`dev-laptop` = Pop!\_OS, `gpu-rig` / `ad-joined-workstation` = jammy)
+already overlay `/proc/version`, but the lure `uname` command and the prompt's
+facts still claimed Debian, so `uname -r` contradicted `cat /proc/version`.
+`system_identity.kernel_for()` now derives the kernel from the persona's
+`/proc/version` overlay and `distribution_for()` derives the distro from its
+`/etc/os-release` overlay; the lure `uname` and the prompt's Kernel +
+Distribution facts use them (the prompt intro is now "a real Linux server",
+not Debian). Default persona / no overlay still yields the Debian defaults.
+The bridge fallback `uname` (the rare Ollama-outage path, which has no persona
+handle) stays the Debian default. Covered by `tests/test_system_identity.py`.
+
+The synthetic clock / uptime spread that was also noted here was closed in
 TODO-11.
 
 ## TODO-11: native date / time / session commands
@@ -356,6 +363,25 @@ Fix sketch: implement them as deterministic synthetic commands driven by a
 per-session synthetic clock and a synthetic wtmp/utmp, consistent with the
 boot time and uptime the persona claims.
 
+Status (closed 2026-06-03): `anglerfish/synthetic_clock.py` is the single
+source. A `SyntheticClock` anchors a fixed boot time (~14.3d before the
+process started, matching the legacy `/proc/uptime` and the forgotten-box
+persona) and reads the wall clock for "now", so time advances like a real
+host. Native handlers landed for `date` (bare, `-u`, `+%s`), `uptime`
+(bare, `-p`, `-s`), `timedatectl`, `w`, and `last`; `/proc/uptime` and
+`/proc/loadavg` are now clock-driven (uptime advances instead of being
+frozen). The single source fixed three contradictions found on the way: the
+bridge fallback `uptime` claimed 7 days against `/proc/uptime`'s ~14, the
+fallback `uname -a` (TODO-10) and uptime carried a load average that
+disagreed with `/proc/loadavg`, and the legacy `/proc/uptime` idle/uptime
+ratio implied 8 CPUs against the 4-stanza cpuinfo. The `last` reboot line
+renders the same kernel as `uname` (TODO-10). Covered by
+`tests/test_synthetic_clock.py`.
+
+Out of scope (low value): arbitrary `date +FORMAT` strings still route to
+the bridge; the static fakefs log timestamps do not advance (acceptable for
+the forgotten-box persona, where recent activity is sparse by design).
+
 ## TODO-12: off-box audit-log shipping
 
 `/var/log/anglerfish/audit.jsonl` is the only tamper-evidence surface. An
@@ -367,15 +393,56 @@ streams audit records off-box append-only, with backpressure and a
 documented trust model. The on-box log stays the live surface; off-box is
 the durable copy.
 
-## TODO-13: in-memory counters reset on reboot
+Status (closed 2026-06-03): HTTPS transport chosen (reuses the service-NIC
+443 egress the firewall already permits, mirrors the existing
+`alert_webhook` pattern, ingests into any HTTPS collector). `AuditShipper`
+(`anglerfish/audit_shipper.py`) tails `audit.log_path` from a byte offset
+persisted under `/var/lib/anglerfish`, POSTs batches as
+`application/x-ndjson` (optional `Authorization: Bearer`), and advances the
+offset only after the collector acks. delivery is at-least-once, a collector
+outage backs up against the durable on-disk log rather than dropping. The
+writer is untouched, so the fsync-per-record tamper-evidence contract holds.
+Runs as `anglerfish audit ship` under `anglerfish-audit-shipper.service`
+(one per box); config is `audit.shipper.*`, default-off (no `url` = no-op).
+Covered by `tests/test_audit_shipper.py` (8) + `tests/cli/test_audit_
+subcommand.py` (3).
 
-The per-IP rate limiter and per-session budgets live in memory. A reboot
-(or the now-supported install-to-disk) resets them, so an attacker can
-clear throttling by forcing a restart, and longitudinal per-IP counts
-reset.
+Bounded tradeoff: on `logrotate`, the unshipped tail of the rotated file
+(<= one `flush_interval_s`) is not chased into `audit.jsonl.1`; it stays on
+disk. Backpressure on a wedged collector is the on-disk log itself (the
+offset stops advancing), not an in-memory queue, so nothing is lost while
+the collector is down.
 
-Fix sketch: persist the limiter and budget state to the sessions DB (now on
-the durable data partition) with a periodic flush and a reload on start.
+## TODO-13: in-memory counters reset on reboot (overstated, mostly works as designed)
+
+Reassessed on inspection (2026-06-03). The premise (an attacker clears
+throttling by forcing a restart, and longitudinal counts are lost) does not
+hold; the transient state SHOULD reset and the durable intel already
+persists.
+
+- The lure never executes attacker input, so an attacker has no primitive to
+  reboot the box. The reset only happens on operator restarts / crashes.
+- `_PerIPLimiter` (`lure/server.py`) holds only `_concurrent[ip]` (a count of
+  LIVE TCP connections) and `_recent[ip]` (a 60-second rpm window). On
+  restart every connection dies, so the true concurrency is 0: resetting is
+  correct, and persisting it would wrongly block reconnects. The rpm window
+  is 60s, shorter than any restart, so persisting it is pointless.
+- Per-session budgets (`_budgets`, `_wasted_ms`, etc. in `bridge/service.py`)
+  are keyed by live session UUID; the session dies on restart, so a fresh
+  budget for a fresh session is correct.
+- The threat scorer (`threat/scorer.py`) is a pure function with no per-IP
+  memory. There is no ban / denylist anywhere (a honeypot wants repeat
+  engagement). Durable per-IP intel (sessions, turns, threats, intents, all
+  keyed by `source_ip`) is already written to SQLite and survives restart.
+
+One genuine but low-severity edge remains: if the BRIDGE restarts while the
+LURE keeps a session alive, the bridge no longer recognises that session and
+hands it a fresh token budget mid-stream. With a local LLM there is no API
+cost, so the budget bounds compute monopolisation, not money, and the
+attacker cannot induce the bridge restart on demand. Persisting per-session
+budgets to disk and rematching them to still-live lure sessions across a
+bridge restart is disproportionate to that bound. Left as-is; revisit only
+if budgets ever gate a metered/paid backend.
 
 ## TODO-14: --with-ollama model-pull orchestration
 
@@ -388,6 +455,20 @@ Fix sketch: either pre-pull the configured model into the image at build
 time (size cost) or a first-boot oneshot that pulls it with progress and
 retry. The wizard already captures the model name.
 
+Status (closed 2026-06-03): first-boot pull chosen. `ModelPuller`
+(`anglerfish/model_pull.py`) pulls the three configured tags (`fast_model`,
+`deep_model`, `embed_model`) via the Ollama HTTP API, skipping any already
+present (idempotent) and retrying (the first boot races the network).
+`anglerfish ollama pull` runs it from `anglerfish-model-pull.service`
+(oneshot, after the wizard + ollama.service); the bridge soft-orders after
+it so the model is present before serving (a pull failure still lets the
+bridge fall back). It only pulls when Ollama is local: a `trusted_remote_host`
+endpoint is operator-managed (skipped), and an unreachable local API
+(no `--with-ollama`) is a clean no-op. Covered by
+`tests/test_model_pull.py` (7) + `tests/cli/test_ollama_subcommand.py` (2).
+Not runtime-tested here (a real pull downloads multi-GB models; the
+operator's Ollama lane).
+
 ## TODO-15: curl|sh Ollama install is unpinned
 
 The Ollama install hook uses the upstream `curl | sh` installer with no
@@ -396,14 +477,38 @@ version pin or checksum, a supply-chain and reproducibility gap.
 Fix sketch: pin to a specific Ollama release (a versioned `.deb` or a
 checksum-verified tarball from a pinned URL) and drop `curl | sh`.
 
-## TODO-16: dashboard WebSocket has no Origin allow-list
+Status (partially closed 2026-06-03): the hook now pins `OLLAMA_VERSION`
+(0.30.3), fetches that version's `install.sh` from the versioned GitHub
+release URL to a file (no blind `curl | sh`), and runs it with
+`OLLAMA_VERSION` set so the binary version matches. The build is now
+reproducible instead of tracking "latest". An optional build-time
+`OLLAMA_INSTALL_SHA256` hard-pins the installer script (mismatch aborts).
 
-The dashboard WebSocket does not check `Origin` on upgrade. Safe while
-bound to localhost, but an operator who exposes it on a management NIC is
-open to cross-site WebSocket hijacking.
+Remaining: the upstream installer does not checksum-verify the binary it
+downloads (confirmed by reading v0.30.3 `scripts/install.sh`), so the
+binary's integrity still rests on HTTPS to ollama.com. A full binary pin
+means bypassing the upstream installer (download `ollama-linux-amd64.tar.zst`
++ verify an operator-supplied sha256 + extract + write the user/systemd
+unit ourselves). Deferred: it needs a checksum verified on a trusted host
+(the operator's Ollama lane) and is a larger rewrite for an opt-in path.
+Not runtime-tested here (a `--with-ollama` build pulls ~1.4 GB).
 
-Fix sketch: a configurable allowed-origins list checked at the WS upgrade,
-defaulting to localhost-only, documented in the runbook.
+## TODO-16: dashboard WebSocket has no Origin allow-list (stale finding, already implemented)
+
+Resolved on inspection (2026-06-03): the defence already exists. The
+2026-06-03 audit finding was stale. `dashboard/websocket.py` `_check_origin`
+rejects any `/ws/events` upgrade whose `Origin` header is not in
+`_allowed_origins` (the dashboard's own `http(s)://host:port` plus the
+configurable `DashboardConfig.allowed_origins`, default empty = own origin
+only), enforced before `accept()` with a dedicated 4403 close code; a
+missing `Origin` is also rejected. An auth-cookie check follows (skipped in
+open mode), and the origin check runs before it.
+
+This shipped in the earlier dashboard audit (`b563cef`), not after. Covered
+by `tests/dashboard/test_websocket_security.py` (8 cases: missing/unknown
+origin rejected, default/custom origin accepted, locked-mode auth
+accept/reject, logout invalidation, origin-before-auth ordering). No code
+change required.
 
 ## TODO-17: ProtectProc + per-service user isolation
 
@@ -415,6 +520,21 @@ Fix sketch: dedicated users (or `DynamicUser`) per service plus
 `ProtectProc=invisible` and `ProcSubset=pid` in the unit hardening,
 re-verifying the ReadWritePaths still line up.
 
+Status (partially closed 2026-06-03): `ProtectProc=invisible` and
+`ProcSubset=pid` added to all six long-running units (bridge, lure,
+dashboard, audit-shipper, model-pull, geo-update). Safe: nothing in the app
+reads the host `/proc` (verified. the lure only SERVES synthetic /proc). This
+hides the host's other-user (root/system) processes and the non-pid /proc
+surfaces from a compromised service, denying host recon.
+
+Remaining: the services still share `User=anglerfish`, so `ProtectProc` does
+not hide them from EACH OTHER (same UID). Full per-service-user isolation
+needs dedicated UIDs sharing a common `anglerfish` group plus group-writable
+shared state (`/var/lib/anglerfish` sessions DB + lure-keys, the append-only
+`/var/log/anglerfish` audit log). That is a perm-model refactor that must be
+boot-tested on the appliance to avoid breaking the shared writers, so it is
+deferred rather than shipped unverified.
+
 ## TODO-18: bit-for-bit reproducible ISO
 
 The build is pinned (container digest, dated bookworm) but not
@@ -424,8 +544,39 @@ Fix sketch: set `SOURCE_DATE_EPOCH`, pin apt to a snapshot.debian.org
 timestamp, and make the squashfs deterministic (sorted entries, fixed
 mtimes). Verify two clean builds hash-match.
 
+Status (partially closed 2026-06-03): the foundations are in.
+`SOURCE_DATE_EPOCH` is set from the HEAD commit time (host `build.sh` ->
+container, fixed-epoch fallback) so mksquashfs mtimes are deterministic, and
+`ANGLERFISH_DEBIAN_SNAPSHOT=<timestamp>` switches every mirror to
+`snapshot.debian.org` (with `Acquire::Check-Valid-Until=false`) for a
+byte-stable package set. Snapshot pinning is opt-in so normal dev builds stay
+on the fast rolling mirror. Build-verified once on the default path (the
+`--without-ollama` container build still produces the ISO with
+SOURCE_DATE_EPOCH set).
+
+Remaining (not closed): true bit-for-bit reproducibility is unproven. it
+needs deterministic mksquashfs ordering, chasing the other nondeterminism
+sources (generated /etc files, initramfs, gzip), and the actual proof (set a
+snapshot timestamp, run two clean builds, diff the sha256). That verification
+loop was not run here.
+
 ## TODO-19: models-surface API cosmetic tweaks
 
 The cosmetic API / response-shape tweaks on the dashboard models surface
 deferred from the 2026-06-01 code review (bucket 4, non-behavioural). See
 `docs/CODE_REVIEW_2026-06-01.md` for the specific items.
+
+Status (2026-06-03): triaged the bucket-4 items and applied the clean one.
+`HoneytokensConfig` and `CounterDeceptionConfig` raised their cross-field
+checks from `model_post_init` instead of the `@model_validator(mode="after")`
+idiom every other config uses; converted both (pure idiom consistency, both
+already produce a `ValidationError`, existing negative tests still pass). The
+rest are left as-is, deliberately:
+
+- `config/__init__.__all__` consistency was already closed (`a2134d6`).
+- `NarratorConfig.model_role: Literal["fast","deep"]` is correct, not a bug:
+  reusing `LLMRole` would wrongly admit `embed`, which the narrator cannot
+  use. Keep the restriction.
+- The `models/__init__` facade incompleteness and the `source_ip`/`ip`
+  field-constraint divergence are low-value packaging cosmetics with no
+  behavioural impact; catalogued, not worth the churn.
