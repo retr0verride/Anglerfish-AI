@@ -386,6 +386,26 @@ streams audit records off-box append-only, with backpressure and a
 documented trust model. The on-box log stays the live surface; off-box is
 the durable copy.
 
+Status (closed 2026-06-03): HTTPS transport chosen (reuses the service-NIC
+443 egress the firewall already permits, mirrors the existing
+`alert_webhook` pattern, ingests into any HTTPS collector). `AuditShipper`
+(`anglerfish/audit_shipper.py`) tails `audit.log_path` from a byte offset
+persisted under `/var/lib/anglerfish`, POSTs batches as
+`application/x-ndjson` (optional `Authorization: Bearer`), and advances the
+offset only after the collector acks. delivery is at-least-once, a collector
+outage backs up against the durable on-disk log rather than dropping. The
+writer is untouched, so the fsync-per-record tamper-evidence contract holds.
+Runs as `anglerfish audit ship` under `anglerfish-audit-shipper.service`
+(one per box); config is `audit.shipper.*`, default-off (no `url` = no-op).
+Covered by `tests/test_audit_shipper.py` (8) + `tests/cli/test_audit_
+subcommand.py` (3).
+
+Bounded tradeoff: on `logrotate`, the unshipped tail of the rotated file
+(<= one `flush_interval_s`) is not chased into `audit.jsonl.1`; it stays on
+disk. Backpressure on a wedged collector is the on-disk log itself (the
+offset stops advancing), not an in-memory queue, so nothing is lost while
+the collector is down.
+
 ## TODO-13: in-memory counters reset on reboot (overstated, mostly works as designed)
 
 Reassessed on inspection (2026-06-03). The premise (an attacker clears

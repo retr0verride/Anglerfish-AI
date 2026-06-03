@@ -26,6 +26,7 @@ All commands assume:
 | `anglerfish-bridge.service`       | The LLM bridge HTTP API + orchestrator.                   |
 | `anglerfish-lure.service`         | Native asyncssh SSH honeypot bound to the bait NIC.       |
 | `anglerfish-dashboard.service`    | FastAPI dashboard + WebSocket stream.                     |
+| `anglerfish-audit-shipper.service` | Ships the audit log off-box (default-off; set `audit.shipper.url`). |
 | `anglerfish-geo-update.service`   | One-shot MaxMind GeoLite2 fetch.                          |
 | `anglerfish-geo-update.timer`     | Weekly trigger for the geo-update service.                |
 

@@ -14,6 +14,7 @@ bridge and dashboard read configuration exclusively from
 | `anglerfish-bridge.service`       | long     | Bridge HTTP API (loopback) consumed by the native lure   |
 | `anglerfish-lure.service`         | long     | Native asyncssh SSH honeypot bound to the bait NIC       |
 | `anglerfish-dashboard.service`    | long     | FastAPI/WebSocket operator UI                            |
+| `anglerfish-audit-shipper.service` | long    | Stream the audit log off-box (default-off; needs `audit.shipper.url`) |
 
 ## Install
 

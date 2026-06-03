@@ -16,6 +16,7 @@ UNIT_SRC=/opt/anglerfish/src/systemd
 UNITS="anglerfish-bridge.service anglerfish-dashboard.service \
        anglerfish-lure.service \
        anglerfish-firstboot.service anglerfish-firewall.service \
+       anglerfish-audit-shipper.service \
        anglerfish-geo-update.service anglerfish-geo-update.timer"
 
 for unit in ${UNITS}; do
@@ -40,6 +41,9 @@ systemctl enable anglerfish-firstboot.service
 systemctl enable anglerfish-bridge.service
 systemctl enable anglerfish-dashboard.service
 systemctl enable anglerfish-lure.service
+# Default-off: no-ops (exit 0) until audit.shipper.url is configured, then a
+# restart starts streaming the audit log off-box.
+systemctl enable anglerfish-audit-shipper.service
 systemctl enable anglerfish-geo-update.timer
 
 # First-boot wizard owns tty1 until it completes (it unmasks getty in

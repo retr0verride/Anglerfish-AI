@@ -973,6 +973,43 @@ class CredentialsConfig(BaseModel):
         return v
 
 
+class AuditShipperConfig(BaseModel):
+    """Off-box shipping of the append-only audit log (TODO-12).
+
+    The on-box ``audit.jsonl`` is the only tamper-evidence surface: an
+    attacker who roots the box can alter it before anyone reads it. The
+    shipper tails the log from a persisted byte offset and POSTs new records
+    (as ``application/x-ndjson``) to an operator-run HTTPS collector, so a
+    durable copy lands off-box as events happen. The offset advances only
+    after the collector acks, so a collector outage backs up against the
+    durable on-disk log rather than dropping records (at-least-once).
+
+    Default-off: leave ``url`` unset and nothing ships. Shipping egresses the
+    service NIC over 443, which the wizard firewall already permits.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    url: HttpUrl | None = Field(
+        default=None,
+        description=(
+            "HTTPS endpoint that receives batched audit records as "
+            "application/x-ndjson. Unset disables shipping."
+        ),
+    )
+    token: SecretStr | None = Field(
+        default=None,
+        description="Sent as 'Authorization: Bearer <token>' when set.",
+    )
+    batch_max_records: int = Field(default=200, ge=1, le=10_000)
+    flush_interval_s: float = Field(default=5.0, gt=0.0, le=300.0)
+    timeout_s: float = Field(default=10.0, gt=0.0, le=120.0)
+    offset_path: Path = Field(
+        default=Path("/var/lib/anglerfish/audit-ship.offset"),
+        description="Where the last-shipped byte offset is persisted.",
+    )
+
+
 class AuditConfig(BaseModel):
     """Append-only audit log path.
 
@@ -986,6 +1023,7 @@ class AuditConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     log_path: Path = Field(default=Path("/var/log/anglerfish/audit.jsonl"))
+    shipper: AuditShipperConfig = Field(default_factory=AuditShipperConfig)
 
 
 class SessionStoreConfig(BaseModel):
