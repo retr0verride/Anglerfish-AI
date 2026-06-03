@@ -1,7 +1,10 @@
 [Unit]
 Description=Anglerfish AI bridge — LLM middleware for the native SSH lure
 Documentation=https://github.com/retr0verride/Anglerfish-AI
-After=network-online.target ollama.service
+# Fail closed on the firewall: do not start the bridge if the nftables
+# ruleset failed to load.
+After=network-online.target anglerfish-firewall.service ollama.service
+Requires=anglerfish-firewall.service
 Wants=network-online.target
 
 [Service]

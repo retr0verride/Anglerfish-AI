@@ -1,7 +1,10 @@
 [Unit]
 Description=Anglerfish AI dashboard — operator UI + WebSocket stream
 Documentation=https://github.com/retr0verride/Anglerfish-AI
-After=network-online.target anglerfish-bridge.service
+# Fail closed on the firewall: the dashboard carries the operator session
+# secret + admin hash, so it must not bind if the nftables ruleset failed.
+After=network-online.target anglerfish-firewall.service anglerfish-bridge.service
+Requires=anglerfish-firewall.service
 Wants=network-online.target
 
 [Service]
