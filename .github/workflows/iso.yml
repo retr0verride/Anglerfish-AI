@@ -9,6 +9,16 @@ on:
         description: "Bundle Ollama in the ISO (adds ~5 GB)"
         type: boolean
         default: false
+  # Build-only gate on PRs that touch the ISO recipe / units / wizard, so a
+  # build break is caught at review time instead of at the next tag. Signing
+  # + release are skipped on PRs (see the if: guards below).
+  pull_request:
+    paths:
+      - "iso/**"
+      - "systemd/**"
+      - "src/anglerfish/wizard/**"
+      - "pyproject.toml"
+      - ".github/workflows/iso.yml"
 
 permissions:
   contents: write   # for Release uploads
@@ -40,6 +50,7 @@ jobs:
           echo "version=$(echo "$iso" | sed -E 's|.*anglerfish-ai-(.*)\.iso|\1|')" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
+        if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3
 
       # Sign on the runner, not in the container: cosign keyless needs the
@@ -47,6 +58,7 @@ jobs:
       # .pem (consistent with iso/build.sh --sign and the README verify
       # instructions).
       - name: Sign ISO (keyless OIDC)
+        if: github.event_name != 'pull_request'
         run: |
           cosign sign-blob --yes \
             --output-signature "${{ steps.meta.outputs.iso }}.sig" \
@@ -54,6 +66,7 @@ jobs:
             "${{ steps.meta.outputs.iso }}"
 
       - uses: actions/upload-artifact@v7
+        if: github.event_name != 'pull_request'
         with:
           name: anglerfish-ai-${{ steps.meta.outputs.version }}
           path: |
