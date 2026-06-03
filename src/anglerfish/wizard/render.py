@@ -262,9 +262,15 @@ table inet anglerfish {{
         oifname {bait} drop
 
         # Service egress: Ollama and the dashboard's own port. DNS+NTP
-        # outbound for system upkeep.
+        # outbound for system upkeep. HTTPS for the box's own upkeep -
+        # MaxMind geo-DB updates (download.maxmind.com) and, on
+        # --with-ollama builds, the on-host model pull (registry.ollama.ai).
+        # Without this the geo-update unit + timer are silently dropped and
+        # the dashboard shows empty geo data forever. The bait NIC gets no
+        # such allowance (it stays DNS-only above).
         oifname {service} tcp dport 11434 accept
         oifname {service} tcp dport {dashboard_port} accept
+        oifname {service} tcp dport 443 accept
         oifname {service} udp dport {{ 53, 123 }} accept
     }}
 }}

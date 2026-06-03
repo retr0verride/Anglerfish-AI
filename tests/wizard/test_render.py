@@ -86,6 +86,10 @@ def test_render_nftables_uses_interface_names() -> None:
     # Post-Cowrie removal: lure-only ingress on the bait NIC at 2222.
     assert 'iifname "ens1" tcp dport 2222 accept' in out
     assert 'oifname "ens2" tcp dport 11434' in out
+    # HTTPS egress on the service NIC so geo-DB updates + the ollama model
+    # pull are not silently dropped; the bait NIC stays DNS-only.
+    assert 'oifname "ens2" tcp dport 443 accept' in out
+    assert 'oifname "ens1" tcp dport 443' not in out
     assert "policy drop" in out
     assert "table inet anglerfish" in out
 
