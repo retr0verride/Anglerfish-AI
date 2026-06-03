@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final
 
+from anglerfish import system_identity
 from anglerfish.bridge.path import normalise_path
 from anglerfish.lure.config import LureConfig
 from anglerfish.lure.fakefs import listdir, read
@@ -180,14 +181,7 @@ async def _whoami(session: LureSessionContext, _tokens: list[str]) -> DispatchRe
 
 
 async def _id(session: LureSessionContext, _tokens: list[str]) -> DispatchResult:
-    if session.username == "root":
-        text = "uid=0(root) gid=0(root) groups=0(root)\n"
-    else:
-        text = (
-            f"uid=1000({session.username}) gid=1000({session.username}) "
-            f"groups=1000({session.username}),27(sudo)\n"
-        )
-    return DispatchResult(handled=True, text=text)
+    return DispatchResult(handled=True, text=f"{system_identity.id_line(session.username)}\n")
 
 
 async def _pwd(session: LureSessionContext, _tokens: list[str]) -> DispatchResult:
@@ -199,24 +193,19 @@ async def _hostname(session: LureSessionContext, _tokens: list[str]) -> Dispatch
 
 
 async def _uname(session: LureSessionContext, tokens: list[str]) -> DispatchResult:
-    kernel = "6.1.0-18-amd64"
     if len(tokens) == 1:
         return DispatchResult(handled=True, text="Linux\n")
     flag = tokens[1]
     if flag == "-a":
-        text = (
-            f"Linux {session.hostname} {kernel} #1 SMP PREEMPT_DYNAMIC "
-            "Debian 6.1.76-1 (2024-02-01) x86_64 GNU/Linux\n"
-        )
-        return DispatchResult(handled=True, text=text)
+        return DispatchResult(handled=True, text=f"{system_identity.uname_a(session.hostname)}\n")
     if flag == "-r":
-        return DispatchResult(handled=True, text=f"{kernel}\n")
+        return DispatchResult(handled=True, text=f"{system_identity.KERNEL_RELEASE}\n")
     if flag == "-n":
         return DispatchResult(handled=True, text=f"{session.hostname}\n")
     if flag == "-s":
         return DispatchResult(handled=True, text="Linux\n")
     if flag == "-m":
-        return DispatchResult(handled=True, text="x86_64\n")
+        return DispatchResult(handled=True, text=f"{system_identity.MACHINE}\n")
     # Anything else (-o, -v, etc.) goes to the bridge.
     return DispatchResult(handled=False)
 
