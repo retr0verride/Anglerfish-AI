@@ -1149,7 +1149,8 @@ class HoneytokensConfig(BaseModel):
         ),
     )
 
-    def model_post_init(self, _context: object) -> None:
+    @model_validator(mode="after")
+    def _require_callback_url_when_enabled(self) -> Self:
         if self.enabled and not self.callback_base_url:
             raise ValueError(
                 "HoneytokensConfig.enabled=True requires callback_base_url "
@@ -1157,6 +1158,7 @@ class HoneytokensConfig(BaseModel):
                 "receiver at that URL; tokens that point at nothing are "
                 "operator-confusing).",
             )
+        return self
 
 
 class CounterDeceptionMode(StrEnum):
@@ -1262,7 +1264,8 @@ class CounterDeceptionConfig(BaseModel):
         ),
     )
 
-    def model_post_init(self, _context: object) -> None:
+    @model_validator(mode="after")
+    def _validate_timebomb_bands(self) -> Self:
         if self.timebomb_mild_to_severe <= self.timebomb_cold_to_mild:
             raise ValueError(
                 "CounterDeceptionConfig.timebomb_mild_to_severe "
@@ -1272,6 +1275,7 @@ class CounterDeceptionConfig(BaseModel):
                 "otherwise collapse and the severe instruction would "
                 "fire before the mild one had effect.",
             )
+        return self
 
 
 class NarratorConfig(BaseModel):

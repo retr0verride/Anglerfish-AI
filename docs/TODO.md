@@ -565,3 +565,18 @@ loop was not run here.
 The cosmetic API / response-shape tweaks on the dashboard models surface
 deferred from the 2026-06-01 code review (bucket 4, non-behavioural). See
 `docs/CODE_REVIEW_2026-06-01.md` for the specific items.
+
+Status (2026-06-03): triaged the bucket-4 items and applied the clean one.
+`HoneytokensConfig` and `CounterDeceptionConfig` raised their cross-field
+checks from `model_post_init` instead of the `@model_validator(mode="after")`
+idiom every other config uses; converted both (pure idiom consistency, both
+already produce a `ValidationError`, existing negative tests still pass). The
+rest are left as-is, deliberately:
+
+- `config/__init__.__all__` consistency was already closed (`a2134d6`).
+- `NarratorConfig.model_role: Literal["fast","deep"]` is correct, not a bug:
+  reusing `LLMRole` would wrongly admit `embed`, which the narrator cannot
+  use. Keep the restriction.
+- The `models/__init__` facade incompleteness and the `source_ip`/`ip`
+  field-constraint divergence are low-value packaging cosmetics with no
+  behavioural impact; catalogued, not worth the churn.
