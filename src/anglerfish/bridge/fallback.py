@@ -13,6 +13,7 @@ from __future__ import annotations
 import shlex
 
 from anglerfish import system_identity
+from anglerfish.synthetic_clock import clock
 
 __all__ = ["fallback_response"]
 
@@ -67,7 +68,7 @@ def fallback_response(
     if head == "echo":
         return " ".join(rest)
     if head == "uptime":
-        return " 12:34:56 up 7 days,  3:14,  1 user,  load average: 0.04, 0.07, 0.03"
+        return clock().render_uptime()
     if head in {"exit", "logout"}:
         return ""
     return None

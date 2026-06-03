@@ -356,6 +356,25 @@ Fix sketch: implement them as deterministic synthetic commands driven by a
 per-session synthetic clock and a synthetic wtmp/utmp, consistent with the
 boot time and uptime the persona claims.
 
+Status (closed 2026-06-03): `anglerfish/synthetic_clock.py` is the single
+source. A `SyntheticClock` anchors a fixed boot time (~14.3d before the
+process started, matching the legacy `/proc/uptime` and the forgotten-box
+persona) and reads the wall clock for "now", so time advances like a real
+host. Native handlers landed for `date` (bare, `-u`, `+%s`), `uptime`
+(bare, `-p`, `-s`), `timedatectl`, `w`, and `last`; `/proc/uptime` and
+`/proc/loadavg` are now clock-driven (uptime advances instead of being
+frozen). The single source fixed three contradictions found on the way: the
+bridge fallback `uptime` claimed 7 days against `/proc/uptime`'s ~14, the
+fallback `uname -a` (TODO-10) and uptime carried a load average that
+disagreed with `/proc/loadavg`, and the legacy `/proc/uptime` idle/uptime
+ratio implied 8 CPUs against the 4-stanza cpuinfo. The `last` reboot line
+renders the same kernel as `uname` (TODO-10). Covered by
+`tests/test_synthetic_clock.py`.
+
+Out of scope (low value): arbitrary `date +FORMAT` strings still route to
+the bridge; the static fakefs log timestamps do not advance (acceptable for
+the forgotten-box persona, where recent activity is sparse by design).
+
 ## TODO-12: off-box audit-log shipping
 
 `/var/log/anglerfish/audit.jsonl` is the only tamper-evidence surface. An
