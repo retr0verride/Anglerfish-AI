@@ -1,0 +1,32 @@
+# Anglerfish-AI audit log rotation.
+#
+# /var/log/anglerfish/audit.jsonl is the tamper-evidence audit trail. It is
+# opened append-only (chattr +a) and the AuditLog writer opens it per record
+# (no long-held fd), so rename+create rotation is safe - but the +a
+# attribute blocks the rename, so it is cleared around the rotation and
+# re-applied to the fresh live file. NOT copytruncate: copytruncate cannot
+# truncate an append-only file.
+#
+# Rotated (historical) files are left without +a so they can be compressed
+# and pruned; ship them off-box for long-term integrity (the on-box log is
+# the live tamper-evidence surface).
+#
+# NOTE: on the ephemeral live image /var/log is tmpfs, so this caps RAM
+# growth only at logrotate's cadence; the durable fix is persistence +
+# off-box shipping.
+/var/log/anglerfish/audit.jsonl {
+    daily
+    rotate 14
+    maxsize 200M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 anglerfish anglerfish
+    prerotate
+        /usr/bin/chattr -a /var/log/anglerfish/audit.jsonl 2>/dev/null || true
+    endscript
+    postrotate
+        /usr/bin/chattr +a /var/log/anglerfish/audit.jsonl 2>/dev/null || true
+    endscript
+}

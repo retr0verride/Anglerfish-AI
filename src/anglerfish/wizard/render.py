@@ -135,10 +135,12 @@ def render_env(
         "# --- Audit log (Stage 4.2: writer + tailer share this path) --------------",
         # log_path is read by every AuditLog construction site (bridge,
         # lure, dashboard, CLI) AND by the Stage 4.2 AuditTailer that
-        # populates the session store. Relocate carefully: logrotate
-        # must continue to copytruncate this exact file, and the chattr
-        # +a invariant must be re-applied if it moves between
-        # filesystems.
+        # populates the session store. Relocate carefully: the shipped
+        # /etc/logrotate.d/anglerfish rotates this exact file via
+        # rename+create (clearing/re-applying chattr +a around the
+        # rotation, NOT copytruncate which cannot truncate an append-only
+        # file), and the +a invariant must be re-applied if it moves
+        # between filesystems.
         _line("# ANGLERFISH_AUDIT__LOG_PATH", "/var/log/anglerfish/audit.jsonl"),
         "",
         "# --- Geo enrichment (MaxMind GeoLite2) -----------------------------------",

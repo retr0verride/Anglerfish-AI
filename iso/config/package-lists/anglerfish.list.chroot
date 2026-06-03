@@ -25,6 +25,9 @@ ca-certificates
 curl
 wget
 gpg
+# logrotate (+ chattr from e2fsprogs, in base) caps the append-only audit
+# log; see /etc/logrotate.d/anglerfish.
+logrotate
 
 # Diagnostics
 htop
