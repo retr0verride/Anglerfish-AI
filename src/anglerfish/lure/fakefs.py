@@ -239,6 +239,7 @@ _PROC_VERSION = (
     "#1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01)\n"
 )
 
+
 def _build_cpuinfo() -> str:
     """Four processor stanzas so `nproc` / `grep -c ^processor` (=4) agrees
     with the advertised ``siblings`` / ``cpu cores`` (=4). One stanza with
