@@ -22,10 +22,9 @@
 # as the remainder of TODO-15.
 #
 # We deliberately avoid pulling a model in the chroot: model bytes are
-# large (multi-GB), and the operator may want a different model than
-# our default. The bridge runs `ollama pull` lazily on first use, or
-# the operator can pre-pull via `ollama pull <model>` after first
-# boot.
+# large (multi-GB), and the model tags are not known until the wizard runs.
+# Instead anglerfish-model-pull.service pulls the configured models on first
+# boot once the wizard has captured them (TODO-14).
 
 set -e
 

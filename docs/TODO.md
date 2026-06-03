@@ -448,6 +448,20 @@ Fix sketch: either pre-pull the configured model into the image at build
 time (size cost) or a first-boot oneshot that pulls it with progress and
 retry. The wizard already captures the model name.
 
+Status (closed 2026-06-03): first-boot pull chosen. `ModelPuller`
+(`anglerfish/model_pull.py`) pulls the three configured tags (`fast_model`,
+`deep_model`, `embed_model`) via the Ollama HTTP API, skipping any already
+present (idempotent) and retrying (the first boot races the network).
+`anglerfish ollama pull` runs it from `anglerfish-model-pull.service`
+(oneshot, after the wizard + ollama.service); the bridge soft-orders after
+it so the model is present before serving (a pull failure still lets the
+bridge fall back). It only pulls when Ollama is local: a `trusted_remote_host`
+endpoint is operator-managed (skipped), and an unreachable local API
+(no `--with-ollama`) is a clean no-op. Covered by
+`tests/test_model_pull.py` (7) + `tests/cli/test_ollama_subcommand.py` (2).
+Not runtime-tested here (a real pull downloads multi-GB models; the
+operator's Ollama lane).
+
 ## TODO-15: curl|sh Ollama install is unpinned
 
 The Ollama install hook uses the upstream `curl | sh` installer with no

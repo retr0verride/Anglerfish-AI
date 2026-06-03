@@ -15,6 +15,7 @@ bridge and dashboard read configuration exclusively from
 | `anglerfish-lure.service`         | long     | Native asyncssh SSH honeypot bound to the bait NIC       |
 | `anglerfish-dashboard.service`    | long     | FastAPI/WebSocket operator UI                            |
 | `anglerfish-audit-shipper.service` | long    | Stream the audit log off-box (default-off; needs `audit.shipper.url`) |
+| `anglerfish-model-pull.service`   | oneshot  | First-boot pull of the configured Ollama models (local Ollama only) |
 
 ## Install
 
