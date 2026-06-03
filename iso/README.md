@@ -101,36 +101,71 @@ on-disk Debian system. It is baked into the image at
 
 ```sh
 # Boot the ISO, complete the first-boot wizard (so its config is captured),
-# then persist the appliance to a disk. This ERASES the target.
-sudo anglerfish-install /dev/sda          # prompts for confirmation
+# then persist the appliance to a disk.
+sudo anglerfish-install /dev/sda            # prompts for confirmation
 sudo anglerfish-install --yes /dev/nvme0n1  # unattended
-sudo reboot                                # remove the install media first
+sudo reboot                                 # remove the install media first
 ```
 
-What it does:
+### Layout: OS and data are separate
 
-1. GPT-partitions the target: a 1M BIOS-boot partition (`ef02`, for the
-   GRUB core image on legacy BIOS), a 512M ESP (`ef00`, FAT32), and an
-   ext4 root taking the rest.
+The OS root and the durable state live on different partitions, so the OS
+can be reimaged without losing intel:
+
+| Part | Type | Label | Holds |
+| --- | --- | --- | --- |
+| p1 | `ef02` | BIOS-boot (1M) | GRUB core image for legacy BIOS |
+| p2 | `ef00` | ESP (512M) | UEFI bootloader |
+| p3 | `8300` | `anglerfish-root` | the OS (reimageable) |
+| p4 | `8300` | `anglerfish-data` | the durable state |
+
+The three state directories are bind-mounted off the data partition via
+`fstab`, so the canonical paths are unchanged:
+
+```
+/data/etc -> /etc/anglerfish        (wizard config, secrets, credential key)
+/data/lib -> /var/lib/anglerfish    (sessions DB, lure keys, geo data)
+/data/log -> /var/log/anglerfish    (append-only audit log)
+```
+
+Root defaults to 16G; the data partition takes the rest. Override with
+`--root-size` (e.g. larger for bundled Ollama models): `--root-size 40G`.
+
+### Reimaging without losing intel
+
+On reinstall, an existing `anglerfish-data` partition is detected by label
+and **preserved**: only the OS root and ESP are reformatted. Rerun the same
+command to push a new OS build onto a deployed sensor and keep every captured
+session.
+
+```sh
+sudo anglerfish-install /dev/sda             # reimage OS, keep data
+sudo anglerfish-install --wipe-data /dev/sda # purge data, start clean
+```
+
+### What it does
+
+1. GPT-partitions the target (fresh install) or reformats only root + ESP
+   (preserve), per the layout above.
 2. `rsync`s the live root filesystem to the new root, excluding the
-   pseudo-filesystems and the live-only scratch dirs, then recreates the
-   empty mount points the kernel mounts over at boot.
-3. Writes an `fstab` keyed by filesystem UUID.
-4. Chroots in to convert live to normal boot: purges
+   pseudo-filesystems and live-only scratch dirs, then recreates the empty
+   mount points the kernel mounts over at boot.
+3. Relocates the state directories onto the data partition (fresh) or reuses
+   the preserved ones, leaving the canonical paths as empty bind targets.
+4. Writes an `fstab` keyed by filesystem UUID, including the three bind
+   mounts ordered after `/data`.
+5. Chroots in to convert live to normal boot: purges
    `live-boot`/`live-config`, generates fresh per-host SSH host keys
    (`ssh-keygen -A`, so the operator sshd starts and every deployment gets
    unique keys), regenerates a normal initramfs, and installs GRUB for both
    UEFI (`--removable`) and legacy BIOS.
 
-It refuses to install onto the live media itself, and partition device
-naming handles both `sdX` and `nvme0n1pN` layouts. Verified by an automated
-QEMU cycle (`iso/test/`): install into a blank disk, then boot the result in
-both SeaBIOS and OVMF and confirm it reaches the first-boot wizard from the
-on-disk root.
-
-For a sketch of splitting the durable state (`/etc/anglerfish`,
-`/var/lib/anglerfish`, `/var/log/anglerfish`) onto its own partition so the
-OS can be reimaged without losing intel, see the install-to-disk follow-ups.
+It refuses to install onto the live media itself, and partition device naming
+handles both `sdX` and `nvme0n1pN` layouts. Verified by an automated QEMU
+cycle (`iso/test/`): a fresh install into a blank disk boots in both SeaBIOS
+and OVMF and reaches the first-boot wizard from the on-disk root; a second
+install preserves the data partition while reimaging the OS; and `--wipe-data`
+purges it.
 
 ## App staging
 
