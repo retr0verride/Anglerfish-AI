@@ -15,6 +15,17 @@ live-config-systemd
 systemd-sysv
 locales
 
+# Install-to-disk: anglerfish-install persists the live appliance to a real
+# disk. It needs the partitioning + filesystem + bootloader tooling present
+# in the live image (grub-install runs against the target inside a chroot).
+gdisk
+parted
+rsync
+dosfstools
+grub-pc-bin
+grub-efi-amd64-bin
+grub-efi-amd64
+
 # Runtime
 python3
 python3-venv

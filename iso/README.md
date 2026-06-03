@@ -87,6 +87,51 @@ for UEFI). `dd` it to a USB stick or boot it directly in QEMU / VirtualBox
 through the responsible-use terms, NIC selection, Ollama configuration, and
 secret generation.
 
+## Persisting to disk
+
+The ISO boots as an ephemeral live system: the root filesystem is a tmpfs
+overlay on the read-only squashfs, so captured intel, the wizard secrets,
+the credential AES key, the SSH host keys, and the append-only audit log are
+all lost on reboot. That is the right default for a throwaway evaluation,
+but a deployed sensor needs persistence.
+
+`anglerfish-install` converts the running live appliance into a normal
+on-disk Debian system. It is baked into the image at
+`/usr/local/sbin/anglerfish-install`.
+
+```sh
+# Boot the ISO, complete the first-boot wizard (so its config is captured),
+# then persist the appliance to a disk. This ERASES the target.
+sudo anglerfish-install /dev/sda          # prompts for confirmation
+sudo anglerfish-install --yes /dev/nvme0n1  # unattended
+sudo reboot                                # remove the install media first
+```
+
+What it does:
+
+1. GPT-partitions the target: a 1M BIOS-boot partition (`ef02`, for the
+   GRUB core image on legacy BIOS), a 512M ESP (`ef00`, FAT32), and an
+   ext4 root taking the rest.
+2. `rsync`s the live root filesystem to the new root, excluding the
+   pseudo-filesystems and the live-only scratch dirs, then recreates the
+   empty mount points the kernel mounts over at boot.
+3. Writes an `fstab` keyed by filesystem UUID.
+4. Chroots in to convert live to normal boot: purges
+   `live-boot`/`live-config`, generates fresh per-host SSH host keys
+   (`ssh-keygen -A`, so the operator sshd starts and every deployment gets
+   unique keys), regenerates a normal initramfs, and installs GRUB for both
+   UEFI (`--removable`) and legacy BIOS.
+
+It refuses to install onto the live media itself, and partition device
+naming handles both `sdX` and `nvme0n1pN` layouts. Verified by an automated
+QEMU cycle (`iso/test/`): install into a blank disk, then boot the result in
+both SeaBIOS and OVMF and confirm it reaches the first-boot wizard from the
+on-disk root.
+
+For a sketch of splitting the durable state (`/etc/anglerfish`,
+`/var/lib/anglerfish`, `/var/log/anglerfish`) onto its own partition so the
+OS can be reimaged without losing intel, see the install-to-disk follow-ups.
+
 ## App staging
 
 The app is staged into the image at `/opt/anglerfish/src` via
@@ -112,3 +157,5 @@ systemd units both read the local tree with **no boot-time network**.
 | `config/hooks/normal/0050-systemd-units.hook.chroot` | Installs + enables the systemd units |
 | `config/hooks/normal/0060-install-ollama.hook.chroot` | Optional on-host Ollama (`--with-ollama`) |
 | `config/includes.chroot/` | Files copied verbatim into the image |
+| `config/includes.chroot/usr/local/sbin/anglerfish-install` | Persist the live appliance to disk (BIOS+UEFI) |
+| `test/qmp_screendump.py` | Boot-test helper: captures the guest console over QMP |
