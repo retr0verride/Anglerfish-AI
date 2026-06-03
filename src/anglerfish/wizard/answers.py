@@ -192,6 +192,20 @@ class WizardAnswers(BaseModel):
     )
 
     @model_validator(mode="after")
+    def _interfaces_must_differ(self) -> Self:
+        # The appliance's whole isolation boundary is bait NIC (attacker) vs
+        # service NIC (operator), enforced by the rendered nftables iifname
+        # rules. If they are the same interface the operator dashboard +
+        # SSH land on the attacker-facing wire. Reject it.
+        if self.bait_interface == self.service_interface:
+            raise ValueError(
+                "bait_interface and service_interface must be different NICs "
+                f"(both are {self.bait_interface!r}); the attacker/operator "
+                "isolation depends on it",
+            )
+        return self
+
+    @model_validator(mode="after")
     def _honeytokens_need_callback_url(self) -> Self:
         if self.honeytokens_enabled and self.honeytokens_callback_base_url is None:
             raise ValueError(
