@@ -367,15 +367,36 @@ streams audit records off-box append-only, with backpressure and a
 documented trust model. The on-box log stays the live surface; off-box is
 the durable copy.
 
-## TODO-13: in-memory counters reset on reboot
+## TODO-13: in-memory counters reset on reboot (overstated, mostly works as designed)
 
-The per-IP rate limiter and per-session budgets live in memory. A reboot
-(or the now-supported install-to-disk) resets them, so an attacker can
-clear throttling by forcing a restart, and longitudinal per-IP counts
-reset.
+Reassessed on inspection (2026-06-03). The premise (an attacker clears
+throttling by forcing a restart, and longitudinal counts are lost) does not
+hold; the transient state SHOULD reset and the durable intel already
+persists.
 
-Fix sketch: persist the limiter and budget state to the sessions DB (now on
-the durable data partition) with a periodic flush and a reload on start.
+- The lure never executes attacker input, so an attacker has no primitive to
+  reboot the box. The reset only happens on operator restarts / crashes.
+- `_PerIPLimiter` (`lure/server.py`) holds only `_concurrent[ip]` (a count of
+  LIVE TCP connections) and `_recent[ip]` (a 60-second rpm window). On
+  restart every connection dies, so the true concurrency is 0: resetting is
+  correct, and persisting it would wrongly block reconnects. The rpm window
+  is 60s, shorter than any restart, so persisting it is pointless.
+- Per-session budgets (`_budgets`, `_wasted_ms`, etc. in `bridge/service.py`)
+  are keyed by live session UUID; the session dies on restart, so a fresh
+  budget for a fresh session is correct.
+- The threat scorer (`threat/scorer.py`) is a pure function with no per-IP
+  memory. There is no ban / denylist anywhere (a honeypot wants repeat
+  engagement). Durable per-IP intel (sessions, turns, threats, intents, all
+  keyed by `source_ip`) is already written to SQLite and survives restart.
+
+One genuine but low-severity edge remains: if the BRIDGE restarts while the
+LURE keeps a session alive, the bridge no longer recognises that session and
+hands it a fresh token budget mid-stream. With a local LLM there is no API
+cost, so the budget bounds compute monopolisation, not money, and the
+attacker cannot induce the bridge restart on demand. Persisting per-session
+budgets to disk and rematching them to still-live lure sessions across a
+bridge restart is disproportionate to that bound. Left as-is; revisit only
+if budgets ever gate a metered/paid backend.
 
 ## TODO-14: --with-ollama model-pull orchestration
 
