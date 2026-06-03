@@ -396,14 +396,22 @@ version pin or checksum, a supply-chain and reproducibility gap.
 Fix sketch: pin to a specific Ollama release (a versioned `.deb` or a
 checksum-verified tarball from a pinned URL) and drop `curl | sh`.
 
-## TODO-16: dashboard WebSocket has no Origin allow-list
+## TODO-16: dashboard WebSocket has no Origin allow-list (stale finding, already implemented)
 
-The dashboard WebSocket does not check `Origin` on upgrade. Safe while
-bound to localhost, but an operator who exposes it on a management NIC is
-open to cross-site WebSocket hijacking.
+Resolved on inspection (2026-06-03): the defence already exists. The
+2026-06-03 audit finding was stale. `dashboard/websocket.py` `_check_origin`
+rejects any `/ws/events` upgrade whose `Origin` header is not in
+`_allowed_origins` (the dashboard's own `http(s)://host:port` plus the
+configurable `DashboardConfig.allowed_origins`, default empty = own origin
+only), enforced before `accept()` with a dedicated 4403 close code; a
+missing `Origin` is also rejected. An auth-cookie check follows (skipped in
+open mode), and the origin check runs before it.
 
-Fix sketch: a configurable allowed-origins list checked at the WS upgrade,
-defaulting to localhost-only, documented in the runbook.
+This shipped in the earlier dashboard audit (`b563cef`), not after. Covered
+by `tests/dashboard/test_websocket_security.py` (8 cases: missing/unknown
+origin rejected, default/custom origin accepted, locked-mode auth
+accept/reject, logout invalidation, origin-before-auth ordering). No code
+change required.
 
 ## TODO-17: ProtectProc + per-service user isolation
 
