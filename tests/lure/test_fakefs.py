@@ -85,6 +85,16 @@ def test_proc_cpuinfo_includes_intel_xeon() -> None:
     assert "Intel(R) Xeon(R)" in result.content
 
 
+def test_proc_cpuinfo_processor_count_matches_core_count() -> None:
+    # `grep -c ^processor` / nproc must equal the advertised cpu cores /
+    # siblings, or it is a one-command honeypot tell.
+    result = read("/proc/cpuinfo", _session())
+    n_proc = sum(1 for line in result.content.splitlines() if line.startswith("processor"))
+    assert n_proc == 4
+    assert "cpu cores       : 4" in result.content
+    assert "siblings        : 4" in result.content
+
+
 def test_etc_hostname_renders_session_hostname() -> None:
     s = _session(hostname="my-prod-server")
     result = read("/etc/hostname", s)

@@ -239,21 +239,29 @@ _PROC_VERSION = (
     "#1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01)\n"
 )
 
-_PROC_CPUINFO = """\
-processor       : 0
-vendor_id       : GenuineIntel
-cpu family      : 6
-model           : 79
-model name      : Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz
-stepping        : 1
-microcode       : 0xb000040
-cpu MHz         : 2399.998
-cache size      : 35840 KB
-physical id     : 0
-siblings        : 4
-core id         : 0
-cpu cores       : 4
-"""
+def _build_cpuinfo() -> str:
+    """Four processor stanzas so `nproc` / `grep -c ^processor` (=4) agrees
+    with the advertised ``siblings`` / ``cpu cores`` (=4). One stanza with
+    a count of 4 is a trivial recon tell."""
+    stanza = (
+        "processor       : {n}\n"
+        "vendor_id       : GenuineIntel\n"
+        "cpu family      : 6\n"
+        "model           : 79\n"
+        "model name      : Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz\n"
+        "stepping        : 1\n"
+        "microcode       : 0xb000040\n"
+        "cpu MHz         : 2399.998\n"
+        "cache size      : 35840 KB\n"
+        "physical id     : 0\n"
+        "siblings        : 4\n"
+        "core id         : {n}\n"
+        "cpu cores       : 4\n"
+    )
+    return "\n".join(stanza.format(n=n) for n in range(4)) + "\n"
+
+
+_PROC_CPUINFO = _build_cpuinfo()
 
 _PROC_MEMINFO = """\
 MemTotal:        8071672 kB
