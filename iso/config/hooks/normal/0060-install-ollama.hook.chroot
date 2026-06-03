@@ -7,10 +7,19 @@
 # ~5 GB / dbus-requiring install cost by default.
 #
 # To opt in, export ANGLERFISH_INSTALL_OLLAMA=1 in the live-build
-# environment before running ./iso/build.sh. The hook then runs the
-# official Ollama install script under curl|sh, which is acceptable
-# inside an unprivileged chroot — the resulting binary is captured in
-# the image and never re-fetched at runtime.
+# environment before running ./iso/build.sh. The hook fetches a PINNED
+# version of the official installer (TODO-15), so the image is
+# reproducible instead of floating to whatever "latest" resolved to at
+# build time. The resulting binary is captured in the image and never
+# re-fetched at runtime.
+#
+# Supply-chain note: the upstream installer does NOT checksum-verify the
+# binary it downloads, so the binary's integrity rests on HTTPS to
+# ollama.com. For a hard pin of the INSTALLER itself, export
+# OLLAMA_INSTALL_SHA256 (the sha256 of the v${OLLAMA_VERSION} install.sh,
+# computed on a trusted host) before building; a mismatch aborts. A full
+# binary pin would require bypassing the upstream installer and is tracked
+# as the remainder of TODO-15.
 #
 # We deliberately avoid pulling a model in the chroot: model bytes are
 # large (multi-GB), and the operator may want a different model than
@@ -26,16 +35,40 @@ if [ "${ANGLERFISH_INSTALL_OLLAMA:-0}" != "1" ]; then
     exit 0
 fi
 
-# `curl | sh` inside an offline chroot won't work; live-build hooks run
-# with network access by default, but we guard for the offline case so
-# the failure message is helpful.
+# live-build hooks run with network access by default; guard the offline
+# case so the failure message is helpful.
 if ! command -v curl >/dev/null 2>&1; then
-    echo "[anglerfish] curl missing; cannot fetch the Ollama install script." >&2
+    echo "[anglerfish] curl missing; cannot fetch the Ollama installer." >&2
     exit 1
 fi
 
-echo "[anglerfish] installing Ollama on-host (operator opted in)..."
-curl --fail --silent --show-error --location https://ollama.com/install.sh | sh
+# Pinned release. Bump deliberately (and re-verify OLLAMA_INSTALL_SHA256 on
+# a trusted host) rather than tracking "latest".
+OLLAMA_VERSION="0.30.3"
+script_url="https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/install.sh"
+script_path="/tmp/ollama-install-${OLLAMA_VERSION}.sh"
+
+echo "[anglerfish] fetching pinned Ollama installer v${OLLAMA_VERSION}..."
+# Download to a file first (no blind 'curl | sh'), so it can be checksum-
+# gated and inspected before execution.
+curl --fail --silent --show-error --location -o "${script_path}" "${script_url}"
+
+if [ -n "${OLLAMA_INSTALL_SHA256:-}" ]; then
+    if ! echo "${OLLAMA_INSTALL_SHA256}  ${script_path}" | sha256sum -c - >/dev/null 2>&1; then
+        echo "[anglerfish] Ollama installer checksum mismatch; aborting." >&2
+        exit 1
+    fi
+    echo "[anglerfish] installer checksum verified."
+else
+    echo "[anglerfish] WARNING: OLLAMA_INSTALL_SHA256 unset: version is pinned" >&2
+    echo "[anglerfish] but the installer is not checksum-verified." >&2
+fi
+
+echo "[anglerfish] installing Ollama v${OLLAMA_VERSION} on-host (operator opted in)..."
+# install.sh appends ?version=$OLLAMA_VERSION to its download URLs, pinning
+# the binary version to match the script.
+OLLAMA_VERSION="${OLLAMA_VERSION}" sh "${script_path}"
+rm -f "${script_path}"
 
 # Ollama's installer writes /etc/systemd/system/ollama.service. Enable
 # it so the bridge can reach 127.0.0.1:11434 after the wizard finishes.

@@ -456,6 +456,22 @@ version pin or checksum, a supply-chain and reproducibility gap.
 Fix sketch: pin to a specific Ollama release (a versioned `.deb` or a
 checksum-verified tarball from a pinned URL) and drop `curl | sh`.
 
+Status (partially closed 2026-06-03): the hook now pins `OLLAMA_VERSION`
+(0.30.3), fetches that version's `install.sh` from the versioned GitHub
+release URL to a file (no blind `curl | sh`), and runs it with
+`OLLAMA_VERSION` set so the binary version matches. The build is now
+reproducible instead of tracking "latest". An optional build-time
+`OLLAMA_INSTALL_SHA256` hard-pins the installer script (mismatch aborts).
+
+Remaining: the upstream installer does not checksum-verify the binary it
+downloads (confirmed by reading v0.30.3 `scripts/install.sh`), so the
+binary's integrity still rests on HTTPS to ollama.com. A full binary pin
+means bypassing the upstream installer (download `ollama-linux-amd64.tar.zst`
++ verify an operator-supplied sha256 + extract + write the user/systemd
+unit ourselves). Deferred: it needs a checksum verified on a trusted host
+(the operator's Ollama lane) and is a larger rewrite for an opt-in path.
+Not runtime-tested here (a `--with-ollama` build pulls ~1.4 GB).
+
 ## TODO-16: dashboard WebSocket has no Origin allow-list (stale finding, already implemented)
 
 Resolved on inspection (2026-06-03): the defence already exists. The
