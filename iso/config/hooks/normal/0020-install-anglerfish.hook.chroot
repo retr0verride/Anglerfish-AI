@@ -1,39 +1,60 @@
 #!/bin/sh
 # Install the anglerfish-ai Python package into an isolated venv at
 # /opt/anglerfish/venv, owned by root. Every systemd unit invokes the
-# venv's entry points directly (no PATH dependence). The system
-# Python is not touched — no --break-system-packages.
+# venv's entry points directly (no PATH dependence). The system Python is
+# never touched (no --break-system-packages).
 #
-# The package is expected to have been copied into /tmp/anglerfish-ai
-# by the surrounding build orchestration. If absent the hook falls
-# back to PyPI.
+# The source tree is staged into the image at /opt/anglerfish/src via
+# config/includes.chroot (populated by the build orchestrator), so the
+# install is from the local tree with NO boot-time network and NO PyPI
+# fallback. A missing tree fails the build loudly rather than shipping an
+# app-less image.
+#
+# POSIX sh (dash) has no `pipefail`; `set -eu` is the faithful equivalent
+# and there are no pipes here that could mask a failure.
 
-set -e
+set -eu
 
+SRC=/opt/anglerfish/src
 VENV=/opt/anglerfish/venv
 
-install -d -o root -g root -m 0755 /opt/anglerfish
-
-python3 -m venv "${VENV}"
-
-# Upgrade pip inside the venv. Use the venv's own pip; never touch
-# the system site-packages.
-"${VENV}/bin/pip" install --no-cache-dir --upgrade pip wheel
-
-if [ -d /tmp/anglerfish-ai ]; then
-    "${VENV}/bin/pip" install --no-cache-dir "/tmp/anglerfish-ai[all]"
-else
-    "${VENV}/bin/pip" install --no-cache-dir "anglerfish-ai[all]"
+if [ ! -f "${SRC}/pyproject.toml" ]; then
+    echo "FATAL: anglerfish source tree missing at ${SRC}" >&2
+    echo "       (config/includes.chroot staging did not run)" >&2
+    exit 1
 fi
 
-# Verify the entry points landed inside the venv.
+# Build prerequisites for any sdist-only C extension that lacks a wheel for
+# the resolved version. Installed only for the pip step, then purged so
+# they do not bloat the shipped image.
+BUILD_DEPS="build-essential python3-dev libffi-dev libssl-dev"
+apt-get update
+# shellcheck disable=SC2086  # intentional word-splitting of the dep list
+apt-get install -y --no-install-recommends ${BUILD_DEPS}
+
+install -d -o root -g root -m 0755 /opt/anglerfish
+python3 -m venv "${VENV}"
+"${VENV}/bin/pip" install --no-cache-dir --upgrade pip wheel
+
+# Install the concrete extra groups, NOT the `[all]` meta-extra: `all` is a
+# self-reference (anglerfish-ai[...]) that pip would try to resolve against
+# an index for this unpublished project name.
+"${VENV}/bin/pip" install --no-cache-dir "${SRC}[dashboard,geo,credentials]"
+
+# Drop the build toolchain again to keep the shipped image lean.
+# shellcheck disable=SC2086  # intentional word-splitting of the dep list
+apt-get purge -y ${BUILD_DEPS}
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+
+# The entry points the systemd units invoke must exist in the venv.
 test -x "${VENV}/bin/anglerfish"
 test -x "${VENV}/bin/anglerfish-wizard"
 test -x "${VENV}/bin/uvicorn"
 
-# Convenience wrappers in /usr/local/bin so operators dropping to the
-# console can run `anglerfish` without sourcing the venv. The systemd
-# units bypass these and call the venv directly.
+# Convenience wrappers in /usr/local/bin so an operator on the console can
+# run `anglerfish` without sourcing the venv; the systemd units call the
+# venv directly.
 for entry in anglerfish anglerfish-wizard; do
     ln -sfn "${VENV}/bin/${entry}" "/usr/local/bin/${entry}"
 done

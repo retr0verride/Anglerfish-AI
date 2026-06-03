@@ -7,9 +7,11 @@
 # operator gets their console login back on second boot (and on every
 # boot thereafter).
 
-set -e
+set -eu
 
-UNIT_SRC=/tmp/anglerfish-ai/systemd
+# Units ship in the app source tree staged at /opt/anglerfish/src by
+# config/includes.chroot (same path the venv install uses).
+UNIT_SRC=/opt/anglerfish/src/systemd
 
 UNITS="anglerfish-bridge.service anglerfish-dashboard.service \
        anglerfish-lure.service \
