@@ -330,6 +330,21 @@ context). Add a cross-source consistency test that fails if any consumer
 drifts. Fold the persona overlay in: today an overlay only overrides
 os-release, so persona swaps leave the kernel/uptime/uid story unchanged.
 
+Status (2026-06-03): the kernel + uid surfaces are single-sourced in
+`anglerfish/system_identity.py`. `uname` (lure + fallback), `/proc/version`,
+the prompt's kernel/architecture facts, and `id` all read from it, so they
+agree by construction; the fallback `uname -a` no longer emits the triple
+`x86_64`, and the fallback `id` now includes `27(sudo)` to match the lure,
+`/etc/group`, and the auth log. `tests/test_system_identity.py` guards drift.
+
+Remaining under TODO-10: persona-aware identity. The single source is the
+DEFAULT Debian box; personas that present a non-Debian OS (`dev-laptop` =
+Pop!\_OS, `gpu-rig` / `ad-joined-workstation` = jammy) still inherit the
+Debian kernel string and the prompt's "real Debian 12 server" framing, which
+contradicts their os-release overlay. The synthetic clock / uptime spread
+(`uptime` says 7 days in the fallback, ~14 in the fs-context hint) is
+TODO-11.
+
 ## TODO-11: native date / time / session commands
 
 The fake shell lacks (or statically fakes) `date`, `timedatectl`, `uptime`,

@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 
+from anglerfish import system_identity
 from anglerfish.lure.session import LureSessionContext
 
 __all__ = [
@@ -233,11 +234,7 @@ auto lo
 iface lo inet loopback
 """
 
-_PROC_VERSION = (
-    "Linux version 6.1.0-18-amd64 (debian-kernel@lists.debian.org) "
-    "(gcc-12 (Debian 12.2.0-14) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40) "
-    "#1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01)\n"
-)
+_PROC_VERSION = system_identity.PROC_VERSION
 
 
 def _build_cpuinfo() -> str:
@@ -754,7 +751,7 @@ _STATIC_SUMMARY = (
     "- /etc/apt/sources.list: bookworm main+contrib+non-free-firmware "
     "+ security\n"
     "- /etc/network/interfaces: lo only (systemd-networkd elsewhere)\n"
-    "- /proc/version: Debian 6.1.0-18-amd64 kernel\n"
+    f"- /proc/version: Debian {system_identity.KERNEL_RELEASE} kernel\n"
     "- /proc/cpuinfo: 4x Intel Xeon E5-2680 v4 @ 2.40GHz\n"
     "- /proc/meminfo: 8 GiB total, ~6 GiB free\n"
     "- /proc/mounts: vda1 / ext4, plus proc/sys/run/tmp\n"

@@ -12,31 +12,24 @@ from __future__ import annotations
 
 import shlex
 
+from anglerfish import system_identity
+
 __all__ = ["fallback_response"]
-
-
-_KERNEL_RELEASE = "6.1.0-26-amd64"
-_KERNEL_VERSION = "#1 SMP PREEMPT_DYNAMIC Debian 6.1.112-1 (2024-09-30)"
-_MACHINE = "x86_64"
-_OPERATING_SYSTEM = "GNU/Linux"
 
 
 def _fmt_uname(flags: list[str], *, hostname: str) -> str:
     if not flags or flags == ["-s"]:
         return "Linux"
     if flags == ["-a"]:
-        return (
-            f"Linux {hostname} {_KERNEL_RELEASE} {_KERNEL_VERSION} "
-            f"{_MACHINE} {_MACHINE} {_MACHINE} {_OPERATING_SYSTEM}"
-        )
+        return system_identity.uname_a(hostname)
     if flags == ["-r"]:
-        return _KERNEL_RELEASE
+        return system_identity.KERNEL_RELEASE
     if flags == ["-n"]:
         return hostname
     if flags == ["-m"]:
-        return _MACHINE
+        return system_identity.MACHINE
     if flags == ["-o"]:
-        return _OPERATING_SYSTEM
+        return system_identity.OPERATING_SYSTEM
     return "Linux"
 
 
@@ -64,9 +57,7 @@ def fallback_response(
     if head == "whoami":
         return username
     if head == "id":
-        if username == "root":
-            return "uid=0(root) gid=0(root) groups=0(root)"
-        return f"uid=1000({username}) gid=1000({username}) groups=1000({username})"
+        return system_identity.id_line(username)
     if head == "hostname":
         return hostname
     if head == "pwd":
