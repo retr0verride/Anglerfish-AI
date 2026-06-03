@@ -513,6 +513,21 @@ Fix sketch: dedicated users (or `DynamicUser`) per service plus
 `ProtectProc=invisible` and `ProcSubset=pid` in the unit hardening,
 re-verifying the ReadWritePaths still line up.
 
+Status (partially closed 2026-06-03): `ProtectProc=invisible` and
+`ProcSubset=pid` added to all six long-running units (bridge, lure,
+dashboard, audit-shipper, model-pull, geo-update). Safe: nothing in the app
+reads the host `/proc` (verified. the lure only SERVES synthetic /proc). This
+hides the host's other-user (root/system) processes and the non-pid /proc
+surfaces from a compromised service, denying host recon.
+
+Remaining: the services still share `User=anglerfish`, so `ProtectProc` does
+not hide them from EACH OTHER (same UID). Full per-service-user isolation
+needs dedicated UIDs sharing a common `anglerfish` group plus group-writable
+shared state (`/var/lib/anglerfish` sessions DB + lure-keys, the append-only
+`/var/log/anglerfish` audit log). That is a perm-model refactor that must be
+boot-tested on the appliance to avoid breaking the shared writers, so it is
+deferred rather than shipped unverified.
+
 ## TODO-18: bit-for-bit reproducible ISO
 
 The build is pinned (container digest, dated bookworm) but not

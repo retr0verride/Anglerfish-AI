@@ -25,6 +25,11 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
+# Hide the host's other-user processes and non-pid /proc surfaces from
+# a compromised service (full per-service-user isolation is TODO-17's
+# remaining piece; see docs/TODO.md).
+ProtectProc=invisible
+ProcSubset=pid
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
