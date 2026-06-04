@@ -108,6 +108,18 @@ class LureConfig(BaseModel):
     # to deliver their full credential payload before throttle.
     per_ip_max_concurrent_connections: int = Field(default=3, ge=1, le=100)
     per_ip_max_connections_per_minute: int = Field(default=30, ge=1, le=600)
+    max_concurrent_connections: int = Field(
+        default=256,
+        ge=1,
+        le=100_000,
+        description=(
+            "Mythos M2: global ceiling on live SSH-lure sessions across all "
+            "source IPs. The per-IP cap does not bound a distributed flood; "
+            "each session pins ~2 MiB of channel buffer, so this is the OOM "
+            "backstop that keeps a botnet/Tor flood from killing the listener. "
+            "~256 bounds memory to a few hundred MB; raise on a larger VM."
+        ),
+    )
 
     # Bridge link (the lure speaks to the bridge HTTP API)
     bridge_base_url: HttpUrl = Field(default=HttpUrl("http://127.0.0.1:8421/"))
