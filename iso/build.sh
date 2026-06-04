@@ -111,9 +111,6 @@ echo "[anglerfish-iso] live-build work dir: $(pwd)"
 echo "[anglerfish-iso] version: ${VERSION}"
 echo "[anglerfish-iso] on-host Ollama: ${WANT_OLLAMA} (1=install, 0=trusted-remote)"
 
-# The 0060 chroot hook reads ANGLERFISH_INSTALL_OLLAMA from the build env.
-export ANGLERFISH_INSTALL_OLLAMA="${WANT_OLLAMA}"
-
 # Reproducibility (TODO-18): deterministic mtimes for mksquashfs. The host
 # passes the HEAD commit time; fall back to a fixed epoch (2024-01-01) when
 # the build runs without it. ANGLERFISH_DEBIAN_SNAPSHOT (if set) is read by
@@ -122,6 +119,15 @@ export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1704067200}"
 echo "[anglerfish-iso] SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} snapshot=${ANGLERFISH_DEBIAN_SNAPSHOT:-<none>}"
 
 lb config
+
+# Wire the on-host Ollama opt-in into the chroot. live-build runs chroot
+# hooks under `env -i` (see Chroot() in
+# /usr/share/live/build/functions/chroot.sh), which scrubs the parent
+# environment, so a plain `export` never reaches the 0060 hook. The only
+# non-builtin vars a hook sees are the lines in config/environment.chroot.
+# Written after `lb config` so the generated tree cannot clobber it.
+echo "ANGLERFISH_INSTALL_OLLAMA=${WANT_OLLAMA}" > config/environment.chroot
+
 lb build
 
 # Locate the produced ISO. With --image-name anglerfish-ai (auto/config),
