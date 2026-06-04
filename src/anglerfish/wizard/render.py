@@ -58,6 +58,16 @@ def render_env(
     def _line(key: str, value: str | None) -> str | None:
         if value is None:
             return f"# {key}="
+        # Mythos M1: free-form answer fields (model tag, fake/admin/operator
+        # usernames, hostname) flow into env lines. A newline would break out
+        # into an extra KEY=value line and override security settings (e.g.
+        # disable the output filter). An env value is single-line: refuse any
+        # control character rather than emit a malformed file.
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+            raise ValueError(
+                f"{key}: value contains a control character; refusing to write "
+                "a malformed env file",
+            )
         return f"{key}={value}"
 
     lines: list[str | None] = [
