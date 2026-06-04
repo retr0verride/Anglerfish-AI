@@ -275,6 +275,13 @@ filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",
     "ignore::DeprecationWarning:pydantic_core.*",
     "ignore::DeprecationWarning:websockets.*",
+    # websockets 14+ deprecated its legacy API, which uvicorn 0.48 still
+    # imports (the `websockets.legacy` module + WebSocketServerProtocol).
+    # The warning is attributed to uvicorn's importer frame, not
+    # `websockets.*`, so the module filter above misses it; a message match
+    # catches the family. Harmless at <17 (the legacy API still works); drop
+    # this once uvicorn defaults to its sansio websockets impl.
+    "ignore:websockets.* is deprecated:DeprecationWarning",
     "ignore::DeprecationWarning:starlette.*",
     # Sync-test setup that briefly opens an asyncio.run loop sometimes
     # gets reported as a leaked event loop by Python 3.13's __del__ —
