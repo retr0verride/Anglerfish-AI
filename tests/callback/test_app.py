@@ -253,3 +253,18 @@ def test_callback_app_opens_and_closes_its_own_reader(
         r = c.get("/cb/BBBBBBBBBBBBBBBB")
         assert r.status_code == 403
     # Exiting the context ran the shutdown aclose without raising.
+
+
+def test_callback_rate_limits_flood_from_one_ip(
+    client: TestClient,
+    audit_path: Path,
+) -> None:
+    """Mythos M6: a flood of valid-shaped IDs from one source IP is
+    rate-limited before the DB read + fsync'd audit write, so the audit
+    count is bounded well below the request count (capacity 30)."""
+    n = 50
+    statuses = [client.get("/cb/ZZZZZZZZZZZZZZZZ").status_code for _ in range(n)]
+    assert all(s == 403 for s in statuses)  # disguised 403 whether served or refused
+    events = _audit_events(audit_path)
+    assert len(events) < n  # the limiter dropped the expensive work on the excess
+    assert len(events) <= 32  # ~capacity (30) + negligible refill

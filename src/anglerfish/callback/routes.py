@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 if TYPE_CHECKING:
     from anglerfish.audit import AuditLog
+    from anglerfish.dashboard.rate_limit import LoginRateLimiter
     from anglerfish.sessions.reader import SessionStoreReader
 
 __all__ = ["build_callback_router"]
@@ -66,6 +67,14 @@ def _get_reader(request: Request) -> SessionStoreReader:
     if reader is None:  # pragma: no cover - guarded at create_callback_app
         raise RuntimeError("SessionStoreReader not attached to app.state")
     return reader  # type: ignore[no-any-return]
+
+
+def _get_limiter(request: Request) -> LoginRateLimiter:
+    """Pull the per-IP callback rate limiter from app.state (mythos M6)."""
+    limiter = getattr(request.app.state, "callback_limiter", None)
+    if limiter is None:  # pragma: no cover - guarded at create_callback_app
+        raise RuntimeError("callback_limiter not configured on app.state")
+    return limiter  # type: ignore[no-any-return]
 
 
 def _get_audit(request: Request) -> AuditLog:
@@ -113,6 +122,7 @@ def build_callback_router() -> APIRouter:
         request: Request,
         reader: SessionStoreReader = Depends(_get_reader),  # noqa: B008
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
+        limiter: LoginRateLimiter = Depends(_get_limiter),  # noqa: B008
     ) -> Response:
         # Reject malformed token IDs without consulting the registry.
         # The base32 alphabet + 16-char width is fixed; anything else
@@ -121,8 +131,15 @@ def build_callback_router() -> APIRouter:
         if not _TOKEN_ID_RE.match(token_id):
             return _aws_403_response(token_id)
 
-        token = await reader.get_honeytoken(token_id)
         callback_ip = _callback_source_ip(request)
+        # Mythos M6: rate-limit valid-shaped IDs per source IP BEFORE the DB
+        # read + fsync'd audit write, so a flood cannot drive sustained
+        # DB/audit load. A refused request gets the identical disguise-403
+        # (no oracle, no extra work); the allowed rate is fully processed.
+        if not (await limiter.consume(callback_ip)).allowed:
+            return _aws_403_response(token_id)
+
+        token = await reader.get_honeytoken(token_id)
         user_agent = (request.headers.get("user-agent") or "")[:_USER_AGENT_MAX]
         # Always "/cb/<token_id>" on this single-route receiver (so it is
         # derivable from token_id), but retained because the dashboard
