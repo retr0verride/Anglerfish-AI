@@ -158,6 +158,7 @@ def bridge_serve(
     from anglerfish.persistence import PersistenceClassifier
     from anglerfish.persona import PersonaLoadError, PersonaRegistry, PersonaSelector
     from anglerfish.sessions.reader import SessionStoreReader
+    from anglerfish.sessions.store import SessionStore
 
     try:
         settings = load_settings()
@@ -244,18 +245,33 @@ def bridge_serve(
                 Panel(str(exc), title="[red]Persona registry load failed[/red]"),
             )
             raise typer.Exit(code=2) from exc
+
+        # Seed the sessions DB (idempotent run_migrations) before the
+        # read-only persona reader opens it. The dashboard owns writes (via
+        # its audit tailer) but is ordered AFTER the bridge, so on a fresh box
+        # the DB would not exist yet and the read-only reader would fatal-exit.
+        # Creating it here breaks that startup ordering dependency rather than
+        # relying on the bridge's restart racing the dashboard.
+        async def _ensure_sessions_db() -> None:
+            seed = SessionStore(settings.sessions)
+            try:
+                await seed.open()
+            finally:
+                await seed.aclose()
+
+        asyncio.run(_ensure_sessions_db())
+
         persona_reader = SessionStoreReader(settings.sessions)
-        # Open synchronously here so a missing DB file surfaces at
-        # startup rather than on the first session-open. The dashboard
-        # process must create the DB before the bridge starts.
         try:
             asyncio.run(persona_reader.open())
         except FileNotFoundError as exc:
+            # Should not happen now that the DB is seeded above; a missing file
+            # here means the data dir itself is unwritable.
             Console().print(
                 Panel(
-                    str(exc) + "\n\nStart the dashboard at least once before "
-                    "the bridge, or disable persona support with "
-                    "ANGLERFISH_PERSONA__ENABLED=false.",
+                    str(exc) + "\n\nThe sessions data directory is not "
+                    "writable. check /var/lib/anglerfish ownership/perms, or "
+                    "disable persona with ANGLERFISH_PERSONA__ENABLED=false.",
                     title="[red]Persona session-store reader failed to open[/red]",
                 ),
             )

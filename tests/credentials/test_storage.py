@@ -341,12 +341,14 @@ async def test_persisted_data_survives_reopen(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission semantics")
-async def test_database_file_mode_is_0600(tmp_path: Path) -> None:
+async def test_database_file_mode_is_0660(tmp_path: Path) -> None:
+    # 0660 (not 0600): the lure writes this DB and the dashboard reads it as
+    # distinct per-service users sharing the `anglerfish` group (TODO-17).
     db = tmp_path / "creds.db"
     async with CredentialStore(_config(db)):
         pass
     mode = db.stat().st_mode & 0o777
-    assert mode == 0o600
+    assert mode == 0o660
 
 
 async def test_records_decrypt_with_correct_key(tmp_path: Path) -> None:

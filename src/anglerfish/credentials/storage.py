@@ -5,8 +5,10 @@ Repeated attempts of the same tuple update the row's ``last_seen``
 and increment its ``attempt_count``. Deduplication uses HMAC
 fingerprints so the index lookups never have to decrypt rows.
 
-The database file is created with mode ``0o600``: encrypted at rest
-is necessary but not sufficient; on-disk permissions matter too.
+The database file is created with mode ``0o660`` (group ``anglerfish``):
+encrypted at rest is necessary but not sufficient, so on-disk permissions
+matter too, but the lure writes it and the dashboard reads it as distinct
+per-service users, so the shared group needs access (TODO-17).
 """
 
 from __future__ import annotations
@@ -106,9 +108,17 @@ class CredentialStore:
             conn.close()
             raise
         if new_file:
-            # Best-effort: Windows ignores chmod.
+            # 0660, not 0600: the lure creates this DB and the dashboard reads
+            # it, and they run as distinct per-service users in the shared
+            # `anglerfish` group (TODO-17). Content is encrypted at rest, so
+            # the group seeing the ciphertext is acceptable; the key lives in
+            # each service's env, not the group. Best-effort: Windows ignores
+            # chmod. A single-user deployment is unaffected.
             with contextlib.suppress(OSError):
-                os.chmod(path, 0o600)
+                # nosec B103: 0o660 is intentional (group-shared per-service
+                # users); see the comment above. Group is the anglerfish
+                # service users only, not world.
+                os.chmod(path, 0o660)  # nosec B103
         self._conn = conn
 
     async def record_attempt(

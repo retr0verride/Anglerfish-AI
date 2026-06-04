@@ -5,10 +5,14 @@ Documentation=https://github.com/retr0verride/Anglerfish-AI
 # Not Requires=: a shipping outage is non-critical and must not block boot.
 After=network-online.target anglerfish-firewall.service
 Wants=network-online.target anglerfish-firewall.service
+# Skip cleanly until the wizard has written config (the EnvironmentFile below
+# would otherwise fail the unit on the pre-wizard first boot). Mirrors the
+# model-pull unit.
+ConditionPathExists=/etc/anglerfish/anglerfish.env
 
 [Service]
 Type=exec
-User=anglerfish
+User=anglerfish-shipper
 Group=anglerfish
 EnvironmentFile=/etc/anglerfish/anglerfish.env
 ExecStart=/opt/anglerfish/venv/bin/anglerfish audit ship
@@ -45,7 +49,7 @@ SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 # Outbound IP plus AF_UNIX for local name resolution.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-UMask=0077
+UMask=0007
 RemoveIPC=yes
 MemoryMax=256M
 TasksMax=64

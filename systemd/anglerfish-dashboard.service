@@ -9,9 +9,16 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-User=anglerfish
+User=anglerfish-dashboard
 Group=anglerfish
 EnvironmentFile=/etc/anglerfish/anglerfish.env
+# /run/anglerfish for the runtime-overrides handoff (dashboard publishes,
+# bridge polls). systemd creates it as root before dropping privileges
+# (a non-root user cannot mkdir under /run); 2770 + the anglerfish group lets
+# the bridge read it. Preserve so it survives a dashboard restart.
+RuntimeDirectory=anglerfish
+RuntimeDirectoryMode=2770
+RuntimeDirectoryPreserve=yes
 # Closes pre-deploy sweep TODO-2: the previous "uvicorn --factory"
 # invocation passed no args to create_app(settings) and so failed at
 # startup on every clean install since Stage 4. The "anglerfish
@@ -62,7 +69,7 @@ SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 # Only the socket families the service actually uses.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-UMask=0077
+UMask=0007
 RemoveIPC=yes
 # Resource ceilings: a flood cannot OOM / fd-exhaust the box. Conservative
 # defaults; raise per deployment.

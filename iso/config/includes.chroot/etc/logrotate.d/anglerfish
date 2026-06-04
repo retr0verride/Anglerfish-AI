@@ -22,7 +22,7 @@
     notifempty
     compress
     delaycompress
-    create 0640 anglerfish anglerfish
+    create 0660 anglerfish anglerfish
     prerotate
         /usr/bin/chattr -a /var/log/anglerfish/audit.jsonl 2>/dev/null || true
     endscript

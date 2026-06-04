@@ -149,8 +149,16 @@ class LureConfig(BaseModel):
         description="Disconnect after N consecutive missed keepalives.",
     )
 
-    # Future HTTP/HTTPS lure (TODO-1 in docs/TODO.md, stub at lure/http.py)
-    http_lure_enabled: bool = Field(default=False)
+    # Reserved for the future HTTP/HTTPS lure (TODO-1 in docs/TODO.md, stub at
+    # lure/http.py). Not implemented: nothing starts an HTTP listener, so
+    # enabling the flag has no effect today.
+    http_lure_enabled: bool = Field(
+        default=False,
+        description=(
+            "Reserved (TODO-1): the HTTP/HTTPS lure is not implemented in this "
+            "build; enabling has no effect yet."
+        ),
+    )
     http_lure_listen_port: int = Field(default=8080, ge=1, le=65535)
 
     @model_validator(mode="after")

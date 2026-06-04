@@ -1,13 +1,36 @@
 #!/bin/sh
-# Create the unprivileged `anglerfish` user used by every systemd unit.
+# Create the per-service users used by the systemd units (TODO-17).
+#
+# Each long-running service runs as its own UID so a compromise of one
+# (combined with ProtectProc=invisible in the units) cannot see or signal the
+# others. They share the `anglerfish` group, and the shared state dirs are
+# group-writable + setgid, so the bridge/lure/dashboard can all append to the
+# audit log and hand off the sessions DB / runtime overrides through the
+# group. The base `anglerfish` user owns the dirs and runs the stateless
+# model-pull oneshot.
 
 set -e
 
 addgroup --system anglerfish
-adduser  --system --ingroup anglerfish --home /var/lib/anglerfish \
-         --no-create-home --shell /usr/sbin/nologin anglerfish
 
-install -d -o anglerfish -g anglerfish -m 0750 /var/lib/anglerfish
-install -d -o anglerfish -g anglerfish -m 0750 /var/log/anglerfish
-install -d -o root       -g root       -m 0755 /etc/anglerfish
-install -d -o root       -g root       -m 0755 /etc/anglerfish/nftables
+# Base identity: owns the shared dirs; runs the stateless model-pull oneshot.
+adduser --system --ingroup anglerfish --home /var/lib/anglerfish \
+        --no-create-home --shell /usr/sbin/nologin anglerfish
+
+# Per-service identities, all in the shared `anglerfish` group.
+for svc in bridge lure dashboard shipper geo; do
+    adduser --system --ingroup anglerfish --no-create-home \
+            --shell /usr/sbin/nologin "anglerfish-${svc}"
+done
+
+# Shared state: setgid (2) so files created by any service inherit the
+# `anglerfish` group, group-writable (770) so every service user can write.
+# Combined with the units' UMask=0007 this yields 0660 files the group shares.
+install -d -o anglerfish -g anglerfish -m 2770 /var/lib/anglerfish
+install -d -o anglerfish -g anglerfish -m 2770 /var/log/anglerfish
+
+# Config + nftables stay root-owned; services receive their config via the
+# systemd EnvironmentFile (read by systemd as root before dropping privileges)
+# and never read /etc/anglerfish directly.
+install -d -o root -g root -m 0755 /etc/anglerfish
+install -d -o root -g root -m 0755 /etc/anglerfish/nftables

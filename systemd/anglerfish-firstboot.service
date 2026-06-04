@@ -39,7 +39,7 @@ ExecStartPost=/bin/systemctl start anglerfish-geo-update.service
 #
 # Leading `-` makes the whole step non-fatal: an unsupported filesystem
 # or chmod failure must not abort firstboot.
-ExecStartPost=-/bin/sh -c 'install -d -m 0750 -o anglerfish -g anglerfish /var/log/anglerfish && touch /var/log/anglerfish/audit.jsonl && chown anglerfish:anglerfish /var/log/anglerfish/audit.jsonl && chmod 0640 /var/log/anglerfish/audit.jsonl && chattr +a /var/log/anglerfish/audit.jsonl 2>/dev/null || true'
+ExecStartPost=-/bin/sh -c 'install -d -m 2770 -o anglerfish -g anglerfish /var/log/anglerfish && touch /var/log/anglerfish/audit.jsonl && chown anglerfish:anglerfish /var/log/anglerfish/audit.jsonl && chmod 0660 /var/log/anglerfish/audit.jsonl && chattr +a /var/log/anglerfish/audit.jsonl 2>/dev/null || true'
 
 [Install]
 WantedBy=multi-user.target
