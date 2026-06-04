@@ -61,6 +61,18 @@ record decrypts with the new key. The rotation tool refuses to run
 if a previous rotation left a `.new` or `.bak` file in place, clean
 those up first if so.
 
+**Crash recovery (mythos L6).** The final swap is two `rename`s. If the
+process is killed between them, `credentials.db` is gone and the original
+sits at `credentials.db.bak` (still encrypted under the OLD key). The tool
+will refuse to re-run because the `.bak` exists. Recover by hand:
+
+```bash
+mv /var/lib/anglerfish/credentials.db.bak /var/lib/anglerfish/credentials.db
+```
+
+then re-run `rotate-key`. No data is lost: the backup decrypts under the
+old key, which is what `rotate-key` expects as input.
+
 ### Query captured credentials
 
 ```bash

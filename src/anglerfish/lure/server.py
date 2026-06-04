@@ -677,6 +677,13 @@ async def _process_handler(
     # Interactive shell mode: read lines from stdin and dispatch.
     process.stdout.write(_render_prompt(lure_session))
 
+    # Mythos L2 (accepted residual): asyncssh buffers a full line before the
+    # max_command_chars cap below applies, so an attacker can pin up to the
+    # channel recv window (~2 MiB) of buffer with a newline-less line. That
+    # per-connection buffer is bounded by asyncssh flow control, and the
+    # aggregate is bounded by the global session cap (mythos M2,
+    # LureConfig.max_concurrent_connections), so the memory ceiling is
+    # max_concurrent_connections x window, not unbounded.
     try:
         async for raw_line in process.stdin:
             line = raw_line.rstrip("\r\n")
