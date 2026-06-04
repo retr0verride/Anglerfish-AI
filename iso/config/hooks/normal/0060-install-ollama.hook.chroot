@@ -63,9 +63,25 @@ else
     echo "[anglerfish] but the installer is not checksum-verified." >&2
 fi
 
+# The v${OLLAMA_VERSION} Linux binary ships as a .tar.zst, and the upstream
+# installer hard-requires zstd to extract it (it errors out and exits
+# otherwise). The base chroot has no zstd, so pull it here. This stays on
+# the opt-in path, so the default --without-ollama image is not burdened.
+if ! command -v zstd >/dev/null 2>&1; then
+    echo "[anglerfish] installing zstd (required to extract the Ollama .tar.zst)..."
+    # live-build clears the chroot apt lists after the package-list install
+    # and before hooks run, so refresh the index first or zstd has no
+    # installation candidate. Scoped to the opt-in path, so the default
+    # --without-ollama image neither installs zstd nor re-fetches the index.
+    apt-get update
+    apt-get install -y --no-install-recommends zstd
+fi
+
 echo "[anglerfish] installing Ollama v${OLLAMA_VERSION} on-host (operator opted in)..."
 # install.sh appends ?version=$OLLAMA_VERSION to its download URLs, pinning
-# the binary version to match the script.
+# the binary version to match the script. In a chroot `systemctl
+# is-system-running` reports offline, so the installer writes the binary,
+# ollama user, and unit file but skips the service start (we enable it below).
 OLLAMA_VERSION="${OLLAMA_VERSION}" sh "${script_path}"
 rm -f "${script_path}"
 
