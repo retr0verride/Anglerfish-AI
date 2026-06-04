@@ -50,12 +50,15 @@ grep -E '^ANGLERFISH_(DASHBOARD__SESSION_SECRET|CREDENTIALS__ENCRYPTION_KEY|BRID
   in a closed lab. Set it.
 
 ```bash
-# Verify the env file itself isn't world-readable.
+# Verify the env file itself isn't world- or group-readable.
 stat -c '%a %U:%G %n' /etc/anglerfish/anglerfish.env
-# Want: 640 root:anglerfish /etc/anglerfish/anglerfish.env
+# Want: 600 root:root /etc/anglerfish/anglerfish.env
 ```
 
-- `[ ]` Env file mode is `0640`, group `anglerfish`.
+- `[ ]` Env file mode is `0600`, root-owned. systemd reads it as root via
+  `EnvironmentFile=` before dropping to each service's user, so the services
+  never open it. keeping it root-only means the per-service users cannot read
+  the secrets directly.
 
 ---
 
@@ -139,26 +142,34 @@ sudo -u anglerfish ANGLERFISH_LOG_LEVEL=INFO \
 
 ## 5. Filesystem & permissions
 
+# Each service runs as its own user (anglerfish-bridge, -lure, -dashboard,
+# -shipper, -geo) in the shared `anglerfish` group; the state dirs are setgid
+# + group-writable so the services share files through the group.
+
 ```bash
-# Data directory
+# Data directory: setgid (2) so files inherit the anglerfish group.
 stat -c '%a %U:%G %n' /var/lib/anglerfish
-# Want: 750 anglerfish:anglerfish
+# Want: 2770 anglerfish:anglerfish
 
-# Credentials DB
+# Credentials DB: written by the bridge, group-shared so the dashboard reads it.
 stat -c '%a %U:%G %n' /var/lib/anglerfish/credentials.db 2>/dev/null
-# Want: 600 anglerfish:anglerfish (created on first credential write)
+# Want: 660 anglerfish-bridge:anglerfish (created on first credential write)
 
-# Audit log
+# Lure host keys: private to the lure user.
+stat -c '%a %U:%G %n' /var/lib/anglerfish/lure-keys
+# Want: 700 anglerfish-lure:anglerfish
+
+# Audit log: group-writable so bridge/lure/dashboard can all append.
 stat -c '%a %U:%G %n' /var/log/anglerfish/audit.jsonl
-# Want: 640 anglerfish:anglerfish
+# Want: 660 anglerfish:anglerfish
 
 # Append-only attribute (ext2/3/4, btrfs, xfs)
 sudo lsattr /var/log/anglerfish/audit.jsonl
 # Want: -----a-------------- /var/log/anglerfish/audit.jsonl
 ```
 
-- `[ ]` `/var/lib/anglerfish` is `0750 anglerfish:anglerfish`.
-- `[ ]` `credentials.db` (if it exists yet) is `0600 anglerfish:anglerfish`.
+- `[ ]` `/var/lib/anglerfish` is `2770 anglerfish:anglerfish` (setgid).
+- `[ ]` `credentials.db` (if it exists yet) is `0660 anglerfish-bridge:anglerfish`.
 - `[ ]` `audit.jsonl` has the `a` attribute. If `lsattr` shows no `a`,
   you're either on a filesystem that doesn't support it (zfs, nfs, etc.)
   or the firstboot ExecStartPost didn't run. Try
