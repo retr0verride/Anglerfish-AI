@@ -206,6 +206,13 @@ def rotate_key(
     # but two renames in a row are not transactional: a crash between them
     # leaves db_path missing but recoverable from backup_path. Both files
     # were folded above, so each move carries the whole database.
+    #
+    # Mythos L6 recovery: if the process dies between the two moves, db_path
+    # is gone and the original sits at <db>.bak. Re-running `rotate-key`
+    # refuses (it will not overwrite an existing .bak), so recover manually:
+    #   mv credentials.db.bak credentials.db   # original, still on the OLD key
+    # then re-run rotation. No data is lost (the backup decrypts under the
+    # old key). Also documented in docs/RUNBOOK.md.
     try:
         shutil.move(str(db_path), str(backup_path))
         shutil.move(str(new_path), str(db_path))

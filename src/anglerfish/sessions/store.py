@@ -102,7 +102,6 @@ class SessionStore:
     def _open_locked(self) -> None:
         path = self._config.database_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        new_file = not path.exists()
         conn = sqlite3.connect(
             str(path),
             isolation_level=None,  # autocommit; WAL handles concurrency
@@ -115,19 +114,19 @@ class SessionStore:
         except sqlite3.Error:
             conn.close()
             raise
-        if new_file:
-            # 0660, not 0600: the services run as distinct per-service users
-            # in the shared `anglerfish` group (the bridge reads this DB for
-            # personas while the dashboard writes it), so the group needs
-            # access. The parent dir is 2770 + the file inherits the
-            # anglerfish group, and filesystem perms remain the confidentiality
-            # boundary (TODO-17). A single-user deployment is unaffected (the
-            # group has one member).
-            with contextlib.suppress(OSError):
-                # nosec B103: 0o660 is intentional (group-shared per-service
-                # users); see the comment above. Group is the anglerfish
-                # service users only, not world.
-                os.chmod(path, 0o660)  # nosec B103
+        # 0660, not 0600: the services run as distinct per-service users
+        # in the shared `anglerfish` group (the bridge reads this DB for
+        # personas while the dashboard writes it), so the group needs
+        # access. The parent dir is 2770 + the file inherits the
+        # anglerfish group, and filesystem perms remain the confidentiality
+        # boundary (TODO-17). A single-user deployment is unaffected (the
+        # group has one member). Mythos L5: applied on every open, not only
+        # creation, so a pre-existing file with looser permissions is fixed.
+        with contextlib.suppress(OSError):
+            # nosec B103: 0o660 is intentional (group-shared per-service
+            # users); see the comment above. Group is the anglerfish
+            # service users only, not world.
+            os.chmod(path, 0o660)  # nosec B103
         self._conn = conn
 
     async def aclose(self) -> None:

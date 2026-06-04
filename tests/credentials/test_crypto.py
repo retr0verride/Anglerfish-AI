@@ -102,3 +102,16 @@ def test_fingerprint_rejects_non_string() -> None:
     cipher = CredentialCipher(_key())
     with pytest.raises(TypeError):
         cipher.fingerprint(b"bytes")  # type: ignore[arg-type]
+
+
+def test_encrypt_decrypt_round_trips_lone_surrogate() -> None:
+    """Mythos L4: a captured value with a lone UTF-16 surrogate must not
+    crash encrypt and must round-trip back unchanged."""
+    import base64
+
+    from anglerfish.credentials.crypto import CredentialCipher
+
+    cipher = CredentialCipher(base64.b64encode(b"k" * 32).decode("ascii"))
+    value = "\ud800broken-surrogate"
+    ct, nonce = cipher.encrypt(value)
+    assert cipher.decrypt(ct, nonce) == value

@@ -206,3 +206,21 @@ def test_recent_map_hard_capped_under_distinct_ip_flood() -> None:
         ip = f"10.{(i >> 16) & 255}.{(i >> 8) & 255}.{i & 255}"
         lim.admit(ip, now=1000.0)
     assert len(lim._recent) <= _RECENT_SWEEP_THRESHOLD + 1
+
+
+def test_global_concurrent_cap_blocks_distributed_flood() -> None:
+    """Mythos M2: the global ceiling rejects new sessions across DIFFERENT
+    source IPs once the aggregate live count is reached, even when each IP
+    is under its per-IP cap."""
+    lim = _PerIPLimiter(max_concurrent=3, max_rpm=1000, max_total=2)
+    ok1, _ = lim.admit("10.0.0.1")
+    ok2, _ = lim.admit("10.0.0.2")
+    assert ok1  # two distinct IPs, both under per-IP cap
+    assert ok2
+    ok3, reason = lim.admit("10.0.0.3")  # third distinct IP -> global cap
+    assert ok3 is False
+    assert reason == "global_concurrent"
+    # releasing one frees a global slot
+    lim.release("10.0.0.1")
+    ok4, _ = lim.admit("10.0.0.3")
+    assert ok4 is True

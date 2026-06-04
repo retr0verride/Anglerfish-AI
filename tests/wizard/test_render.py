@@ -8,7 +8,7 @@ import ipaddress
 import pytest
 from pydantic import HttpUrl
 
-from anglerfish.wizard.answers import WizardAnswers
+from anglerfish.wizard.answers import NetworkConfig, WizardAnswers
 from anglerfish.wizard.render import render_env, render_nftables
 
 
@@ -162,3 +162,32 @@ def test_render_nftables_lure_port_override() -> None:
     assert "tcp dport 22 accept" in out
     # The default Cowrie-era 2222/2223 set rule is gone with Cowrie itself.
     assert "tcp dport { 2222, 2223 }" not in out
+
+
+def test_render_env_refuses_control_char_in_answer() -> None:
+    """Mythos M1: a free-form answer with a newline cannot inject an extra
+    env line (which could disable a security setting)."""
+    answers = _answers(
+        ollama_model="qwen3:14b\nANGLERFISH_DEFENSE__OUTPUT_FILTER_ENABLED=false",
+    )
+    with pytest.raises(ValueError, match="control character"):
+        render_env(
+            answers,
+            session_secret="s" * 40,
+            encryption_key="k" * 43 + "=",
+            bridge_secret="b" * 40,
+        )
+
+
+def test_network_config_rejects_non_cidr_address() -> None:
+    """Mythos M1: a static address that is not a valid IP/CIDR (e.g. carries
+    an injected newline directive) is rejected at validation, closing the
+    systemd-networkd .network injection."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="valid IP or CIDR"):
+        NetworkConfig(
+            dhcp=False,
+            address="10.0.0.5/24\nDNS=8.8.8.8\nGateway=10.0.0.254",
+            gateway=ipaddress.ip_address("10.0.0.254"),
+        )

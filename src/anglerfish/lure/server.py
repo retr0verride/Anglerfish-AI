@@ -212,9 +212,16 @@ class _PerIPLimiter:
     thread so no locking is required.
     """
 
-    def __init__(self, *, max_concurrent: int, max_rpm: int) -> None:
+    def __init__(self, *, max_concurrent: int, max_rpm: int, max_total: int = 1_000_000) -> None:
         self._max_concurrent = max_concurrent
         self._max_rpm = max_rpm
+        # Mythos M2: a global ceiling on live sessions across ALL source IPs.
+        # The per-IP cap does not bound a distributed flood (many IPs x the
+        # per-IP cap), and each live session pins an asyncssh channel + state;
+        # without an aggregate cap a botnet/Tor flood exhausts memory/FDs and
+        # OOM-kills the listener. _total tracks the aggregate live count.
+        self._max_total = max_total
+        self._total = 0
         self._concurrent: dict[str, int] = {}
         self._recent: dict[str, deque[float]] = {}
 
@@ -222,10 +229,13 @@ class _PerIPLimiter:
         """Decide whether to accept a new connection from ``source_ip``.
 
         Returns ``(allowed, reason)``. ``reason`` is empty on accept
-        and one of ``"per_ip_concurrent"`` / ``"per_ip_rpm"`` on
-        reject so the caller can audit the kind of throttle that
-        fired.
+        and one of ``"global_concurrent"`` / ``"per_ip_concurrent"`` /
+        ``"per_ip_rpm"`` on reject so the caller can audit the kind of
+        throttle that fired.
         """
+        # Global ceiling first: it is the OOM backstop independent of source.
+        if self._total >= self._max_total:
+            return False, "global_concurrent"
         if self._concurrent.get(source_ip, 0) >= self._max_concurrent:
             return False, "per_ip_concurrent"
 
@@ -242,9 +252,10 @@ class _PerIPLimiter:
         if len(recent) >= self._max_rpm:
             return False, "per_ip_rpm"
 
-        # Commit: bump concurrent + record timestamp. The release
-        # path lives in :meth:`release` and runs on disconnect.
+        # Commit: bump concurrent + global total + record timestamp. The
+        # release path lives in :meth:`release` and runs on disconnect.
         self._concurrent[source_ip] = self._concurrent.get(source_ip, 0) + 1
+        self._total += 1
         recent.append(ts)
         return True, ""
 
@@ -255,6 +266,8 @@ class _PerIPLimiter:
             self._concurrent.pop(source_ip, None)
         else:
             self._concurrent[source_ip] = current - 1
+        if self._total > 0:
+            self._total -= 1
 
     def _sweep_recent(self, cutoff: float) -> None:
         """Bound the ``_recent`` map: drop expired windows, then hard-cap.
@@ -664,6 +677,13 @@ async def _process_handler(
     # Interactive shell mode: read lines from stdin and dispatch.
     process.stdout.write(_render_prompt(lure_session))
 
+    # Mythos L2 (accepted residual): asyncssh buffers a full line before the
+    # max_command_chars cap below applies, so an attacker can pin up to the
+    # channel recv window (~2 MiB) of buffer with a newline-less line. That
+    # per-connection buffer is bounded by asyncssh flow control, and the
+    # aggregate is bounded by the global session cap (mythos M2,
+    # LureConfig.max_concurrent_connections), so the memory ceiling is
+    # max_concurrent_connections x window, not unbounded.
     try:
         async for raw_line in process.stdin:
             line = raw_line.rstrip("\r\n")
@@ -937,6 +957,7 @@ class LureServer:
         self._limiter = _PerIPLimiter(
             max_concurrent=config.per_ip_max_concurrent_connections,
             max_rpm=config.per_ip_max_connections_per_minute,
+            max_total=config.max_concurrent_connections,
         )
         self._acceptor: asyncssh.SSHAcceptor | None = None
         self._background: set[asyncio.Task[Any]] = set()

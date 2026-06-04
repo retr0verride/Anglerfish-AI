@@ -57,6 +57,20 @@ class FetchError(RuntimeError):
     """Raised when the fetcher refuses to swap a stale database."""
 
 
+def _safe_http_error(exc: httpx.HTTPError) -> str:
+    """Describe an httpx error WITHOUT the request URL.
+
+    Mythos H3: the MaxMind license key rides in the download URL's query
+    string (``?license_key=...``). ``str(exc)`` for an ``HTTPStatusError``
+    embeds that URL, and the caller writes the FetchError message verbatim
+    into the audit log (which is shipped off-box). Return only the status
+    code / exception type so the secret never reaches a durable log.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
+
+
 @dataclass(frozen=True)
 class FetchResult:
     """Outcome of installing one GeoLite2 edition.
@@ -161,7 +175,7 @@ def _fetch_one(
         expected_sha = sha_resp.text.split()[0].strip().lower()
     except httpx.HTTPError as exc:
         raise FetchError(
-            f"{edition}: sha256 manifest fetch failed: {type(exc).__name__}: {exc}",
+            f"{edition}: sha256 manifest fetch failed: {_safe_http_error(exc)}",
         ) from exc
     except IndexError as exc:
         raise FetchError(f"{edition}: sha256 manifest was empty") from exc
@@ -192,7 +206,7 @@ def _fetch_one(
                     out.write(chunk)
         except httpx.HTTPError as exc:
             raise FetchError(
-                f"{edition}: archive download failed: {type(exc).__name__}: {exc}",
+                f"{edition}: archive download failed: {_safe_http_error(exc)}",
             ) from exc
 
         if actual_sha.hexdigest() != expected_sha:

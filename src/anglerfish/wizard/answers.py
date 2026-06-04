@@ -29,6 +29,7 @@ Two kinds of secrets are handled differently:
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 from typing import Self
 
@@ -40,6 +41,7 @@ from pydantic import (
     IPvAnyAddress,
     SecretStr,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -59,6 +61,23 @@ class NetworkConfig(BaseModel):
     )
     gateway: IPvAnyAddress | None = Field(default=None)
     dns: tuple[IPvAnyAddress, ...] = Field(default=())
+
+    @field_validator("address")
+    @classmethod
+    def _address_is_valid_cidr(cls, value: str | None) -> str | None:
+        """Mythos M1: ``address`` is interpolated into a systemd-networkd
+        ``.network`` file (``Address={address}``). A newline would inject
+        extra ``DNS=``/``Gateway=`` directives (egress MITM). A real address
+        is a valid IP/CIDR, which cannot contain control characters."""
+        if value is None:
+            return None
+        try:
+            ipaddress.ip_interface(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"address must be a valid IP or CIDR (e.g. 10.0.0.5/24), got {value!r}",
+            ) from exc
+        return value
 
     @model_validator(mode="after")
     def _static_needs_address_and_gateway(self) -> Self:

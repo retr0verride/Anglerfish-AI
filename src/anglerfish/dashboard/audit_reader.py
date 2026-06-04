@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,18 +43,34 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 
-def iter_events(path: Path) -> Iterator[dict[str, Any]]:
+def iter_events(path: Path, *, max_bytes: int | None = None) -> Iterator[dict[str, Any]]:
     """Yield parsed audit-log events newest-first.
 
     Returns an empty iterator if the file does not exist. Lines
     that fail to parse as JSON are logged at warning and skipped;
     the audit log MUST stay readable even when a single line is
     truncated.
+
+    Mythos M5: ``max_bytes`` bounds the read to the last ``max_bytes``
+    bytes (the first, possibly-partial, line is dropped). The audit log
+    grows unbounded between external rotations, and the health probes
+    poll this on every dashboard tick; a bound keeps a multi-GB log from
+    being slurped fully into memory per request. ``None`` (the default)
+    reads the whole file -- used by the range/export consumers that need
+    completeness.
     """
     if not path.is_file():
         return
     try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
+        if max_bytes is not None and path.stat().st_size > max_bytes:
+            with path.open("rb") as fp:
+                fp.seek(-max_bytes, 2)
+                chunk = fp.read()
+            decoded = chunk.decode("utf-8", errors="replace")
+            newline = decoded.find("\n")
+            raw = decoded[newline + 1 :] if newline != -1 else decoded
+        else:
+            raw = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         _logger.warning("audit_reader: %s open failed: %s", path, exc)
         return
@@ -117,6 +133,14 @@ def parse_event_timestamp(event: dict[str, Any]) -> datetime | None:
     if not isinstance(raw, str):
         return None
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    # Mythos M7: a hand-edited or forwarded line may omit the UTC offset,
+    # yielding a naive datetime. Comparing it against the tz-aware bounds in
+    # iter_events_in_range (and health._command_rate_per_minute) raises an
+    # uncaught TypeError -> 500 on the export/health endpoints. Treat a
+    # naive ts as UTC (what the writer always emits).
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed

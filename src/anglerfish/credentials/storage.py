@@ -96,7 +96,6 @@ class CredentialStore:
     def _open_locked(self) -> None:
         path = self._config.database_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        new_file = not path.exists()
         conn = sqlite3.connect(
             str(path),
             isolation_level=None,
@@ -107,18 +106,19 @@ class CredentialStore:
         except sqlite3.Error:
             conn.close()
             raise
-        if new_file:
-            # 0660, not 0600: the lure creates this DB and the dashboard reads
-            # it, and they run as distinct per-service users in the shared
-            # `anglerfish` group (TODO-17). Content is encrypted at rest, so
-            # the group seeing the ciphertext is acceptable; the key lives in
-            # each service's env, not the group. Best-effort: Windows ignores
-            # chmod. A single-user deployment is unaffected.
-            with contextlib.suppress(OSError):
-                # nosec B103: 0o660 is intentional (group-shared per-service
-                # users); see the comment above. Group is the anglerfish
-                # service users only, not world.
-                os.chmod(path, 0o660)  # nosec B103
+        # 0660, not 0600: the lure creates this DB and the dashboard reads
+        # it, and they run as distinct per-service users in the shared
+        # `anglerfish` group (TODO-17). Content is encrypted at rest, so
+        # the group seeing the ciphertext is acceptable; the key lives in
+        # each service's env, not the group. Best-effort: Windows ignores
+        # chmod. A single-user deployment is unaffected. Mythos L5: applied
+        # on every open, not only creation, so a pre-existing file with
+        # looser permissions is corrected.
+        with contextlib.suppress(OSError):
+            # nosec B103: 0o660 is intentional (group-shared per-service
+            # users); see the comment above. Group is the anglerfish
+            # service users only, not world.
+            os.chmod(path, 0o660)  # nosec B103
         self._conn = conn
 
     async def record_attempt(

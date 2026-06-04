@@ -162,7 +162,18 @@ class AuditLog:
                     # reordered by a writer thread). Audit volume is
                     # security events, not per-packet, so the stall is bounded
                     # and rare. Offloading to a thread/queue would trade that
-                    # guarantee for throughput we do not need.
+                    # guarantee for throughput we do not need, AND would break
+                    # the durability-on-return that callers like the wizard
+                    # rely on (record then reboot).
+                    #
+                    # Mythos M3 flagged this as a flood DoS (the lure records
+                    # per login attempt + per command). That rate is now
+                    # bounded at the source: the per-IP rpm limiter plus the
+                    # global concurrent-session cap (LureConfig
+                    # max_concurrent_connections, mythos M2) cap how many
+                    # sessions can drive audit writes at once, so the
+                    # aggregate fsync rate stays bounded under a flood and the
+                    # durable design is preserved.
                     os.fsync(fp.fileno())
             except OSError as exc:
                 _logger.warning(

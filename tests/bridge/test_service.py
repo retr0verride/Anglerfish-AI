@@ -1763,3 +1763,19 @@ async def test_stream_partial_error_runs_output_filter(
         await service.aclose()
 
     assert any(e[0] == "bridge.defense_fired" for e in audit.events)
+
+
+def test_session_start_request_rejects_control_chars_in_source_ip() -> None:
+    """Mythos L1: source_ip/username reach the audit log; an embedded
+    newline (audit-line forging) is rejected, while a valid IP and the
+    "unknown" sentinel are accepted."""
+    import pydantic
+
+    from anglerfish.bridge.server import SessionStartRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        SessionStartRequest(source_ip="1.2.3.4\ninjected")
+    with pytest.raises(pydantic.ValidationError):
+        SessionStartRequest(source_ip="1.2.3.4", username="root\nx")
+    assert SessionStartRequest(source_ip="10.0.0.5").source_ip == "10.0.0.5"
+    assert SessionStartRequest(source_ip="unknown").source_ip == "unknown"

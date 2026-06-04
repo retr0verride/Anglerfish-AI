@@ -44,6 +44,12 @@ __all__ = [
 
 _OLLAMA_PROBE_TIMEOUT_S = 2.0
 _SESSION_RATE_WINDOW_MIN = 5
+# Mythos M5: the health probes only need recent audit events (latest
+# integrity/warmup status, last few minutes of command rate). Bound the
+# read to the tail so a multi-GB audit log is not slurped fully into memory
+# on every dashboard health poll. ~4 MB is tens of thousands of recent
+# events -- far more than any health window inspects.
+_HEALTH_TAIL_BYTES = 4 * 1024 * 1024
 _COMMAND_EVENT_TYPES = frozenset(
     {
         "bridge.command_native",
@@ -157,7 +163,7 @@ async def _probe_ollama(
 
 def _latest_integrity_check(audit_path: Path) -> dict[str, Any]:
     """Find the most recent integrity-check event in the audit log."""
-    for event in iter_events(audit_path):
+    for event in iter_events(audit_path, max_bytes=_HEALTH_TAIL_BYTES):
         event_type = event.get("event_type")
         if event_type not in _INTEGRITY_EVENT_TYPES:
             continue
@@ -186,7 +192,7 @@ def _latest_warmup_per_role(audit_path: Path) -> dict[str, dict[str, Any]]:
     with no recorded warmup yet are omitted from the result.
     """
     latest: dict[str, dict[str, Any]] = {}
-    for event in iter_events(audit_path):
+    for event in iter_events(audit_path, max_bytes=_HEALTH_TAIL_BYTES):
         event_type = event.get("event_type")
         if event_type not in _WARMUP_EVENT_TYPES:
             continue
@@ -225,7 +231,7 @@ def _wasting_stats(audit_path: Path, static_strategy: str) -> dict[str, Any]:
     sessions_exhausted: set[str] = set()
     sessions_closed: set[str] = set()
 
-    for event in iter_events(audit_path):
+    for event in iter_events(audit_path, max_bytes=_HEALTH_TAIL_BYTES):
         event_type = event.get("event_type")
         if event_type not in (
             _WASTING_APPLIED_EVENT,
@@ -269,7 +275,7 @@ def _command_rate_per_minute(audit_path: Path, window_minutes: int) -> float:
     now = datetime.now(tz=UTC)
     cutoff = now - timedelta(minutes=window_minutes)
     count = 0
-    for event in iter_events(audit_path):
+    for event in iter_events(audit_path, max_bytes=_HEALTH_TAIL_BYTES):
         event_type = event.get("event_type")
         if event_type not in _COMMAND_EVENT_TYPES:
             continue

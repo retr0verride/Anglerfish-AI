@@ -18,6 +18,7 @@ from anglerfish import __version__
 from anglerfish.audit import AuditLog
 from anglerfish.callback.routes import build_callback_router
 from anglerfish.config.settings import AnglerfishSettings
+from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.sessions.reader import SessionStoreReader
 
 __all__ = ["create_callback_app"]
@@ -64,5 +65,10 @@ def create_callback_app(
     app.state.settings = settings
     app.state.session_store_reader = reader_instance
     app.state.audit = audit_log
+    # Mythos M6: per-source-IP rate limit in front of /cb/{token_id}. The
+    # receiver is internet-facing; a flood of valid-shaped IDs would
+    # otherwise drive sustained DB reads + fsync'd audit writes. 30/min
+    # steady (burst 30) is generous for legitimate honeytoken callbacks.
+    app.state.callback_limiter = LoginRateLimiter(capacity=30, refill_per_second=0.5)
     app.include_router(build_callback_router())
     return app

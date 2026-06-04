@@ -318,3 +318,22 @@ def test_extract_refuses_decompression_bomb(
     # Nothing was extracted past the cap.
     extracted = archive.parent / "extracted"
     assert not list(extracted.rglob("*.mmdb"))
+
+
+def test_fetch_http_error_does_not_leak_license_key(tmp_path: Path) -> None:
+    """Mythos H3: a non-2xx response (e.g. expired key -> 401) must not put
+    the license key (which rides in the request URL) into the FetchError
+    message, which the CLI writes verbatim into the off-box-shipped audit
+    log."""
+    secret = "SUPERSECRETKEY9999"
+    cfg = _config(tmp_path, key=secret)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        # 401 for everything, as MaxMind returns for an invalid/expired key.
+        return httpx.Response(401, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+    with pytest.raises(FetchError) as ei:
+        fetch_geolite_databases(cfg, http_client=client)
+    assert secret not in str(ei.value)
+    assert "401" in str(ei.value)

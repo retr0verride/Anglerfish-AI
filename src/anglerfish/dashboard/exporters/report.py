@@ -23,9 +23,12 @@ from xml.sax.saxutils import escape
 
 __all__ = ["build_pdf_report"]
 
-# Bound the per-turn text rendered into the PDF. The session store
-# already caps command/response length; this is a second, report-local
-# guard so a maxed-out turn cannot blow up a single table cell.
+# Bound the per-turn text rendered into the PDF. Mythos L8: do NOT assume
+# the session store caps command/response length -- CommandTurn.command /
+# .response carry no max_length and the turns columns are unbounded TEXT;
+# only the 200-char truncation at audit-write time bounds the lure path,
+# not turns persisted via other writers. So this report-local cap is the
+# primary guard against a maxed-out turn blowing up a single table cell.
 _TURN_TEXT_CAP = 2000
 _MAX_TURNS = 200
 
