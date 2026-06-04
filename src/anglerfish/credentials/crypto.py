@@ -68,7 +68,12 @@ class CredentialCipher:
         if not isinstance(plaintext, str):
             raise TypeError(f"plaintext must be str, got {type(plaintext).__name__}")
         nonce = os.urandom(_NONCE_SIZE)
-        ciphertext = self._aes.encrypt(nonce, plaintext.encode("utf-8"), None)
+        # Mythos L4: a captured credential value can contain a lone UTF-16
+        # surrogate (e.g. an attacker username "\ud800"); plain
+        # str.encode("utf-8") raises UnicodeEncodeError, which would drop the
+        # whole record. surrogatepass encodes it (and decrypt round-trips it
+        # back), so capture never crashes on a malformed value.
+        ciphertext = self._aes.encrypt(nonce, plaintext.encode("utf-8", "surrogatepass"), None)
         return ciphertext, nonce
 
     def decrypt(self, ciphertext: bytes, nonce: bytes) -> str:
@@ -85,7 +90,9 @@ class CredentialCipher:
         except InvalidTag as exc:
             raise ValueError("credentials ciphertext authentication failed") from exc
         try:
-            return plaintext_bytes.decode("utf-8")
+            # surrogatepass mirrors encrypt() so a lone-surrogate value
+            # round-trips faithfully (mythos L4).
+            return plaintext_bytes.decode("utf-8", "surrogatepass")
         except UnicodeDecodeError as exc:
             raise ValueError("decrypted credentials value is not valid UTF-8") from exc
 

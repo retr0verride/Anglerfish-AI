@@ -32,7 +32,7 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -154,6 +154,19 @@ class SessionStartRequest(BaseModel):
 
     source_ip: str = Field(..., min_length=1, max_length=64)
     username: str = Field(default="root", min_length=1, max_length=64)
+
+    @field_validator("source_ip", "username")
+    @classmethod
+    def _no_control_chars(cls, value: str) -> str:
+        # Mythos L1: both fields are written verbatim into audit lines. The
+        # bridge is loopback-only and the lure is the sole caller, but reject
+        # control characters here so a buggy or compromised lure cannot forge
+        # audit records via an embedded newline. (source_ip is an IP literal
+        # or the sentinel "unknown" in practice, so this rejects nothing
+        # legitimate.)
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+            raise ValueError("must not contain control characters")
+        return value
 
 
 class SessionStartResponse(BaseModel):
