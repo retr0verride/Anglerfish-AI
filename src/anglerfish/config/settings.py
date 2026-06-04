@@ -71,6 +71,13 @@ class AnglerfishSettings(BaseSettings):
     log_json: bool = True
     data_dir: Path = Path("/var/lib/anglerfish")
 
+    # Network interface names the wizard records (ANGLERFISH_BAIT_INTERFACE /
+    # ANGLERFISH_SERVICE_INTERFACE). The lure resolves the bait interface's
+    # current IPv4 at startup when listen_host is the unspecified address,
+    # so a DHCP bait NIC (whose IP is unknown at wizard time) still binds.
+    bait_interface: str | None = None
+    service_interface: str | None = None
+
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     dashboard: DashboardConfig
     bridge: BridgeConfig = Field(default_factory=BridgeConfig)
