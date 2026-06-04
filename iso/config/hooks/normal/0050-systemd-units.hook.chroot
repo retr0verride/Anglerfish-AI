@@ -26,15 +26,14 @@ for unit in ${UNITS}; do
     fi
 done
 
-# Geo database directory must be writable by the anglerfish user; the
-# fetcher unit runs as that user.
-install -d -o anglerfish -g anglerfish -m 0750 /var/lib/anglerfish/geo
+# Geo database: written by anglerfish-geo (the fetcher unit), read by the
+# bridge for lookups. setgid + group-readable so the bridge (group anglerfish)
+# can read the .mmdb the fetcher writes.
+install -d -o anglerfish-geo -g anglerfish -m 2750 /var/lib/anglerfish/geo
 
-# Lure host-key directory; anglerfish-lure.service generates Ed25519
-# host keys here on first boot via ensure_host_keys(). Pre-creating
-# with the right owner keeps the ProtectSystem=strict + ReadWritePaths
-# constraint working on first start.
-install -d -o anglerfish -g anglerfish -m 0700 /var/lib/anglerfish/lure-keys
+# Lure host-key directory; anglerfish-lure.service generates Ed25519 host keys
+# here on first boot via ensure_host_keys(). Private to the lure user.
+install -d -o anglerfish-lure -g anglerfish -m 0700 /var/lib/anglerfish/lure-keys
 
 systemctl enable anglerfish-firewall.service
 systemctl enable anglerfish-firstboot.service

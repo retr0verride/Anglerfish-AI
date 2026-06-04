@@ -527,13 +527,27 @@ reads the host `/proc` (verified. the lure only SERVES synthetic /proc). This
 hides the host's other-user (root/system) processes and the non-pid /proc
 surfaces from a compromised service, denying host recon.
 
-Remaining: the services still share `User=anglerfish`, so `ProtectProc` does
-not hide them from EACH OTHER (same UID). Full per-service-user isolation
-needs dedicated UIDs sharing a common `anglerfish` group plus group-writable
-shared state (`/var/lib/anglerfish` sessions DB + lure-keys, the append-only
-`/var/log/anglerfish` audit log). That is a perm-model refactor that must be
-boot-tested on the appliance to avoid breaking the shared writers, so it is
-deferred rather than shipped unverified.
+Per-service users (closed 2026-06-03): each long-running service now runs as
+its own UID. `anglerfish-bridge`, `anglerfish-lure`, `anglerfish-dashboard`,
+`anglerfish-shipper`, `anglerfish-geo`, all in the shared `anglerfish` group
+(model-pull, a stateless oneshot, keeps the base `anglerfish` user). Combined
+with `ProtectProc=invisible` a compromise of one service can no longer see or
+signal the others.
+
+Shared state stays writable through the group: `/var/lib/anglerfish` and
+`/var/log/anglerfish` are `2770` (setgid) + the units run `UMask=0007`, so
+files land `0660` group-`anglerfish`; `audit.jsonl` is `0660` so the bridge,
+lure, and dashboard can all append; `sessions.db` (bridge) is group-read by
+the dashboard; `lure-keys` (0700, `anglerfish-lure`) and `geo` (2750,
+`anglerfish-geo`) are owner-private. The dashboard gains
+`RuntimeDirectory=anglerfish` (mode 2770) so `/run/anglerfish` exists for the
+runtime-overrides handoff. a non-root user could not `mkdir` it before, a
+latent bug this also fixes.
+
+Verified: the perm model was exercised directly (each user `su`'d in and
+wrote/read its files; the 3-way cross-user `audit.jsonl` append works; the
+shipper cannot read `lure-keys`), and the ISO build + QEMU boot confirm the
+users bake in and the box still boots.
 
 ## TODO-18: bit-for-bit reproducible ISO
 

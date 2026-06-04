@@ -7,7 +7,7 @@ ConditionPathExists=/etc/anglerfish/anglerfish.env
 
 [Service]
 Type=oneshot
-User=anglerfish
+User=anglerfish-geo
 Group=anglerfish
 EnvironmentFile=/etc/anglerfish/anglerfish.env
 ExecStart=/opt/anglerfish/venv/bin/anglerfish geo update
@@ -41,6 +41,9 @@ SystemCallErrorNumber=EPERM
 # is otherwise ABI-bypassable). The fetcher only needs IP sockets.
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6
+# Group-accessible so the bridge (group anglerfish) can read the geo DB and
+# append to the shared audit log.
+UMask=0007
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadWritePaths=/var/lib/anglerfish/geo /var/log/anglerfish

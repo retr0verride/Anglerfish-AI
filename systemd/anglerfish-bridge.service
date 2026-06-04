@@ -11,7 +11,7 @@ Wants=network-online.target anglerfish-model-pull.service
 
 [Service]
 Type=exec
-User=anglerfish
+User=anglerfish-bridge
 Group=anglerfish
 EnvironmentFile=/etc/anglerfish/anglerfish.env
 ExecStart=/opt/anglerfish/venv/bin/anglerfish bridge serve --host 127.0.0.1 --port 8421
@@ -48,7 +48,7 @@ SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 # Only the socket families the service actually uses.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-UMask=0077
+UMask=0007
 RemoveIPC=yes
 # Resource ceilings: a flood cannot OOM / fd-exhaust the box. Conservative
 # defaults; raise per deployment.
