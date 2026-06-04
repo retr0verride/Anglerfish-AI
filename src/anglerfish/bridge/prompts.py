@@ -137,6 +137,18 @@ def _render_fs_context_block(fs_context: str | None) -> str:
     )
 
 
+# Strip line-breaking + other control chars (keep TAB, which cron uses as a
+# field separator) from attacker-derived persistence payloads. Each payload
+# is rendered as one indented line inside the system prompt; a raw newline
+# would break out of that line and inject instructions (prompt injection).
+_PAYLOAD_CONTROL_CHARS = dict.fromkeys([c for c in range(0x20) if c != 0x09] + [0x7F])
+
+
+def _payload_one_line(value: str) -> str:
+    """Collapse an attacker-derived payload to a single prompt-safe line."""
+    return value.translate(_PAYLOAD_CONTROL_CHARS)
+
+
 def _render_persistence_block(
     events: Sequence[PersistenceEvent] | None,
 ) -> str:
@@ -154,11 +166,11 @@ def _render_persistence_block(
     ssh_keys: list[str] = []
     for ev in events:
         if ev.kind == "crontab":
-            cron_lines.append(ev.payload)
+            cron_lines.append(_payload_one_line(ev.payload))
         elif ev.kind == "systemctl":
-            systemctl_units.append(ev.sub_key or ev.payload)
+            systemctl_units.append(_payload_one_line(ev.sub_key or ev.payload))
         elif ev.kind == "authorized_keys":
-            ssh_keys.append(ev.payload)
+            ssh_keys.append(_payload_one_line(ev.payload))
     sections: list[str] = []
     if cron_lines:
         sections.append(

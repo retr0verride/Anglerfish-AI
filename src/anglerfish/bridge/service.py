@@ -787,6 +787,13 @@ class AIBridgeService:
             command,
             max_chars=self._settings.bridge.max_input_chars,
         )
+        # Mythos M4: do not seed persistence state from a command the
+        # injection scorer flags. classify_command runs before the main
+        # handler's scoring, and the payload it records feeds the
+        # system-prompt persistence block; bailing here keeps an injection
+        # attempt from landing attacker text in that block.
+        if self._injection_scorer.score(command).fired:
+            return None
         try:
             event = await self._persistence_classifier.classify(
                 command,
