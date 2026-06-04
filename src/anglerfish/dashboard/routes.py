@@ -2,11 +2,15 @@
 
 Each route is a thin shim over :class:`DashboardState` plus the
 optional :class:`CredentialStore`. The auth dependency
-(:func:`anglerfish.dashboard.auth.require_auth`) is applied at router
-level so every endpoint requires authentication — except
-``/`` (renders the login-aware SPA), ``/api/health`` (used by load
-balancers and service probes), and ``/api/login``/``/api/logout``
-(wired separately by :func:`build_auth_router`).
+(:func:`anglerfish.dashboard.auth.require_auth`) is applied PER ROUTE
+via ``dependencies=[Depends(require_auth)]`` on every data/state
+endpoint (mythos L7: it is NOT a router-level dependency, so a new
+endpoint that omits it would ship unauthenticated -- the guard test
+``test_every_data_route_requires_auth`` enforces the allow-list below).
+The intentionally open routes are ``/`` (renders the login-aware SPA),
+``/api/health`` (load balancers + service probes), and
+``/api/login``/``/api/logout`` (wired separately by
+:func:`build_auth_router`).
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ from anglerfish.dashboard.health import (
     sessions_health,
 )
 from anglerfish.dashboard.overrides import RuntimeOverrides, WastingStrategy
+from anglerfish.dashboard.rate_limit import LoginRateLimiter
 from anglerfish.dashboard.state import _DEFAULT_THREAT_HISTORY, DashboardState
 from anglerfish.honeytokens.schema import Honeytoken
 from anglerfish.models.credentials import CredentialRecord, CredentialStats
@@ -352,6 +357,10 @@ class _CounterDeceptionPinRequest(BaseModel):
 def build_router(*, templates: Jinja2Templates) -> APIRouter:
     """Return a router wired to the configured templates directory."""
     router = APIRouter()
+    # Mythos L3: /api/csp-report is CSRF-exempt (browsers cannot attach the
+    # token) and require_auth is a no-op in open mode, so an unauthenticated
+    # client could flood csp_violation audit rows. Bound it per source IP.
+    csp_limiter = LoginRateLimiter(capacity=20, refill_per_second=0.2)
 
     @router.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -633,6 +642,14 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         ``dashboard.csp_violation`` row, and that row is itself a tripwire -
         spurious entries are visible to the operator rather than silent.
         """
+        # Mythos L3: rate-limit per source IP so an open-mode (unauthenticated)
+        # flood cannot spam csp_violation rows. A refused report returns the
+        # normal 204 with no audit write.
+        client = request.client
+        report_ip = client.host if client is not None else "unknown"
+        if not (await csp_limiter.consume(report_ip)).allowed:
+            return Response(status_code=204)
+
         raw = await request.body()
         if len(raw) > _CSP_REPORT_MAX_BYTES:
             raise HTTPException(status_code=413, detail="CSP report too large")

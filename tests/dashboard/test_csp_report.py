@@ -111,3 +111,22 @@ def test_recorded_fields_are_truncated(authed_client: tuple[TestClient, Path]) -
     assert client.post("/api/csp-report", json=report).status_code == 204
     event = json.loads(audit_path.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert len(event["blocked_uri"]) == 512
+
+
+def test_csp_report_rate_limited_per_ip(
+    authed_client: tuple[TestClient, Path],
+) -> None:
+    """Mythos L3: a flood of csp-reports from one source IP is rate-limited
+    (capacity 20), so the audit count is bounded well below the request
+    count -- bounding the open-mode unauthenticated flood vector."""
+    client, audit_path = authed_client
+    n = 40
+    for _ in range(n):
+        assert client.post("/api/csp-report", json=_REPORT).status_code == 204
+    events = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and json.loads(line).get("event_type") == "dashboard.csp_violation"
+    ]
+    assert len(events) < n  # the limiter dropped the audit on the excess
+    assert len(events) <= 22  # ~capacity (20) + negligible refill
