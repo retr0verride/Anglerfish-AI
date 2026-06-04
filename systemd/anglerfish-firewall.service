@@ -5,6 +5,14 @@ DefaultDependencies=no
 After=network-pre.target
 Before=network.target network-online.target
 Wants=network-pre.target
+# The ruleset does not exist until the first-boot wizard writes it. Skip
+# (do not fail) while it is absent: a hard failure here propagates through
+# Requires=anglerfish-firewall.service and dependency-fails the
+# bridge/lure/dashboard before the wizard even runs, with no recovery. A
+# skipped condition leaves this unit inactive WITHOUT failing the requiring
+# units (they stay queued). firstboot restarts this unit once it has
+# written the ruleset; every later boot finds the file and loads it early.
+ConditionPathExists=/etc/anglerfish/nftables/anglerfish.nft
 
 [Service]
 Type=oneshot

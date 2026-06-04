@@ -107,6 +107,26 @@ for item in src systemd pyproject.toml README.md LICENSE uv.lock; do
     fi
 done
 
+# Optional: bake a pre-generated wizard config for a NON-INTERACTIVE smoke
+# test (ANGLERFISH_SMOKE_SEED=<dir> with anglerfish.env + anglerfish.nft +
+# the two .network files). firstboot is then ConditionPathExists-skipped
+# (the env already exists) and the appliance boots straight to its
+# steady state, so the smoke does not depend on driving the wizard. Off by
+# default; production builds never set it.
+if [[ -n "${ANGLERFISH_SMOKE_SEED:-}" && -d "${ANGLERFISH_SMOKE_SEED}" ]]; then
+    echo "[anglerfish-iso] SMOKE: baking pre-seeded config from ${ANGLERFISH_SMOKE_SEED}"
+    install -d -m 0755 config/includes.chroot/etc/anglerfish/nftables
+    install -m 0600 "${ANGLERFISH_SMOKE_SEED}/anglerfish.env" \
+        config/includes.chroot/etc/anglerfish/anglerfish.env
+    install -m 0640 "${ANGLERFISH_SMOKE_SEED}/anglerfish.nft" \
+        config/includes.chroot/etc/anglerfish/nftables/anglerfish.nft
+    install -d -m 0755 config/includes.chroot/etc/systemd/network
+    install -m 0644 "${ANGLERFISH_SMOKE_SEED}/10-bait.network" \
+        config/includes.chroot/etc/systemd/network/10-bait.network
+    install -m 0644 "${ANGLERFISH_SMOKE_SEED}/20-service.network" \
+        config/includes.chroot/etc/systemd/network/20-service.network
+fi
+
 echo "[anglerfish-iso] live-build work dir: $(pwd)"
 echo "[anglerfish-iso] version: ${VERSION}"
 echo "[anglerfish-iso] on-host Ollama: ${WANT_OLLAMA} (1=install, 0=trusted-remote)"

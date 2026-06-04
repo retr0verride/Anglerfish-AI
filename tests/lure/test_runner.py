@@ -15,7 +15,11 @@ from pydantic import SecretStr
 from anglerfish.config import AnglerfishSettings
 from anglerfish.config.models import CredentialsConfig, DashboardConfig
 from anglerfish.lure.config import LureConfig
-from anglerfish.lure.runner import run_lure
+from anglerfish.lure.runner import (
+    _effective_lure_config,
+    _resolve_interface_ipv4,
+    run_lure,
+)
 
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
@@ -111,3 +115,93 @@ async def test_run_lure_returns_cleanly_on_shutdown_event(
         await asyncio.wait_for(runner_task, timeout=5.0)
     finally:
         runner_mod._install_signal_handlers = original
+
+
+# ---------------------------------------------------------------------------
+# DHCP bait-NIC binding: lure resolves the bait interface's current IPv4 when
+# listen_host is unset (the wizard cannot set a static IP for a DHCP NIC).
+# ---------------------------------------------------------------------------
+
+
+def _settings_iface(
+    *,
+    lure: LureConfig,
+    session_secret: str,
+    encryption_key_b64: str,
+    bait_interface: str | None,
+) -> AnglerfishSettings:
+    return AnglerfishSettings(
+        dashboard=DashboardConfig(session_secret=SecretStr(session_secret)),
+        credentials=CredentialsConfig(encryption_key=SecretStr(encryption_key_b64)),
+        lure=lure,
+        bait_interface=bait_interface,
+    )
+
+
+def test_resolve_interface_ipv4_loopback() -> None:
+    # The loopback interface always carries 127.0.0.1 on Linux.
+    assert _resolve_interface_ipv4("lo") == "127.0.0.1"
+
+
+def test_resolve_interface_ipv4_unknown_returns_none() -> None:
+    assert _resolve_interface_ipv4("does-not-exist0") is None
+
+
+def test_resolve_interface_ipv4_empty_returns_none() -> None:
+    assert _resolve_interface_ipv4("") is None
+
+
+def test_effective_lure_config_static_listen_host_unchanged(
+    tmp_path: Path, session_secret: str, encryption_key_b64: str
+) -> None:
+    lure = LureConfig(listen_host="127.0.0.1", host_key_dir=tmp_path / "k")  # type: ignore[arg-type]
+    settings = _settings_iface(
+        lure=lure,
+        session_secret=session_secret,
+        encryption_key_b64=encryption_key_b64,
+        bait_interface="lo",
+    )
+    # An explicit (static) listen_host is never overridden.
+    assert _effective_lure_config(settings) is settings.lure
+
+
+def test_effective_lure_config_dhcp_resolves_interface_ip(
+    tmp_path: Path, session_secret: str, encryption_key_b64: str
+) -> None:
+    lure = LureConfig(host_key_dir=tmp_path / "k")  # listen_host defaults to 0.0.0.0
+    settings = _settings_iface(
+        lure=lure,
+        session_secret=session_secret,
+        encryption_key_b64=encryption_key_b64,
+        bait_interface="lo",
+    )
+    effective = _effective_lure_config(settings)
+    assert str(effective.listen_host) == "127.0.0.1"
+
+
+def test_effective_lure_config_unresolvable_interface_left_unchanged(
+    tmp_path: Path, session_secret: str, encryption_key_b64: str
+) -> None:
+    lure = LureConfig(host_key_dir=tmp_path / "k")  # 0.0.0.0
+    settings = _settings_iface(
+        lure=lure,
+        session_secret=session_secret,
+        encryption_key_b64=encryption_key_b64,
+        bait_interface="does-not-exist0",
+    )
+    effective = _effective_lure_config(settings)
+    # Still unspecified -> validate_bait_nic rejects and systemd retries.
+    assert effective.listen_host.is_unspecified
+
+
+def test_effective_lure_config_no_bait_interface_unchanged(
+    tmp_path: Path, session_secret: str, encryption_key_b64: str
+) -> None:
+    lure = LureConfig(host_key_dir=tmp_path / "k")  # 0.0.0.0
+    settings = _settings_iface(
+        lure=lure,
+        session_secret=session_secret,
+        encryption_key_b64=encryption_key_b64,
+        bait_interface=None,
+    )
+    assert _effective_lure_config(settings) is settings.lure

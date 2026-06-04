@@ -20,6 +20,8 @@ import contextlib
 import logging
 import os
 import signal
+import socket
+import struct
 from typing import TYPE_CHECKING
 
 from anglerfish.audit import AuditLog
@@ -29,13 +31,75 @@ from anglerfish.lure.bridge_client import BridgeClient
 from anglerfish.lure.keys import ensure_host_keys, load_host_keys
 from anglerfish.lure.server import BaitNicError, LureServer
 
+try:
+    import fcntl
+except ImportError:  # non-POSIX (e.g. Windows): interface resolution is a no-op
+    fcntl = None  # type: ignore[assignment]
+
 if TYPE_CHECKING:
     from anglerfish.config.settings import AnglerfishSettings
+    from anglerfish.lure.config import LureConfig
 
 __all__ = ["BaitNicError", "run_lure"]
 
 
 _logger = logging.getLogger(__name__)
+
+_SIOCGIFADDR = 0x8915  # Linux ioctl: fetch an interface's IPv4 address
+
+
+def _resolve_interface_ipv4(ifname: str) -> str | None:
+    """Return the IPv4 currently assigned to ``ifname``, or ``None``.
+
+    Linux-only (``SIOCGIFADDR`` ioctl). Returns ``None`` on a non-POSIX
+    host or when the interface has no IPv4 yet (e.g. DHCP has not
+    completed). The lure calls this at every start, so a DHCP lease -- or
+    a renewal that changed the address -- is picked up on the next
+    (re)start rather than frozen at wizard time.
+    """
+    if fcntl is None or not ifname:
+        return None
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        packed = struct.pack("256s", ifname[:15].encode("ascii", "ignore"))
+        raw = fcntl.ioctl(sock.fileno(), _SIOCGIFADDR, packed)
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    return socket.inet_ntoa(raw[20:24])
+
+
+def _effective_lure_config(settings: AnglerfishSettings) -> LureConfig:
+    """Resolve the lure's bind address, handling a DHCP bait NIC.
+
+    The wizard leaves ``lure.listen_host`` unset for a DHCP bait NIC
+    (the IP is unknown at config time), so it defaults to the
+    unspecified address, which the lure refuses to bind. When a bait
+    interface is configured, bind that interface's current IPv4 instead.
+    A static bait NIC already carries an explicit ``listen_host`` and is
+    returned unchanged. If resolution fails (no IPv4 yet), the config is
+    left unchanged so ``validate_bait_nic`` rejects it and systemd's
+    ``Restart=on-failure`` retries once DHCP has assigned an address.
+    """
+    lure = settings.lure
+    if not lure.listen_host.is_unspecified or not settings.bait_interface:
+        return lure
+    resolved = _resolve_interface_ipv4(settings.bait_interface)
+    if resolved is None:
+        _logger.warning(
+            "lure: bait interface %s has no IPv4 yet; bind will fail and "
+            "retry until DHCP assigns one.",
+            settings.bait_interface,
+        )
+        return lure
+    _logger.info(
+        "lure: binding bait interface %s current IPv4 %s",
+        settings.bait_interface,
+        resolved,
+    )
+    return lure.model_copy(update={"listen_host": resolved})
+
 
 # Signals to install handlers for. SIGTERM is systemd's stop signal;
 # SIGINT is Ctrl-C in interactive runs. Both translate to "drain and
@@ -87,8 +151,12 @@ async def run_lure(settings: AnglerfishSettings) -> None:
         connect_timeout_s=settings.lure.bridge_connect_timeout_s,
     )
 
+    # Resolve a DHCP bait NIC's current IP before binding (no-op for a
+    # static listen_host or when no bait interface is configured).
+    lure_config = _effective_lure_config(settings)
+
     server = LureServer(
-        settings.lure,
+        lure_config,
         credential_store=cred_store,
         fingerprinter=fingerprinter,
         bridge_client=bridge_client,
@@ -103,7 +171,7 @@ async def run_lure(settings: AnglerfishSettings) -> None:
         await server.start()
         _logger.info(
             "lure: serving on %s:%s; SIGTERM or SIGINT for graceful drain",
-            settings.lure.listen_host,
+            lure_config.listen_host,
             server.get_port(),
         )
         await shutdown.wait()

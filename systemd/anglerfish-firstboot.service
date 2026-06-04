@@ -41,5 +41,22 @@ ExecStartPost=/bin/systemctl start anglerfish-geo-update.service
 # or chmod failure must not abort firstboot.
 ExecStartPost=-/bin/sh -c 'install -d -m 2770 -o anglerfish -g anglerfish /var/log/anglerfish && touch /var/log/anglerfish/audit.jsonl && chown anglerfish:anglerfish /var/log/anglerfish/audit.jsonl && chmod 0660 /var/log/anglerfish/audit.jsonl && chattr +a /var/log/anglerfish/audit.jsonl 2>/dev/null || true'
 
+# Bring the appliance online without a reboot. anglerfish-firewall is
+# ConditionPathExists-skipped at boot (its ruleset does not exist until the
+# wizard writes it), so it stays inactive rather than failing -- which
+# keeps the Requires=anglerfish-firewall.service chain from dependency-
+# failing the bridge/lure/dashboard. Those services are ordered
+# After=anglerfish-firstboot.service, so they sit queued through the
+# wizard. Now that the wizard has written the ruleset, env and per-NIC
+# .network files: apply the NIC config, load the firewall (its condition is
+# now satisfied), then start the stack. The firewall restart is synchronous
+# so the services find it active; --no-block on the services so firstboot
+# does not wait on the bridge's model-pull. On every later boot this unit
+# is skipped (ConditionPathExists=!env) and the firewall loads early and
+# normally because the ruleset now exists.
+ExecStartPost=-/bin/networkctl reload
+ExecStartPost=/bin/systemctl restart anglerfish-firewall.service
+ExecStartPost=/bin/systemctl start --no-block anglerfish-bridge.service anglerfish-dashboard.service anglerfish-lure.service
+
 [Install]
 WantedBy=multi-user.target
