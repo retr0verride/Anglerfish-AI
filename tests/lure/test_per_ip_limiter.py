@@ -215,7 +215,8 @@ def test_global_concurrent_cap_blocks_distributed_flood() -> None:
     lim = _PerIPLimiter(max_concurrent=3, max_rpm=1000, max_total=2)
     ok1, _ = lim.admit("10.0.0.1")
     ok2, _ = lim.admit("10.0.0.2")
-    assert ok1 and ok2  # two distinct IPs, both under per-IP cap
+    assert ok1  # two distinct IPs, both under per-IP cap
+    assert ok2
     ok3, reason = lim.admit("10.0.0.3")  # third distinct IP -> global cap
     assert ok3 is False
     assert reason == "global_concurrent"

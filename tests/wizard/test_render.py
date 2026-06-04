@@ -189,5 +189,5 @@ def test_network_config_rejects_non_cidr_address() -> None:
         NetworkConfig(
             dhcp=False,
             address="10.0.0.5/24\nDNS=8.8.8.8\nGateway=10.0.0.254",
-            gateway="10.0.0.254",
+            gateway=ipaddress.ip_address("10.0.0.254"),
         )
