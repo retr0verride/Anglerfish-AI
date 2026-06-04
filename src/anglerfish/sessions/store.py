@@ -124,7 +124,10 @@ class SessionStore:
             # boundary (TODO-17). A single-user deployment is unaffected (the
             # group has one member).
             with contextlib.suppress(OSError):
-                os.chmod(path, 0o660)
+                # nosec B103: 0o660 is intentional (group-shared per-service
+                # users); see the comment above. Group is the anglerfish
+                # service users only, not world.
+                os.chmod(path, 0o660)  # nosec B103
         self._conn = conn
 
     async def aclose(self) -> None:

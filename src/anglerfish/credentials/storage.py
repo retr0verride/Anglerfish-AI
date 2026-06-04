@@ -115,7 +115,10 @@ class CredentialStore:
             # each service's env, not the group. Best-effort: Windows ignores
             # chmod. A single-user deployment is unaffected.
             with contextlib.suppress(OSError):
-                os.chmod(path, 0o660)
+                # nosec B103: 0o660 is intentional (group-shared per-service
+                # users); see the comment above. Group is the anglerfish
+                # service users only, not world.
+                os.chmod(path, 0o660)  # nosec B103
         self._conn = conn
 
     async def record_attempt(
