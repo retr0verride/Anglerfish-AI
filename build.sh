@@ -75,6 +75,7 @@ docker run --rm --privileged \
     -e HOST_GID="$(id -g)" \
     -e SOURCE_DATE_EPOCH="${source_date_epoch}" \
     -e ANGLERFISH_DEBIAN_SNAPSHOT="${ANGLERFISH_DEBIAN_SNAPSHOT:-}" \
+    -e ANGLERFISH_SMOKE_SEED="${ANGLERFISH_SMOKE_SEED:-}" \
     "${image}" \
     iso/build.sh "${ollama_flag}" "${passthru[@]}"
 

@@ -91,3 +91,4 @@ iso/binary/
 
 # ISO build artifacts (./build.sh output)
 /output/
+.smoke-seed/
