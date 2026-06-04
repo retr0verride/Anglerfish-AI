@@ -248,6 +248,6 @@ def test_wasting_stats_stops_at_window_boundary(
             "wasted_ms": 9999,
         },
     ]
-    monkeypatch.setattr(health, "iter_events", lambda _path: iter(events))
+    monkeypatch.setattr(health, "iter_events", lambda _path, **_kw: iter(events))
     stats = health._wasting_stats(Path("ignored"), "light")
     assert stats["avg_wasted_ms_per_session"] == 100
