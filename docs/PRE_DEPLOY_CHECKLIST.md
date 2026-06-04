@@ -151,9 +151,14 @@ sudo -u anglerfish ANGLERFISH_LOG_LEVEL=INFO \
 stat -c '%a %U:%G %n' /var/lib/anglerfish
 # Want: 2770 anglerfish:anglerfish
 
-# Credentials DB: written by the bridge, group-shared so the dashboard reads it.
+# Sessions DB: seeded by the bridge at startup, written by the dashboard's
+# audit tailer; group-shared so the bridge reads it for personas.
+stat -c '%a %U:%G %n' /var/lib/anglerfish/sessions.db 2>/dev/null
+# Want: 660 anglerfish-bridge:anglerfish
+
+# Credentials DB: written by the lure, group-shared so the dashboard reads it.
 stat -c '%a %U:%G %n' /var/lib/anglerfish/credentials.db 2>/dev/null
-# Want: 660 anglerfish-bridge:anglerfish (created on first credential write)
+# Want: 660 anglerfish-lure:anglerfish (created on first credential write)
 
 # Lure host keys: private to the lure user.
 stat -c '%a %U:%G %n' /var/lib/anglerfish/lure-keys
@@ -169,7 +174,7 @@ sudo lsattr /var/log/anglerfish/audit.jsonl
 ```
 
 - `[ ]` `/var/lib/anglerfish` is `2770 anglerfish:anglerfish` (setgid).
-- `[ ]` `credentials.db` (if it exists yet) is `0660 anglerfish-bridge:anglerfish`.
+- `[ ]` `credentials.db` (if it exists yet) is `0660 anglerfish-lure:anglerfish`.
 - `[ ]` `audit.jsonl` has the `a` attribute. If `lsattr` shows no `a`,
   you're either on a filesystem that doesn't support it (zfs, nfs, etc.)
   or the firstboot ExecStartPost didn't run. Try
