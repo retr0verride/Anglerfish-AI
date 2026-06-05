@@ -1,0 +1,22 @@
+# Aikido scan ignores: confirmed false positives and accepted-by-design
+# findings, excluded so the workspace scan surfaces only actionable issues.
+# Rationale is recorded per entry. The src/ "dangerous use of assert"
+# findings are NOT excluded here (excluding application code would blind
+# the scanner to real issues); they are invariant/type-narrowing asserts
+# already carrying `# noqa: S101` and are dispositioned as an ignored rule
+# in the Aikido UI, not by path.
+exclude:
+  paths:
+    # Honeytoken fixtures embed placeholder "private keys" by design (a
+    # honeytoken IS a fake credential). These are not real secrets, and
+    # CI's gitleaks confirms no real keys are committed.
+    - docs/design/STAGE_11_decoy_data_poisoning.md
+    - tests/dashboard/test_honeytokens_endpoint.py
+    - tests/honeytokens/test_generators.py
+    # Dev-only helper scripts (logo/banner generation); not shipped. The
+    # asserts here are build-time invariants, not runtime security checks.
+    - tools/
+    # The ISO builder image must run as root: live-build's debootstrap,
+    # chroot, and mount steps require it. A non-root USER would break the
+    # build. Accepted by design.
+    - iso/Dockerfile
