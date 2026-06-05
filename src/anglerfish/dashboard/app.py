@@ -274,7 +274,12 @@ def create_app(
         build_auth_router(audit=audit_log, rate_limiter=login_rate_limiter),
     )
     app.include_router(build_router(templates=templates))
-    app.include_router(build_websocket_router())
+    # The websocket routes (live event stream + narrator) are opt-out via
+    # dashboard.enable_websockets, which defaults on. An operator who fronts
+    # the dashboard with a proxy that does not speak websockets can disable
+    # them so the routes do not advertise a path that will only ever 404/hang.
+    if settings.dashboard.enable_websockets:
+        app.include_router(build_websocket_router())
 
     if static_path.is_dir():
         app.mount(
