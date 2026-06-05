@@ -9,7 +9,7 @@ together with the auth + session middleware.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -181,14 +181,25 @@ def create_app(
         try:
             yield
         finally:
-            await narrator_instance.stop()
+            # Best-effort teardown: run every cleanup even if an earlier one
+            # raises, so a failing stop() cannot leak the later resources
+            # (the narrator's LLM client, the session store, the credential
+            # store). Preserve the original ordering.
+            closers: list[Callable[[], Awaitable[object]]] = [narrator_instance.stop]
             if narrator_owns_client and narrator_client is not None:
-                await narrator_client.aclose()
-            await tailer_instance.stop()
+                closers.append(narrator_client.aclose)
+            closers.append(tailer_instance.stop)
             if owns_session_store:
-                await store_instance.aclose()
+                closers.append(store_instance.aclose)
             if credential_store is not None:
-                await credential_store.aclose()
+                closers.append(credential_store.aclose)
+            for closer in closers:
+                try:
+                    await closer()
+                except Exception:  # best-effort shutdown; close the rest
+                    logging.getLogger(__name__).exception(
+                        "dashboard: error during shutdown cleanup",
+                    )
 
     app = FastAPI(
         title="Anglerfish AI",
