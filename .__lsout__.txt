@@ -1,4 +1,0 @@
-classifier.py
-__init__.py
-patterns.py
-__pycache__

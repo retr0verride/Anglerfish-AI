@@ -63,6 +63,91 @@ async def test_run_lure_skips_when_disabled(
     assert any("ENABLED=false" in r.message for r in caplog.records)
 
 
+async def test_run_lure_teardown_runs_all_closers_when_one_raises(
+    tmp_path: Path,
+    session_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing close in the shutdown ``finally`` must not skip the rest.
+
+    The teardown closes server, bridge client, credential store, and
+    fingerprinter best-effort. If ``server.stop()`` raises, the bridge
+    client and the two SQLite connections must still be closed rather
+    than leaked, and ``run_lure`` must not propagate the error.
+    """
+    from anglerfish.credentials.storage import CredentialStore
+    from anglerfish.fingerprint.service import Fingerprinter
+    from anglerfish.lure import runner as runner_mod
+    from anglerfish.lure.bridge_client import BridgeClient
+    from anglerfish.lure.server import LureServer
+
+    lure_cfg = LureConfig(
+        enabled=True,
+        listen_host=ipaddress.IPv4Address("127.0.0.1"),
+        listen_port=0,
+        host_key_dir=tmp_path / "keys",
+        keepalive_interval_s=0,
+    )
+    encryption_key = base64.b64encode(b"\x07" * 32).decode("ascii")
+    settings = _settings(
+        lure=lure_cfg,
+        session_secret=session_secret,
+        encryption_key_b64=encryption_key,
+        credentials_db_path=tmp_path / "creds.db",
+    )
+
+    calls: list[str] = []
+
+    async def _noop_start(_self: object) -> None:
+        return None
+
+    async def _boom_stop(_self: object) -> None:
+        calls.append("server.stop")
+        raise RuntimeError("stop blew up")
+
+    async def _rec_bridge(_self: object) -> None:
+        calls.append("bridge.aclose")
+
+    async def _rec_cred(_self: object) -> None:
+        calls.append("cred.aclose")
+
+    async def _rec_fp(_self: object) -> None:
+        calls.append("fingerprinter.aclose")
+
+    monkeypatch.setattr(LureServer, "start", _noop_start)
+    monkeypatch.setattr(LureServer, "get_port", lambda _self: 0)
+    monkeypatch.setattr(LureServer, "stop", _boom_stop)
+    monkeypatch.setattr(BridgeClient, "aclose", _rec_bridge)
+    monkeypatch.setattr(CredentialStore, "aclose", _rec_cred)
+    monkeypatch.setattr(Fingerprinter, "aclose", _rec_fp)
+
+    captured: dict[str, asyncio.Event] = {}
+    original = runner_mod._install_signal_handlers
+
+    def capture(event: asyncio.Event) -> None:
+        captured["event"] = event
+        original(event)
+
+    monkeypatch.setattr(runner_mod, "_install_signal_handlers", capture)
+
+    runner_task = asyncio.create_task(run_lure(settings))
+    for _ in range(50):
+        await asyncio.sleep(0.05)
+        if "event" in captured:
+            break
+    assert "event" in captured, "runner did not install the shutdown event"
+    captured["event"].set()
+
+    with caplog.at_level(logging.ERROR, logger="anglerfish.lure.runner"):
+        # run_lure must swallow the stop() failure, not propagate it.
+        await asyncio.wait_for(runner_task, timeout=5.0)
+
+    # Every closer ran, in order, despite server.stop() raising first.
+    assert calls == ["server.stop", "bridge.aclose", "cred.aclose", "fingerprinter.aclose"]
+    assert any("shutdown cleanup" in r.message for r in caplog.records)
+
+
 async def test_run_lure_returns_cleanly_on_shutdown_event(
     tmp_path: Path,
     session_secret: str,

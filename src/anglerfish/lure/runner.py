@@ -176,10 +176,19 @@ async def run_lure(settings: AnglerfishSettings) -> None:
         )
         await shutdown.wait()
     finally:
-        await server.stop()
-        await bridge_client.aclose()
-        await cred_store.aclose()
-        await fingerprinter.aclose()
+        # Best-effort teardown: run every cleanup even if an earlier one
+        # raises, so a failing server.stop() cannot leak the bridge HTTP
+        # client or the two SQLite connections behind cred_store/fingerprinter.
+        for closer in (
+            server.stop,
+            bridge_client.aclose,
+            cred_store.aclose,
+            fingerprinter.aclose,
+        ):
+            try:
+                await closer()
+            except Exception:  # best-effort shutdown; close the rest
+                _logger.exception("lure: error during shutdown cleanup")
 
 
 def _install_signal_handlers(shutdown: asyncio.Event) -> None:

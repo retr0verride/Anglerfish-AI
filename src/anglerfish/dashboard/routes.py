@@ -19,7 +19,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
@@ -61,6 +61,11 @@ from anglerfish.models.intent import IntentSummary
 from anglerfish.models.session import SessionSnapshot
 from anglerfish.models.threat import ThreatAssessment
 
+if TYPE_CHECKING:
+    from anglerfish.credentials.storage import CredentialStore
+    from anglerfish.dashboard.overrides_publisher import RuntimeOverridesPublisher
+    from anglerfish.persona import PersonaRegistry
+
 __all__ = ["build_router"]
 
 # A CSP violation report is a small JSON object. Cap the body so the
@@ -77,8 +82,11 @@ def _get_state(request: Request) -> DashboardState:
     return cast("DashboardState", state)
 
 
-def _get_credential_store(request: Request) -> Any | None:
-    return getattr(request.app.state, "credential_store", None)
+def _get_credential_store(request: Request) -> CredentialStore | None:
+    return cast(
+        "CredentialStore | None",
+        getattr(request.app.state, "credential_store", None),
+    )
 
 
 def _get_overrides(request: Request) -> RuntimeOverrides:
@@ -95,7 +103,7 @@ def _get_audit(request: Request) -> AuditLog:
     return cast("AuditLog", audit)
 
 
-def _get_persona_registry(request: Request) -> Any | None:
+def _get_persona_registry(request: Request) -> PersonaRegistry | None:
     """Return the persona registry attached at startup, or None.
 
     The persona pin endpoints raise 503 when this is None (Stage 9
@@ -103,17 +111,23 @@ def _get_persona_registry(request: Request) -> Any | None:
     grey-disable the pin controls cleanly rather than getting a 422
     for every persona name it tries.
     """
-    return getattr(request.app.state, "persona_registry", None)
+    return cast(
+        "PersonaRegistry | None",
+        getattr(request.app.state, "persona_registry", None),
+    )
 
 
-def _get_overrides_publisher(request: Request) -> Any:
+def _get_overrides_publisher(request: Request) -> RuntimeOverridesPublisher | None:
     """Return the runtime-overrides publisher, or None if not attached.
 
     Older test fixtures construct create_app paths that omit the
     publisher; the routes degrade to in-process-only override updates
     in that case so existing tests continue to pass.
     """
-    return getattr(request.app.state, "overrides_publisher", None)
+    return cast(
+        "RuntimeOverridesPublisher | None",
+        getattr(request.app.state, "overrides_publisher", None),
+    )
 
 
 # Default neighbour count for the aggregate detail view's similar
@@ -581,7 +595,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         body: _PersonaPinRequest = Body(...),  # noqa: B008
         state: DashboardState = Depends(_get_state),  # noqa: B008
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
-        registry: Any = Depends(_get_persona_registry),  # noqa: B008
+        registry: PersonaRegistry | None = Depends(_get_persona_registry),  # noqa: B008
     ) -> dict[str, Any]:
         if registry is None:
             raise HTTPException(
@@ -975,7 +989,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         limit: int = Query(default=100, ge=1, le=1000),
         offset: int = Query(default=0, ge=0, le=100_000),
         source_ip: str | None = Query(default=None, max_length=64),
-        store: Any | None = Depends(_get_credential_store),  # noqa: B008
+        store: CredentialStore | None = Depends(_get_credential_store),  # noqa: B008
     ) -> dict[str, Any]:
         if store is None:
             return {"records": [], "configured": False}
@@ -994,7 +1008,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         dependencies=[Depends(require_auth)],
     )
     async def credential_stats(
-        store: Any | None = Depends(_get_credential_store),  # noqa: B008
+        store: CredentialStore | None = Depends(_get_credential_store),  # noqa: B008
     ) -> dict[str, Any]:
         if store is None:
             return {"configured": False}
@@ -1020,7 +1034,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         body: _BridgeSettingsUpdate = Body(...),  # noqa: B008
         overrides: RuntimeOverrides = Depends(_get_overrides),  # noqa: B008
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
-        publisher: Any = Depends(_get_overrides_publisher),  # noqa: B008
+        publisher: RuntimeOverridesPublisher | None = Depends(_get_overrides_publisher),  # noqa: B008
     ) -> dict[str, Any]:
         diff = overrides.apply_bridge(
             max_concurrent_requests=body.max_concurrent_requests,
@@ -1049,7 +1063,7 @@ def build_router(*, templates: Jinja2Templates) -> APIRouter:
         body: _FeatureFlagsUpdate = Body(...),  # noqa: B008
         overrides: RuntimeOverrides = Depends(_get_overrides),  # noqa: B008
         audit: AuditLog = Depends(_get_audit),  # noqa: B008
-        publisher: Any = Depends(_get_overrides_publisher),  # noqa: B008
+        publisher: RuntimeOverridesPublisher | None = Depends(_get_overrides_publisher),  # noqa: B008
     ) -> dict[str, Any]:
         diff = overrides.apply_features(
             time_wasting=body.time_wasting,
