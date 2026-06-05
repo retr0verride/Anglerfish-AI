@@ -1,9 +1,20 @@
 # Local LLM setup
 
-Anglerfish runs entirely on local LLMs via [Ollama](https://ollama.com) -
-no cloud dependencies. This guide walks you from a fresh Anglerfish VM
-to a working three-tier model stack, with the SHA256 hashes captured
-for the Stage 1 model-integrity check.
+Anglerfish runs entirely on local LLMs via [Ollama](https://ollama.com),
+no cloud dependencies. This is the model-stack reference: the three-tier
+model picks, the hardware sizing, the Ollama workload tuning, the model
+pulls, and the SHA256 hashes captured for the Stage 1 model-integrity
+check.
+
+The model stack runs on the **Model VM**, the GPU host. The honeypot VM
+has no GPU and calls the Model VM over the service network. The canonical
+deploy guide is [`proxmox.md`](proxmox.md); it builds both VMs end to end.
+This guide is the detail behind its Model VM steps. Where the deploy guide
+already covers a step, this guide points at it instead of repeating it.
+
+Read [`proxmox.md`](proxmox.md) first if you have not. It owns the VM
+build, the GPU passthrough, and the wiring. This guide owns the model
+choices and the integrity pin.
 
 See [`PRODUCT.md`](PRODUCT.md) §"Design principles" for the local-only
 rationale (resilience against upstream LLM compromise).
@@ -29,8 +40,9 @@ single "do everything" model.
 
 ## Hardware sizing
 
-The model picks above assume a single mid-range NVIDIA GPU (12GB VRAM
-class. RTX 3060, 4070, etc.). Adjust as needed:
+The model picks above assume a single mid-range NVIDIA GPU on the Model
+VM (12GB VRAM class. RTX 3060, 4070, etc.). Size the Model VM's GPU and
+RAM from this table. Adjust as needed:
 
 | GPU class | Fast model | Deep model | Embed model |
 |-----------|-----------|-----------|-------------|
@@ -44,86 +56,38 @@ The rest of this guide assumes the **12GB VRAM (recommended)** row.
 
 ---
 
-## 1. Get the GPU to the Anglerfish VM
+## 1. Build the Model VM, pass through the GPU, install Ollama
 
-> **Split topology?** If you run Ollama on a separate VM instead of on
-> the honeypot (the `trusted_remote_host` path), do the GPU passthrough,
-> driver install, and Ollama setup **on that VM**, following
-> [`proxmox.md`](proxmox.md) §1.4. Then come back to this guide for the
-> model pull (§4) and the model picks. Step 1 here is the co-located
-> path: GPU on the honeypot VM, Ollama on loopback.
+These steps live in the deploy guide. Do them there, then come back here
+for the tuning, the model pulls, and the hash capture:
 
-On Proxmox, the GPU can only be passed through to one VM at a time.
-See [`proxmox.md`](proxmox.md) §"GPU passthrough" for the full
-walkthrough; the short version:
+* [`proxmox.md`](proxmox.md) **Step 2** enables GPU passthrough on the
+  Proxmox host (IOMMU, bind the card to `vfio-pci`).
+* [`proxmox.md`](proxmox.md) **Step 3** builds the Model VM and attaches
+  the GPU.
+* [`proxmox.md`](proxmox.md) **Step 4** installs the NVIDIA driver,
+  confirms `nvidia-smi` sees the card, and installs Ollama.
 
-```bash
-# On the Proxmox host
-qm stop <anglerfish-vmid>
-qm set <anglerfish-vmid> --hostpci0 01:00,pcie=1,x-vga=1
-qm start <anglerfish-vmid>
-```
+When you finish Step 4, the Model VM has Ollama running and bound to its
+service address (`OLLAMA_HOST=<model-ip>:11434`). The rest of this guide
+runs on that VM: SSH in (`ssh <user>@<model-ip>`) and tune, pull, and
+capture hashes.
 
-Then SSH into the Anglerfish VM over the service NIC:
+The honeypot VM never runs Ollama and never touches the GPU. It only
+reaches the Model VM over the service network.
 
-```bash
-ssh anglerfish-ops@<service-ip>
-```
-
-Install the NVIDIA driver and verify:
-
-```bash
-sudo apt install -y nvidia-driver firmware-misc-nonfree
-sudo reboot
-
-# After reboot
-nvidia-smi
-# Should show: GeForce RTX 3060, 12288MiB Memory-Usage
-```
-
-If `nvidia-smi` works inside the guest, GPU passthrough is good.
+> A loopback Ollama (`OLLAMA_HOST=127.0.0.1:11434`, model and bridge on
+> one box) is fine for local dev or a single-machine test. It is not the
+> deployed topology. The rest of this guide and [`proxmox.md`](proxmox.md)
+> assume the split: GPU and Ollama on the Model VM, honeypot separate.
 
 ---
 
-## 2. Install Ollama
+## 2. Tune Ollama for the Anglerfish workload
 
-Two paths depending on how the ISO was built:
-
-### 2a. Already installed (build-time opt-in)
-
-If the ISO was built with `ANGLERFISH_INSTALL_OLLAMA=1` (see
-[`INSTALL.md`](INSTALL.md) §prerequisites), Ollama is already present.
-Verify:
-
-```bash
-systemctl status ollama.service
-# Should be: active (running)
-ollama --version
-```
-
-Skip to [step 3](#3-tune-ollama-for-the-anglerfish-workload).
-
-### 2b. Install at runtime (slim ISO)
-
-If the ISO was built without the Ollama hook (the default, smaller
-image), install now:
-
-```bash
-# This is Ollama's official installer - runs as root, installs the
-# systemd unit, starts the service. No interactive prompts.
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-Verify:
-
-```bash
-systemctl status ollama.service
-ollama --version
-```
-
----
-
-## 3. Tune Ollama for the Anglerfish workload
+[`proxmox.md`](proxmox.md) Step 4 already sets these in the Model VM's
+systemd drop-in, alongside the `OLLAMA_HOST` binding. This section is the
+rationale. Use it to verify the drop-in or to tune a fresh install.
 
 Anglerfish wants Ollama to:
 
@@ -132,16 +96,18 @@ Anglerfish wants Ollama to:
 3. Swap models efficiently when the deep tier is called
 4. Use VRAM-efficient features (flash attention, quantized KV cache)
 
-Add a systemd drop-in:
+Open the systemd drop-in on the Model VM:
 
 ```bash
 sudo systemctl edit ollama.service
 ```
 
-Paste this into the editor that opens:
+The full drop-in binds Ollama to the service address and applies the
+tuning. Replace `<model-ip>` with the Model VM's service-network address:
 
 ```ini
 [Service]
+Environment="OLLAMA_HOST=<model-ip>:11434"
 Environment="OLLAMA_NUM_PARALLEL=2"
 Environment="OLLAMA_FLASH_ATTENTION=1"
 Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
@@ -149,14 +115,18 @@ Environment="OLLAMA_MAX_LOADED_MODELS=2"
 Environment="OLLAMA_KEEP_ALIVE=-1"
 ```
 
-Reload + restart:
+Bind to the service address, never `0.0.0.0`. The Model VM firewall (set
+in [`proxmox.md`](proxmox.md) Step 4) still limits port 11434 to the
+honeypot, but binding narrow is the first line.
+
+Reload and restart:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart ollama.service
 ```
 
-The new settings are now active. Each variable explained:
+The settings are now active. Each variable explained:
 
 | Variable | Why |
 |----------|-----|
@@ -168,9 +138,10 @@ The new settings are now active. Each variable explained:
 
 ---
 
-## 4. Pull the three models
+## 3. Pull the three models
 
-Total download is ~13GB; takes 5-20 minutes depending on your internet.
+Run these on the Model VM. Total download is ~13GB; takes 5-20 minutes
+depending on your internet.
 
 ```bash
 # Fast tier - ~4.4GB
@@ -195,7 +166,11 @@ ollama list
 
 ---
 
-## 5. Smoke-test each model
+## 4. Smoke-test each model
+
+Run these on the Model VM. The `ollama run` calls use the local CLI. The
+embeddings curl hits the HTTP API, so it uses the bound service address
+(`<model-ip>`), not loopback.
 
 ```bash
 # Fast tier - should respond in 1-2s
@@ -205,7 +180,7 @@ ollama run qwen3:14b "explain ls -la output"
 ollama run phi-4 "summarize: an SSH attacker tried 47 common passwords against root, then ran wget to download a script. what are they probably doing?"
 
 # Embedding tier - returns a vector
-curl -s http://localhost:11434/api/embeddings \
+curl -s http://<model-ip>:11434/api/embeddings \
     -d '{"model": "nomic-embed-text", "prompt": "ls -la /etc"}' \
     | head -c 200
 ```
@@ -224,30 +199,31 @@ warm).
 
 ---
 
-## 6. Capture the layer-blob hashes for the integrity check
+## 5. Capture the layer-blob hashes for the integrity check
 
 The Stage 1 model-integrity check ([`design/STAGE_1_llm_defense.md`](design/STAGE_1_llm_defense.md))
-pins against the *layer/blob* digest, not the human-readable tag, this
+pins against the *layer/blob* digest, not the human-readable tag. This
 defeats silent tag re-pointing attacks. Capture the hashes now so the
-bridge can verify them at every startup.
+bridge can verify them at startup.
 
-> **Split topology:** this check reads manifests from the bridge's local
-> filesystem, so with Ollama on a separate VM you either skip the pin or
-> sync the manifest tree to the honeypot. See [`proxmox.md`](proxmox.md)
-> §1.4 "Model-integrity pinning in split mode" for both options.
+Run this on the Model VM (the manifests live next to the models). The
+official systemd installer stores them under the `ollama` user's home;
+a user install stores them under yours. Pick the root that exists:
 
 ```bash
 # Install jq if not present
 sudo apt install -y jq
 
-# Capture each hash
-MANIFEST_ROOT=~/.ollama/models/manifests/registry.ollama.ai/library
+# Manifest root. Official systemd installer (used by proxmox.md):
+MANIFEST_ROOT=/usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library
+# User-installed Ollama instead:
+#   MANIFEST_ROOT=~/.ollama/models/manifests/registry.ollama.ai/library
 
-FAST_HASH=$(jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
+FAST_HASH=$(sudo jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
     "$MANIFEST_ROOT/qwen3/14b")
-DEEP_HASH=$(jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
+DEEP_HASH=$(sudo jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
     "$MANIFEST_ROOT/phi-4/latest")
-EMBED_HASH=$(jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
+EMBED_HASH=$(sudo jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
     "$MANIFEST_ROOT/nomic-embed-text/latest")
 
 echo "Fast:  $FAST_HASH"
@@ -255,28 +231,37 @@ echo "Deep:  $DEEP_HASH"
 echo "Embed: $EMBED_HASH"
 ```
 
-Each prints `sha256:abc123...`. Save these, they go into the next step.
+Each prints `sha256:abc123...`. Save the fast and deep hashes. They go
+into the next step on the honeypot. Stage 1 pins only the fast and deep
+roles, so the embed hash is informational for now.
+
+The honeypot pins these hashes but reads its own local manifest copy to
+do it, so a remote manifest only helps if you sync it. The next step and
+[`proxmox.md`](proxmox.md) Step 8 "Model-integrity pinning" cover the
+sync-or-skip choice.
 
 ---
 
-## 7. Wire the models into Anglerfish
+## 6. Wire the models into Anglerfish (on the honeypot)
 
-Edit `/etc/anglerfish/anglerfish.env`:
+This step runs on the **honeypot VM**, not the Model VM. The first-boot
+wizard ([`proxmox.md`](proxmox.md) Step 6) already wrote the endpoint and
+the trusted-remote IP. Edit the env file to add the per-role models and
+the integrity hashes you captured in §5.
 
 ```bash
 sudo nano /etc/anglerfish/anglerfish.env
 ```
 
-Set or update these lines:
+Set or update these lines. Replace `<model-ip>` with the Model VM's
+service-network address:
 
 ```bash
-# Loopback Ollama - co-located with the bridge, no trusted_remote_host needed
-ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/
-# Split topology (Ollama on a separate VM) instead uses the model VM's
-# service-network IP, plus the matching trusted-remote pin. The host must
-# be an IP literal; hostnames are rejected. See proxmox.md §1.4.
-#   ANGLERFISH_OLLAMA__BASE_URL=http://<ollama-ip>:11434/
-#   ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST=<ollama-ip>
+# Point the bridge at the Model VM. Both must be set in split mode: the
+# base_url host must equal trusted_remote_host, and it must be an IP
+# literal (hostnames are rejected because DNS could change under us).
+ANGLERFISH_OLLAMA__BASE_URL=http://<model-ip>:11434/
+ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST=<model-ip>
 
 # Per-role models (fast + deep tiers). The pre-Stage-5 single-key
 # aliases ANGLERFISH_OLLAMA__MODEL / ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH
@@ -284,17 +269,17 @@ ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/
 ANGLERFISH_OLLAMA__FAST_MODEL=qwen3:14b
 ANGLERFISH_OLLAMA__DEEP_MODEL=phi-4
 
-# Stage 1 defense - pin each model's layer hash
-ANGLERFISH_DEFENSE__FAST_MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 6>
-ANGLERFISH_DEFENSE__DEEP_MODEL_EXPECTED_HASH=sha256:<paste deep hash from step 6>
+# Stage 1 defense - pin each model's layer hash (from step 5).
+# OPTIONAL in split mode: see the manifest note below before setting these.
+ANGLERFISH_DEFENSE__FAST_MODEL_EXPECTED_HASH=sha256:<paste fast hash from step 5>
+ANGLERFISH_DEFENSE__DEEP_MODEL_EXPECTED_HASH=sha256:<paste deep hash from step 5>
 
-# REQUIRED when MODEL_EXPECTED_HASH is set: where to find the manifest.
-# Common values:
-#   /usr/share/ollama/.ollama/models/manifests  (Linux, official systemd installer)
-#   ~/.ollama/models/manifests                  (user-installed Ollama)
-# The bridge cross-field-validates these two together; setting one without
-# the other fails at startup with a clear error.
-ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR=/usr/share/ollama/.ollama/models/manifests
+# REQUIRED when any *_MODEL_EXPECTED_HASH is set: where to find the
+# manifest ON THE HONEYPOT. The bridge reads its LOCAL filesystem, so in
+# split mode this is a copy synced from the Model VM (see note below).
+# The bridge cross-validates these together; setting a hash without the
+# manifest dir fails at startup with a clear error.
+ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR=/etc/anglerfish/ollama-manifests
 
 # Stage 1 defense layer tuning (optional - defaults are sensible)
 ANGLERFISH_DEFENSE__OUTPUT_FILTER_ENABLED=true
@@ -302,24 +287,49 @@ ANGLERFISH_DEFENSE__INJECTION_FILTER_ENABLED=true
 ANGLERFISH_DEFENSE__INJECTION_THRESHOLD=0.7
 ```
 
+### The hash pin needs the manifest on the honeypot
+
+The integrity check reads Ollama's manifest from the bridge's **local**
+filesystem ([`src/anglerfish/bridge/defense.py:638-650`](../src/anglerfish/bridge/defense.py#L638-L650)).
+In split mode the manifests live on the Model VM, so the honeypot has no
+local copy by default. You have two options:
+
+1. **Skip the pin.** Leave both
+   `ANGLERFISH_DEFENSE__FAST_MODEL_EXPECTED_HASH` and
+   `ANGLERFISH_DEFENSE__DEEP_MODEL_EXPECTED_HASH` (and
+   `ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR`) unset. The bridge logs
+   `bridge.model_integrity_skipped` and starts. The honeypot does not
+   manage the model anyway.
+2. **Keep the pin.** Sync the Model VM's manifest tree to the honeypot
+   (rsync over the service link, read-only) and point
+   `ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR` at the local copy. Re-sync on
+   every `ollama pull`.
+
+[`proxmox.md`](proxmox.md) Step 8 "Model-integrity pinning" has the rsync
+command and the full reasoning. Pick one before you restart the bridge.
+
 Restart the bridge to pick up the new config:
 
 ```bash
 sudo systemctl restart anglerfish-bridge.service
 ```
 
-Verify:
+Verify on the honeypot:
 
 ```bash
 sudo journalctl -u anglerfish-bridge.service --since '1 min ago' --no-pager
-# Should NOT see: "model integrity skipped" warning
-# Should see: "bridge.model_integrity_verified" in the audit log
 sudo tail -5 /var/log/anglerfish/audit.jsonl | jq
 ```
 
+What you should see depends on the choice above:
+
+* **Pin kept:** `bridge.model_integrity_verified` for each role.
+* **Pin skipped:** `bridge.model_integrity_skipped`. This is a valid
+  state in split mode, not an error.
+
 ---
 
-## 8. End-to-end smoke test
+## 7. End-to-end smoke test
 
 From a throwaway host on the bait NIC:
 
@@ -329,63 +339,76 @@ ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 # Try a few commands; the LLM should respond plausibly
 ```
 
-Inside the Anglerfish VM, watch the bridge process the commands:
+On the honeypot, watch the bridge process the commands:
 
 ```bash
 sudo journalctl -u anglerfish-bridge.service -f
 ```
 
-You should see Ollama HTTP calls, response timings, and (if you trigger
-a defense pattern with something like `ignore previous instructions`) a
-`bridge.defense_fired` audit-log entry.
+You should see Ollama HTTP calls to the Model VM, response timings, and
+(if you trigger a defense pattern with something like `ignore previous
+instructions`) a `bridge.defense_fired` audit-log entry.
+
+[`proxmox.md`](proxmox.md) Step 7 has the full chain verification,
+including the dashboard health check.
 
 ---
 
 ## When you update a model
 
 Whenever you `ollama pull` a new version of a tracked model, the layer
-digest changes, the integrity check will catch it as a mismatch and
-the bridge will refuse to start. That's working as designed.
+digest changes. If you kept the integrity pin, the check catches the
+mismatch and the bridge refuses to start. That is working as designed.
 
-To roll an update intentionally:
+The pull happens on the Model VM. The env update happens on the honeypot.
+To roll an update intentionally with the pin kept:
 
 ```bash
-# 1. Update the model
+# 1. On the Model VM: update the model
 ollama pull qwen3:14b
 
-# 2. Capture the new hash
-jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
-    ~/.ollama/models/manifests/registry.ollama.ai/library/qwen3/14b
+# 2. On the Model VM: capture the new hash (adjust MANIFEST_ROOT per step 5)
+sudo jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
+    /usr/share/ollama/.ollama/models/manifests/registry.ollama.ai/library/qwen3/14b
 
-# 3. Update the env file
+# 3. If you sync the manifest tree (pin kept), re-sync it to the honeypot
+#    now so its local copy matches. See proxmox.md Step 8.
+
+# 4. On the honeypot: update the env file
 sudo nano /etc/anglerfish/anglerfish.env
-# Change ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH to the new value
+# Change ANGLERFISH_DEFENSE__FAST_MODEL_EXPECTED_HASH to the new value
 
-# 4. Restart the bridge
+# 5. On the honeypot: restart the bridge
 sudo systemctl restart anglerfish-bridge.service
 
-# 5. Verify the new hash was accepted
+# 6. Verify the new hash was accepted
 sudo tail -3 /var/log/anglerfish/audit.jsonl | jq
 # Look for: bridge.model_integrity_verified
 ```
 
-This three-step process is the visibility tax for the integrity check.
-Every model update is intentional and audited.
+If you skipped the pin, you only do steps 1 and 2 (and the model just
+updates). The integrity check is the visibility tax: every pinned model
+update is intentional and audited.
 
 ---
 
 ## Troubleshooting
 
+All of these except the env-file ones are on the **Model VM**. The
+`anglerfish.env` and bridge entries are on the **honeypot**.
+
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `ollama: command not found` | Slim ISO, Ollama not installed | Run step 2b |
-| `nvidia-smi: command not found` | NVIDIA driver not installed | `sudo apt install nvidia-driver firmware-misc-nonfree && sudo reboot` |
+| `ollama: command not found` (Model VM) | Ollama not installed | Run [`proxmox.md`](proxmox.md) Step 4 |
+| `nvidia-smi: command not found` (Model VM) | NVIDIA driver not installed | `sudo apt install nvidia-driver firmware-misc-nonfree && sudo reboot` |
 | `nvidia-smi` works but Ollama is slow (>10s/token) | Ollama falling back to CPU | Check `journalctl -u ollama.service` for CUDA errors; usually a driver / CUDA-runtime version mismatch |
 | `Out of memory` on `ollama run phi-4` | Fast model still loaded | Verify `OLLAMA_MAX_LOADED_MODELS=2`; if still failing, restart Ollama to clear state |
-| Bridge logs `model integrity check failed` after `ollama pull` | Expected - model updated, hash mismatch | Update `ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH` per "When you update a model" |
-| Bridge logs `model integrity skipped` warning | `ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH` unset | Capture the hash (step 6), set the env var, restart the bridge |
+| Honeypot bridge fails to start: `base_url host ... does not match trusted_remote_host` | `BASE_URL` IP and `TRUSTED_REMOTE_HOST` disagree | Make both the same Model VM IP literal; no hostnames |
+| Bridge logs `bridge.model_integrity` mismatch after `ollama pull` | Expected with the pin kept; model updated, hash changed | Recapture the hash and update the env var per "When you update a model"; re-sync the manifest |
+| Bridge logs `bridge.model_integrity_skipped` | A `*_MODEL_EXPECTED_HASH` is unset | Valid in split mode (see §6 option 1). To pin: sync the manifest, set the hash + `OLLAMA_MANIFEST_DIR`, restart the bridge |
+| Bridge start fails: `*_model_expected_hash is set but ... ollama_manifest_dir is not` | Hash set without the manifest dir | Set `ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR` to the synced manifest path on the honeypot, or unset the hash |
 | `OLLAMA_FLASH_ATTENTION=1` makes inference slower or crashes | Flash attention incompatible with your quant type or driver version | Set to `0`, restart Ollama |
-| Disk filling fast under `~/.ollama/models/blobs` | `keep_alive=-1` + multiple pulls of similar models | Run `ollama list` and `ollama rm <unused>` to clean up |
+| Disk filling fast under the Ollama `models/blobs` dir | `keep_alive=-1` + multiple pulls of similar models | Run `ollama list` and `ollama rm <unused>` to clean up |
 
 ---
 
@@ -413,7 +436,7 @@ reasoning. Short version:
 defense layer is model-specific; if you have an internal preference (an
 in-house fine-tune, a different upstream you trust) just set
 `ANGLERFISH_OLLAMA__FAST_MODEL` (and/or `__DEEP_MODEL`) and capture the
-new hash per step 6.
+new hash per §5.
 
 If a future model meaningfully beats one of these on the relevant axis
 (shell knowledge, summarization quality, embedding cluster purity),

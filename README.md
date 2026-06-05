@@ -45,7 +45,7 @@ before any service is enabled.
 
 ```
                   ┌──────────────────────────────────────────────────────┐
-                  │              ANGLERFISH AI VM                        │
+                  │              HONEYPOT VM (no GPU)                    │
                   │                                                      │
    bait NIC ──────┤  Lure (native asyncssh on :2222 by default)          │
    (hostile)      │      │                                               │
@@ -53,17 +53,12 @@ before any service is enabled.
                   │      v                                               │
                   │  Bridge HTTP server                                  │
                   │      │                                               │
-                  │      v                                               │
-                  │  AIBridgeService ── sanitize → rate-limit → prompt   │
-                  │      │              → Ollama → cap → fallback        │
-                  │      v                                               │
-                  │  ┌─────────────┐                                     │
-                  │  │ Ollama LLM  │ <──── loopback or trusted IP ───── service NIC
-                  │  └─────────────┘       (qwen3:14b default)           │
-                  │      │                                               │
-                  │      v                                               │
-                  │  Threat engine ── MITRE ATT&CK tagger ── webhook     │
-                  │      │                                               │
+                  │      v                                               │              ┌─────────────┐
+                  │  AIBridgeService ── sanitize → rate-limit → prompt   │   service    │  Model VM   │
+                  │      │              → Ollama → cap → fallback ───────┼── network ──►│ Ollama LLM  │
+                  │      v                                  ▲            │  :11434      │ (GPU)       │
+                  │  Threat engine ── MITRE ATT&CK tagger ──┘            │              │ qwen3:14b   │
+                  │      │              → webhook                        │              └─────────────┘
                   │      v                                               │
                   │  Session store (SQLite at /var/lib/anglerfish)       │
                   │      │                                               │
@@ -77,13 +72,20 @@ before any service is enabled.
                   └──────────────────────────────────────────────────────┘
 ```
 
+The honeypot VM has no GPU and runs no model. It calls the Model VM over
+the service network for every response. In local development you can run
+Ollama on loopback (`http://127.0.0.1:11434/`) on the same machine
+instead.
+
 The honeypot VM has two network interfaces:
 
 * **Bait**: exposed to hostile traffic. Runs the lure SSH listener
   (native asyncssh) on the configured port. Egress is dropped at
   nftables level except for DNS.
-* **Service**: private, firewalled. Reaches Ollama (loopback or a
-  single trusted IP) and the operator dashboard. Nothing else.
+* **Service**: private, firewalled. Reaches Ollama on the Model VM (a
+  single trusted IP over the service network) and the operator
+  dashboard. Nothing else. In local development Ollama can run on
+  loopback instead.
 
 A compromised Anglerfish must not be able to pivot to other systems.
 nftables rules generated at first boot enforce that egress on the
@@ -140,14 +142,33 @@ Every shipped Python module is gated on `ruff`, `mypy --strict`, and
 
 ---
 
+## Deployment
+
+Production deployment is split across two VMs. The Model VM holds the GPU
+and runs Ollama. The honeypot VM has no GPU and calls the Model VM over
+the service network. The honeypot points at it with
+`ANGLERFISH_OLLAMA__BASE_URL=http://<model-ip>:11434/` and
+`ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST=<model-ip>`.
+
+Follow [`docs/proxmox.md`](docs/proxmox.md) for the step-by-step build
+(host networking, GPU passthrough, both VMs, first-boot wizard, and the
+end-to-end verification). The sections below cover local development, not
+deployment.
+
+---
+
 ## Quick start (development)
+
+The commands below run Anglerfish on one machine for development. A
+loopback Ollama (`http://127.0.0.1:11434/`) is a local-dev convenience;
+production runs the model on the separate Model VM described above.
 
 ### Prerequisites
 
 * Python 3.11+
 * `pip` and `venv`
-* For live LLM testing: a reachable Ollama instance (loopback or a
-  trusted-remote IP)
+* For live LLM testing: a reachable Ollama instance (loopback for local
+  dev, or a trusted-remote IP for the split topology)
 
 ### Install
 
@@ -195,9 +216,14 @@ anglerfish bridge serve --host 127.0.0.1 --port 8421
 ### Run the dashboard against an empty state
 
 ```bash
-uvicorn --factory anglerfish.dashboard.app:create_app \
-        --host 127.0.0.1 --port 8420
+anglerfish dashboard serve --host 127.0.0.1 --port 8420
 ```
+
+Both flags are optional. Without them the dashboard binds to
+`settings.dashboard.host` and `settings.dashboard.port` (defaults
+`127.0.0.1:8420`). It serves plain HTTP. Check it with
+`curl http://127.0.0.1:8420/api/health`, which returns
+`{"status":"ok","version":"0.1.0"}`.
 
 ### Run the first-boot wizard manually
 
@@ -311,7 +337,9 @@ sudo ./iso/build.sh
 ```
 
 Produces `iso/build/anglerfish-ai-<version>.iso` plus a `.sha256`
-checksum. See [`iso/README.md`](iso/README.md) for full details.
+checksum. The build defaults to `--without-ollama`, which is what the
+split topology needs (the honeypot calls the Model VM for the model). See
+[`iso/README.md`](iso/README.md) for full details.
 
 The ISO boots directly into a text console and runs the first-boot
 wizard on tty1 before any networked service comes up.

@@ -1,20 +1,27 @@
 # Installing Anglerfish AI
 
-This guide walks from a fresh ISO download to a running honeypot.
-It covers two install paths:
+This guide walks from a fresh ISO download to a running honeypot. It
+covers two install paths.
 
-1. **Proxmox**: production. The honeypot runs as a VM with two
-   bridges; the bait NIC is exposed to attacker traffic, the service
-   NIC reaches operators + Ollama. Detailed in
-   [proxmox.md](proxmox.md); this guide gives the short version and
-   the cross-environment steps.
-2. **QEMU smoke**: workstation. Useful for validating the ISO
-   without committing rack space. Same wizard, same services, no
-   real attacker traffic. See [`iso/smoke.sh`](../iso/smoke.sh).
+1. **Proxmox**: production. Deployment is split across two VMs. A
+   **Model VM** holds the GPU and runs Ollama. The **honeypot VM** has
+   no GPU; it takes attacker SSH traffic on its bait NIC, serves the
+   operator dashboard on its service NIC, and calls the Model VM over
+   the service network for every response. The full step-by-step
+   walkthrough lives in [proxmox.md](proxmox.md). This guide gives the
+   short version and the cross-environment steps; it does not duplicate
+   proxmox.md.
+2. **QEMU smoke**: workstation. Useful for validating the ISO without
+   committing rack space. Same wizard, same services, no real attacker
+   traffic. See [`iso/smoke.sh`](../iso/smoke.sh).
+
+Loopback Ollama on the honeypot itself (`http://127.0.0.1:11434/`) is a
+dev and test convenience only. Production is the split Model VM. The
+canonical deployment is [proxmox.md](proxmox.md).
 
 If you intend to operate the honeypot on an internet-facing IP, read
-[../SECURITY.md](../SECURITY.md) and the responsible-use clause in
-the README first. The wizard refuses to proceed until you accept it.
+[../SECURITY.md](../SECURITY.md) and the responsible-use clause in the
+README first. The wizard refuses to proceed until you accept it.
 
 ---
 
@@ -23,8 +30,9 @@ the README first. The wizard refuses to proceed until you accept it.
 | Concern         | Requirement                                                       |
 |-----------------|-------------------------------------------------------------------|
 | ISO host        | A linux host with `live-build` (to build the ISO) **or** a release artefact downloaded from GitHub Releases. |
-| LLM             | **Ollama co-located on the Anglerfish VM** (recommended - see [`PRODUCT.md`](PRODUCT.md) and [`MODEL_SETUP.md`](MODEL_SETUP.md)). Trusted-remote Ollama is supported via `trusted_remote_host` but adds operational complexity for no gain on single-honeypot deployments. |
-| GPU             | NVIDIA card with ≥12GB VRAM passed through to the Anglerfish VM. RTX 3060 12GB is the reference. CPU-only works but inference is slow enough to break the deception. See [`proxmox.md`](proxmox.md) §1.3 for passthrough setup. |
+| Model VM        | A separate VM that holds the GPU and runs Ollama. The honeypot calls it over the service network. Build it per [proxmox.md](proxmox.md) Steps 3 and 4 and [`MODEL_SETUP.md`](MODEL_SETUP.md). |
+| GPU             | NVIDIA card with ≥12GB VRAM passed through to the **Model VM** (not the honeypot). RTX 3060 12GB is the reference. CPU-only works but inference is slow enough to break the deception. See [proxmox.md](proxmox.md) Step 2 for passthrough setup. |
+| Service network | A `vmbr-service` link the honeypot uses to reach the Model VM on `:11434`. The honeypot's bait NIC never sees the Model VM. |
 | Operator access | An ED25519 SSH public key. The wizard installs it into the operator account; nothing else gets you back into the VM. |
 | Optional        | A MaxMind licence key for first-boot GeoLite2 fetch. Without it, geo enrichment is empty until you stage `.mmdb` files manually. |
 
@@ -75,55 +83,72 @@ sudo ./iso/build.sh                  # produces build/anglerfish-ai-<version>.is
 sudo ./iso/build.sh --sign           # also signs with cosign (needs OIDC)
 ```
 
+The default build is `--without-ollama`, which is what the split
+topology wants. See §2.3 for when `--with-ollama` applies.
+
 The build is reproducible to the extent that live-build allows;
 package versions land in `build/manifest.txt` (live-build's default).
 
 ### 2.3 Build-time options
 
-The build hooks read environment variables. All optional.
+`iso/build.sh` takes `--with-ollama` and `--without-ollama` (default
+`--without-ollama`). The flag wires through to the
+`ANGLERFISH_INSTALL_OLLAMA` build env that hook `0060` reads.
 
-| Variable                    | Default | Meaning                                                    |
-|-----------------------------|---------|------------------------------------------------------------|
-| `ANGLERFISH_INSTALL_OLLAMA` | `0`     | When `1`, hook `0060` installs Ollama on-host (+5 GB ISO). |
+| Flag                | Effect                                                         |
+|---------------------|----------------------------------------------------------------|
+| `--without-ollama`  | Default. Slim ISO. The honeypot does not bundle Ollama; it calls the Model VM. |
+| `--with-ollama`     | Installs Ollama on-host (+~5 GB ISO). Loopback / dev path only. |
 
-**Recommendation for new deployments:** set `ANGLERFISH_INSTALL_OLLAMA=1`.
-The slim-ISO path still works (you `curl | sh` Ollama in after first
-boot per [`MODEL_SETUP.md`](MODEL_SETUP.md)), but the on-host install
-is the canonical path now that Ollama runs co-located with the bridge
-on a loopback endpoint. See [`proxmox.md`](proxmox.md) §1.3 for the
-GPU-passthrough rationale and [`PRODUCT.md`](PRODUCT.md) for the
-design principle.
+**Recommendation for the split topology: build `--without-ollama`.**
+The honeypot in this deployment never runs the model and never touches
+a GPU. Ollama lives on the Model VM, so there is no reason to bake it
+into the honeypot image.
 
 ```bash
-# Build with Ollama baked in (recommended)
-ANGLERFISH_INSTALL_OLLAMA=1 sudo ./iso/build.sh
+# Split topology (production): no on-host Ollama
+sudo ./iso/build.sh --without-ollama
 ```
 
-Trusted-remote Ollama still works for the rare cases (multi-honeypot
-fleet sharing one inference server, or operators with GPU constraints
-forcing the LLM onto a separate box).
+`--with-ollama` exists for the loopback dev and test path (Ollama
+co-located on a single VM). It is not the production topology. See
+[proxmox.md](proxmox.md) for the GPU-passthrough setup on the Model VM
+and [`PRODUCT.md`](PRODUCT.md) for the local-LLM design principle.
 
 ---
 
 ## 3. Install - Proxmox
 
-See [proxmox.md](proxmox.md) for the full version. The short
-version, assuming `vmbr-bait` and `vmbr-service` already exist:
+[proxmox.md](proxmox.md) is the full split-topology walkthrough: two
+bridges, GPU passthrough, the Model VM, the honeypot VM, the wizard,
+and end-to-end verification, in eight ordered steps. Follow it top to
+bottom. This section is the short version of the honeypot-VM deploy
+only.
+
+Stand up the **Model VM first** (proxmox.md Steps 1 through 4) so you
+have its service-network IP before the wizard asks for the Ollama
+endpoint. Then, assuming `vmbr-bait` and `vmbr-service` exist and the
+ISO was built `--without-ollama`:
 
 ```bash
 # On the Proxmox host:
 sudo ./proxmox/deploy.sh \
     --iso ./anglerfish-ai-0.1.0.iso \
-    --vmid 9001 \
+    --vmid 9000 \
     --name anglerfish-honeypot
 
-qm start 9001
-qm terminal 9001    # serial console for the wizard
+qm start 9000
+qm terminal 9000    # serial console for the wizard
 ```
 
 The script refuses to auto-create bridges (safety: a misconfigured
-bridge could expose the management plane to attacker traffic). See
-the bridge template in [proxmox.md §1.1](proxmox.md#11-create-the-two-linux-bridges).
+bridge could expose the management plane to attacker traffic). It also
+refuses to run unless `vmbr-bait` and `vmbr-service` already exist, and
+it does not start the VM. See the bridge template in
+[proxmox.md Step 1](proxmox.md#step-1-host-networking-two-bridges).
+
+`deploy.sh` flags: `--iso`, `--vmid`, `--name`, `--template`,
+`--storage`, `--disk-storage`, `--memory`, `--cores`, `--dry-run`.
 
 ---
 
@@ -157,13 +182,19 @@ QEMU's `-nographic`). The full prompt list:
 | 7    | Operator SSH public key                               | Paste an `ssh-ed25519 ...` line. Blank skips it.             |
 | 8    | Dashboard admin username                              | Default `admin`.                                             |
 | 9    | Dashboard admin password                              | Blank ⇒ open mode (only safe on a fully-isolated NIC).       |
-| 10   | Ollama endpoint URL                                   | `http://127.0.0.1:11434/` (on-host) or `http://<gpu-host>:11434/`. |
-| 11   | Trusted remote Ollama IP                              | Only if the URL is not loopback. Must match the URL's host.  |
-| 12   | Ollama model tag                                      | Default `qwen3:14b` (Apache-2.0, Hugging Face). The bridge `ollama pull`s lazily. |
-| 13   | Fake hostname for the AI shell                        | Default `srv-prod-01` - what the attacker sees in `hostname`. |
+| 10   | Ollama endpoint URL                                   | Production: `http://<model-ip>:11434/` (your Model VM). Dev/test loopback is `http://127.0.0.1:11434/`. |
+| 11   | Trusted remote Ollama IP                              | Required when the URL is not loopback (the split topology). Enter `<model-ip>`; it must match the URL's host. |
+| 12   | Ollama model tag                                      | Default `qwen3:14b` (Apache-2.0, Hugging Face). Pull it on the Model VM first; the bridge does not pull. |
+| 13   | Fake hostname for the AI shell                        | Default `srv-prod-01`, what the attacker sees in `hostname`. |
 | 14   | Fake username for the AI shell                        | Default `root`.                                              |
 | 15   | Threat alert webhook URL                              | Optional.                                                    |
 | 16   | MaxMind GeoLite2 licence key                          | Optional. Without it, geo lookups return empty records.      |
+
+For the split topology, steps 10 and 11 both point at the Model VM. A
+non-loopback endpoint URL is rejected unless the trusted-remote IP is
+set and matches the URL's host. The host must be an IP literal; the
+wizard rejects hostnames because DNS could change between validation
+and use.
 
 After the wizard:
 
@@ -173,51 +204,53 @@ After the wizard:
 * `getty@tty1` is re-enabled so you can log in on console.
 * `anglerfish-geo-update.service` runs once if a licence key was
   supplied.
-* The bridge and dashboard start. The native lure (`anglerfish lure
-  serve`) is not yet auto-started by a systemd unit; operators run
-  it manually until TODO-3 (`docs/TODO.md`) lands.
+* The bridge, dashboard, and lure all start as systemd units
+  (`anglerfish-bridge.service`, `anglerfish-dashboard.service`,
+  `anglerfish-lure.service`). The lure unit runs `anglerfish lure
+  serve` and is enabled on the ISO; no manual start is needed.
 
-The bridge starts but **the fast-tier LLM model is not yet pulled** -
-the wizard configures the model *tag* but the actual model blob
-(several GB) is operator-controlled. The bridge will fail every
-Ollama call until you complete the next step.
+If you pointed the wizard at a Model VM that already has the model
+pulled (see the next step), the bridge serves immediately. Otherwise
+the wizard sets the model *tag* but the model blob (several GB) lives
+on the Model VM, and the bridge fails every Ollama call until the
+Model VM has the model.
 
 ---
 
 ## 6. Set up the local LLM
 
-SSH in over the service NIC and walk through
-[`MODEL_SETUP.md`](MODEL_SETUP.md). Short version:
+In the split topology, Ollama and the models live on the **Model VM**,
+not the honeypot. If you followed [proxmox.md](proxmox.md) Step 4 you
+already installed Ollama, applied the workload tuning, locked the
+firewall to the honeypot, and pulled the model. If you have not, do it
+now. SSH into the Model VM and pull the stack:
 
 ```bash
-ssh anglerfish-ops@<service-ip>
+ssh <user>@<model-ip>
 
-# Tune Ollama for the honeypot workload (steps from MODEL_SETUP.md §3)
+# Tune Ollama for the honeypot workload (MODEL_SETUP.md §2) and bind it
+# to the service address only (proxmox.md Step 4 has the full drop-in).
 sudo systemctl edit ollama.service
 # ... paste the [Service] block ...
 sudo systemctl daemon-reload && sudo systemctl restart ollama.service
 
 # Pull the three-tier stack (~13GB total)
-ollama pull qwen2.5-coder:7b-instruct   # fast tier - used by Stage 1
-ollama pull phi-4                        # deep tier - used by Stage 5+
-ollama pull nomic-embed-text             # embed tier - used by Stage 6+
-
-# Capture the fast-tier hash for the Stage 1 integrity check
-sudo apt install -y jq
-jq -r '.layers[] | select(.mediaType == "application/vnd.ollama.image.model") | .digest' \
-    ~/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5-coder/7b-instruct
-
-# Add the hash to /etc/anglerfish/anglerfish.env:
-#   ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH=sha256:<paste here>
-
-# Restart the bridge so it verifies the hash and starts serving
-sudo systemctl restart anglerfish-bridge.service
+ollama pull qwen3:14b            # fast tier  - used by Stage 1
+ollama pull phi-4               # deep tier  - used by Stage 5+
+ollama pull nomic-embed-text    # embed tier - used by Stage 6+
 ```
 
+The Stage 1 model-integrity pin reads Ollama's manifest from the
+bridge's **local** filesystem. With Ollama on the Model VM the
+honeypot has no manifest to read, so you either leave the pin unset
+(the bridge logs `bridge.model_integrity_skipped` and starts) or sync
+the Model VM's manifest tree to the honeypot. Both options are in
+[proxmox.md Step 8](proxmox.md#step-8-day-2-operations) under
+"Model-integrity pinning" and in [`MODEL_SETUP.md`](MODEL_SETUP.md) §5.
+
 The full guide ([`MODEL_SETUP.md`](MODEL_SETUP.md)) covers hardware
-sizing for non-RTX-3060 GPUs, the Stage 1 hash-rotation workflow when
-you `ollama pull` an updated model, and the GPU-passthrough
-prerequisites if you skipped them earlier.
+sizing for non-RTX-3060 GPUs, the three-tier model picks, and the
+hash-rotation workflow when you `ollama pull` an updated model.
 
 ---
 
@@ -227,22 +260,34 @@ From an operator host on the service NIC:
 
 ```bash
 # 1. SSH operator login
-ssh anglerfish-ops@<service-ip>
+ssh anglerfish-ops@<honeypot-service-ip>
 
-# 2. Dashboard health probe (always open, no auth)
-curl -s http://<service-ip>:8420/api/health
+# 2. Dashboard health probe (plain HTTP, always open, no auth)
+curl -s http://<honeypot-service-ip>:8420/api/health
 # {"status":"ok","version":"0.1.0"}
 
 # 3. Authenticated dashboard call
-curl -s -u admin:<password> http://<service-ip>:8420/api/stats
+curl -s -u admin:<password> http://<honeypot-service-ip>:8420/api/stats
 
 # 4. Hit the lure on the bait NIC from a throwaway box
-ssh -p 2222 root@<bait-ip>
+ssh -p 2222 root@<honeypot-bait-ip>
 ```
 
-If all four respond as expected, the install is healthy. Open the
-dashboard in a browser at `http://<service-ip>:8420/` and log in
-with the admin credentials you set in step 9 of the wizard.
+Confirm the honeypot can reach the Model VM. From the honeypot
+(operator SSH):
+
+```bash
+curl -s http://<model-ip>:11434/api/tags
+# JSON listing the models you pulled on the Model VM
+```
+
+If all of these respond as expected, the install is healthy. Coherent
+shell output from the lure means the full chain works: lure to bridge
+to Model VM and back. Open the dashboard in a browser at
+`http://<honeypot-service-ip>:8420/` and log in with the admin
+credentials you set in step 9 of the wizard. [proxmox.md Step
+7](proxmox.md#step-7-verify-the-whole-chain) has the longer
+chain-verification routine.
 
 ---
 
@@ -256,9 +301,10 @@ sudo anglerfish-wizard --reconfigure
 ```
 
 Secrets in `/etc/anglerfish/anglerfish.env` regenerate on every run;
-expect to restart `anglerfish-bridge.service` and the running lure
-process afterwards. The credentials DB keeps its encryption key
-unless you rotate it explicitly via `anglerfish credentials rotate-key`.
+expect to restart `anglerfish-bridge.service`, `anglerfish-lure.service`,
+and `anglerfish-dashboard.service` afterwards. The credentials DB keeps
+its encryption key unless you rotate it explicitly via `anglerfish
+credentials rotate-key`.
 
 ---
 
