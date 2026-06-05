@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anglerfish-ai"
 version = "0.1.0"
-description = "AI-powered SSH honeypot — lures attackers into a convincing LLM-driven fake shell, scores threats with MITRE ATT&CK mapping, and ships intelligence to Splunk."
+description = "AI-powered SSH honeypot that lures attackers into a convincing LLM-driven fake shell, scores threats with MITRE ATT&CK mapping, and records the captured session intelligence."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
