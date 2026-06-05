@@ -28,6 +28,11 @@
 
 set -e
 
+# live-build enters this chroot itself, so the builder image's
+# DEBIAN_FRONTEND does not propagate here. Set it so the apt-get install
+# below cannot stop on a debconf prompt and stall the whole ISO build.
+export DEBIAN_FRONTEND=noninteractive
+
 if [ "${ANGLERFISH_INSTALL_OLLAMA:-0}" != "1" ]; then
     echo "[anglerfish] on-host Ollama install skipped (default: trusted-remote)."
     echo "[anglerfish] set ANGLERFISH_INSTALL_OLLAMA=1 at build time to opt in."
