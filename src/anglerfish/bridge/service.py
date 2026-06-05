@@ -24,13 +24,12 @@ import logging
 import shlex
 import time
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime
 from typing import Self
 from uuid import UUID
 
 from anglerfish.audit import AuditLog
+from anglerfish.bridge.audit_recorder import BridgeAuditRecorder
 from anglerfish.bridge.defense import (
-    DefenseVerdict,
     InjectionScorer,
     OutputFilter,
 )
@@ -66,8 +65,6 @@ from anglerfish.intel import EmbeddingGenerator, IntentExtractor
 from anglerfish.llm import ChatMessage, LLMClient, TokenBudget
 from anglerfish.llm.budget import BudgetExhaustedError
 from anglerfish.llm.errors import LLMError
-from anglerfish.models.embedding import SessionEmbedding
-from anglerfish.models.intent import IntentSummary
 from anglerfish.models.persistence import PersistenceEvent
 from anglerfish.models.session import (
     BridgeChunk,
@@ -120,6 +117,8 @@ class AIBridgeService:
         # instances to share them across services or pre-load operator
         # overrides at startup.
         self._audit_log = audit_log if audit_log is not None else AuditLog(settings.audit.log_path)
+        # Per-command audit-event emission lives in a focused collaborator.
+        self._audit = BridgeAuditRecorder(self._audit_log)
         self._output_filter = (
             output_filter if output_filter is not None else OutputFilter(settings.defense)
         )
@@ -506,7 +505,7 @@ class AIBridgeService:
         source_ip = self._source_ip_by_session.get(session_id)
         if source_ip is not None and state.garble_paths:
             self._counter_deception_paths_by_source_ip[source_ip] = state.garble_paths
-        self._record_counter_deception_engaged(
+        self._audit.record_counter_deception_engaged(
             session_id=session_id,
             source_ip=source_ip,
             state=state,
@@ -577,7 +576,7 @@ class AIBridgeService:
         self._counter_deception_state[session_id] = state
         if state.garble_paths:
             self._counter_deception_paths_by_source_ip[source_ip] = state.garble_paths
-        self._record_counter_deception_engaged(
+        self._audit.record_counter_deception_engaged(
             session_id=session_id,
             source_ip=source_ip,
             state=state,
@@ -605,13 +604,13 @@ class AIBridgeService:
         cold_to_mild, mild_to_severe = state.timebomb_thresholds
         if cold_to_mild > 0:
             if command_count >= mild_to_severe:
-                self._record_counter_deception_timebomb_applied(
+                self._audit.record_counter_deception_timebomb_applied(
                     session_id=session_id,
                     command_count=command_count,
                     intensity="severe",
                 )
             elif command_count >= cold_to_mild:
-                self._record_counter_deception_timebomb_applied(
+                self._audit.record_counter_deception_timebomb_applied(
                     session_id=session_id,
                     command_count=command_count,
                     intensity="mild",
@@ -633,49 +632,6 @@ class AIBridgeService:
         ``SessionStartResponse.counter_deception_garble_paths``.
         """
         return self._counter_deception_paths_by_source_ip.get(source_ip, ())
-
-    def _record_counter_deception_engaged(
-        self,
-        *,
-        session_id: UUID,
-        source_ip: str | None,
-        state: CounterDeceptionState,
-        trigger: str,
-        threat_score: int | None,
-    ) -> None:
-        """Audit a single bridge.counter_deception_engaged event.
-
-        ``trigger`` is "threat" (score crossed the threshold) or "pin"
-        (operator forced it). ``threat_score`` is the crossing score for
-        the threat path, None for a pin. ``garble_paths`` rides as a
-        count (not the full list) to bound the audit-log payload; the
-        dashboard reads the live config for the path list.
-        """
-        self._audit_log.record(
-            "bridge.counter_deception_engaged",
-            session_id=str(session_id),
-            attacker_ip=source_ip,
-            mode=state.mode.value,
-            trigger=trigger,
-            garble_paths_count=len(state.garble_paths),
-            timebomb_thresholds=list(state.timebomb_thresholds),
-            threat_score=threat_score,
-        )
-
-    def _record_counter_deception_timebomb_applied(
-        self,
-        *,
-        session_id: UUID,
-        command_count: int,
-        intensity: str,
-    ) -> None:
-        """Audit a per-command time-bomb prompt amendment (mild | severe)."""
-        self._audit_log.record(
-            "bridge.counter_deception_timebomb_applied",
-            session_id=str(session_id),
-            command_count=command_count,
-            intensity=intensity,
-        )
 
     async def select_persona(self, source_ip: str) -> SelectionResult | None:
         """Pick a persona for ``source_ip`` via the configured selector.
@@ -800,7 +756,7 @@ class AIBridgeService:
                 cwd=session.cwd,
             )
         except PersistenceClassifierError as exc:
-            self._record_persistence_classifier_error(
+            self._audit.record_persistence_classifier_error(
                 session=session,
                 error=str(exc),
             )
@@ -808,47 +764,11 @@ class AIBridgeService:
         if event is None:
             return None
         session.record_persistence_event(event)
-        self._record_persistence_attempt(
+        self._audit.record_persistence_attempt(
             session=session,
             event=event,
         )
         return event
-
-    def _record_persistence_attempt(
-        self,
-        *,
-        session: SessionContext,
-        event: PersistenceEvent,
-    ) -> None:
-        """Audit a single bridge.persistence_attempt event.
-
-        The dashboard audit-tailer (slice 10.2) reads this and
-        upserts into fake_persistence_state via the COALESCE-
-        based UNIQUE INDEX so replay is idempotent.
-        """
-        self._audit_log.record(
-            "bridge.persistence_attempt",
-            session_id=str(session.session_id),
-            source_ip=session.source_ip,
-            kind=event.kind,
-            sub_key=event.sub_key,
-            payload=event.payload,
-            source=event.source,
-            created_at=datetime.now(tz=UTC).isoformat(),
-        )
-
-    def _record_persistence_classifier_error(
-        self,
-        *,
-        session: SessionContext,
-        error: str,
-    ) -> None:
-        self._audit_log.record(
-            "bridge.persistence_classifier_error",
-            session_id=str(session.session_id),
-            source_ip=session.source_ip,
-            error=error,
-        )
 
     def schedule_intent_extraction(
         self,
@@ -897,20 +817,20 @@ class AIBridgeService:
                 timeout=timeout_s,
             )
         except TimeoutError:
-            self._record_intent_extraction_failed(
+            self._audit.record_intent_extraction_failed(
                 snapshot=snapshot,
                 error_type="TimeoutError",
                 error=f"intent extraction exceeded {timeout_s}s",
             )
             return
         except Exception as exc:  # noqa: BLE001 - audit + swallow on background task
-            self._record_intent_extraction_failed(
+            self._audit.record_intent_extraction_failed(
                 snapshot=snapshot,
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
             return
-        self._record_intent_extracted(summary)
+        self._audit.record_intent_extracted(summary)
 
     def schedule_embedding_generation(
         self,
@@ -955,23 +875,23 @@ class AIBridgeService:
                 timeout=timeout_s,
             )
         except TimeoutError:
-            self._record_embedding_failed(
+            self._audit.record_embedding_failed(
                 snapshot=snapshot,
                 error_type="TimeoutError",
                 error=f"embedding generation exceeded {timeout_s}s",
             )
             return
         except Exception as exc:  # noqa: BLE001 - audit + swallow on background task
-            self._record_embedding_failed(
+            self._audit.record_embedding_failed(
                 snapshot=snapshot,
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
             return
         if embedding is None:
-            self._record_embedding_skipped(snapshot)
+            self._audit.record_embedding_skipped(snapshot)
             return
-        self._record_embedding_generated(embedding)
+        self._audit.record_embedding_generated(embedding)
 
     def wasting_stats(self) -> dict[str, int]:
         """Return a snapshot of per-process wasting counters.
@@ -1013,7 +933,7 @@ class AIBridgeService:
         try:
             return await self._run_command(session, command, fs_context=fs_context)
         except Exception as exc:  # noqa: BLE001 - the attacker must never see an exception
-            self._record_handler_error(session, exc)
+            self._audit.record_handler_error(session, exc)
             text, source = self._fail_closed(session, command, exc)
             return BridgeResponse(text=text, source=source, latency_ms=0.0)
 
@@ -1049,15 +969,16 @@ class AIBridgeService:
         # of fired. A clean verdict on a truncated scan means the tail
         # wasn't inspected — operator-visible gap.
         if injection_verdict.truncated:
-            self._record_scan_truncated(
+            self._audit.record_scan_truncated(
                 session,
                 kind="injection",
                 input_length=len(sanitised),
                 verdict=injection_verdict,
+                scan_max_chars=self._settings.defense.scan_max_chars,
             )
         if injection_verdict.fired:
             start = self._monotonic()
-            self._record_defense_fire(session, injection_verdict)
+            self._audit.record_defense_fire(session, injection_verdict)
             text, source = self._fallback(
                 session,
                 sanitised,
@@ -1120,20 +1041,25 @@ class AIBridgeService:
                 # misbehaviour, or an attacker steering toward a long
                 # response to smuggle a leak past the scan window).
                 if len(result.content) > self._settings.ollama.max_response_chars:
-                    self._record_scan_truncated(
+                    self._audit.record_scan_truncated(
                         session,
                         kind="output",
                         input_length=len(result.content),
                         verdict=output_verdict,
+                        scan_max_chars=self._settings.defense.scan_max_chars,
                     )
                 if output_verdict.fired:
-                    self._record_defense_fire(session, output_verdict)
+                    self._audit.record_defense_fire(session, output_verdict)
                     raise OutputFilterFiredError(
                         f"{output_verdict.detector} fired (score={output_verdict.score})",
                     )
                 source = ResponseSource.AI
         except BudgetExhaustedError as exc:
-            self._record_budget_exhausted(session, exc)
+            self._audit.record_budget_exhausted(
+                session,
+                exc,
+                budget_snapshot=self._budget_snapshot(session.session_id),
+            )
             text, source = self._fallback(session, sanitised, reason=exc)
         except (
             OllamaUnavailableError,
@@ -1189,7 +1115,7 @@ class AIBridgeService:
                     streamed_ai = True
                 yield chunk
         except Exception as exc:  # noqa: BLE001 - the attacker must never see an exception
-            self._record_handler_error(session, exc)
+            self._audit.record_handler_error(session, exc)
             if streamed_ai:
                 yield BridgeChunk(delta="", source=ResponseSource.AI, done=True, latency_ms=0.0)
             else:
@@ -1220,15 +1146,16 @@ class AIBridgeService:
 
         injection_verdict = self._injection_scorer.score(sanitised)
         if injection_verdict.truncated:
-            self._record_scan_truncated(
+            self._audit.record_scan_truncated(
                 session,
                 kind="injection",
                 input_length=len(sanitised),
                 verdict=injection_verdict,
+                scan_max_chars=self._settings.defense.scan_max_chars,
             )
         if injection_verdict.fired:
             start = self._monotonic()
-            self._record_defense_fire(session, injection_verdict)
+            self._audit.record_defense_fire(session, injection_verdict)
             text, source = self._fallback(
                 session,
                 sanitised,
@@ -1342,7 +1269,11 @@ class AIBridgeService:
                                 wasted_ms += int(delay * 1000.0)
                                 await self._sleep(delay)
                 except BudgetExhaustedError as exc:
-                    self._record_budget_exhausted(session, exc)
+                    self._audit.record_budget_exhausted(
+                        session,
+                        exc,
+                        budget_snapshot=self._budget_snapshot(session.session_id),
+                    )
                     error = exc
                 except (OllamaUnavailableError, OllamaResponseError) as exc:
                     error = exc
@@ -1352,7 +1283,7 @@ class AIBridgeService:
         latency_ms = (self._monotonic() - start) * 1000.0
 
         if wasted_ms > 0 or pre_effect.inject_clarification:
-            self._record_wasting_applied(
+            self._audit.record_wasting_applied(
                 session=session,
                 strategy_name=strategy.name,
                 wasted_ms=wasted_ms,
@@ -1376,7 +1307,7 @@ class AIBridgeService:
             # guard above) and lands on the error path below, never on this
             # success branch - so a scan-truncation signal cannot arise.
             if output_verdict.fired:
-                self._record_defense_fire(session, output_verdict)
+                self._audit.record_defense_fire(session, output_verdict)
             session.record(
                 sanitised,
                 full_text,
@@ -1403,7 +1334,7 @@ class AIBridgeService:
             # signal, not a redaction.
             partial_verdict = self._output_filter.check(full_text)
             if partial_verdict.fired:
-                self._record_defense_fire(session, partial_verdict)
+                self._audit.record_defense_fire(session, partial_verdict)
             session.record(
                 sanitised,
                 full_text,
@@ -1425,92 +1356,6 @@ class AIBridgeService:
             source=source,
             done=True,
             latency_ms=latency_ms,
-        )
-
-    def _record_defense_fire(
-        self,
-        session: SessionContext,
-        verdict: DefenseVerdict,
-    ) -> None:
-        """Record a ``bridge.defense_fired`` audit event for ``verdict``."""
-        self._audit_log.record(
-            "bridge.defense_fired",
-            detector=verdict.detector,
-            score=verdict.score,
-            snippet=verdict.snippet,
-            session_id=str(session.session_id),
-            attacker_ip=session.source_ip,
-        )
-
-    def _record_intent_extracted(self, summary: IntentSummary) -> None:
-        """Audit a successful intent extraction."""
-        self._audit_log.record(
-            "bridge.intent_extracted",
-            session_id=str(summary.session_id),
-            actor_profile=summary.actor_profile,
-            confidence=summary.confidence,
-            intent=summary.intent,
-            why=summary.why,
-            matched_techniques=list(summary.matched_techniques),
-            summary=summary.summary,
-            extracted_at=summary.extracted_at.isoformat(),
-        )
-
-    def _record_intent_extraction_failed(
-        self,
-        *,
-        snapshot: SessionSnapshot,
-        error_type: str,
-        error: str,
-    ) -> None:
-        """Audit a failed intent-extraction attempt."""
-        self._audit_log.record(
-            "bridge.intent_extraction_failed",
-            session_id=str(snapshot.session_id),
-            attacker_ip=snapshot.source_ip,
-            error_type=error_type,
-            error=error,
-        )
-
-    def _record_embedding_generated(self, embedding: SessionEmbedding) -> None:
-        """Audit a successful Stage 8 embedding generation.
-
-        The full vector rides as a tuple of floats so the dashboard
-        tailer can reconstruct + persist without a separate read.
-        ~2 KB per 768-dim vector at JSON-serialised float precision.
-        """
-        self._audit_log.record(
-            "bridge.embedding_generated",
-            session_id=str(embedding.session_id),
-            dimension=embedding.dimension,
-            model=embedding.model,
-            vector=list(embedding.vector),
-            generated_at=embedding.generated_at.isoformat(),
-        )
-
-    def _record_embedding_failed(
-        self,
-        *,
-        snapshot: SessionSnapshot,
-        error_type: str,
-        error: str,
-    ) -> None:
-        """Audit a failed embedding-generation attempt."""
-        self._audit_log.record(
-            "bridge.embedding_failed",
-            session_id=str(snapshot.session_id),
-            attacker_ip=snapshot.source_ip,
-            error_type=error_type,
-            error=error,
-        )
-
-    def _record_embedding_skipped(self, snapshot: SessionSnapshot) -> None:
-        """Audit a below-min-commands skip (generator returned None)."""
-        self._audit_log.record(
-            "bridge.embedding_skipped",
-            session_id=str(snapshot.session_id),
-            attacker_ip=snapshot.source_ip,
-            reason="below_min_commands",
         )
 
     def _accumulate_wasted_ms(
@@ -1548,90 +1393,15 @@ class AIBridgeService:
                 cap_ms=cap,
             )
 
-    def _record_wasting_applied(
-        self,
-        *,
-        session: SessionContext,
-        strategy_name: str,
-        wasted_ms: int,
-        pre_message: bool,
-        clarification_injected: bool = False,
-    ) -> None:
-        """Audit a per-command wasting-strategy effect.
+    def _budget_snapshot(self, session_id: UUID) -> dict[str, dict[str, int]]:
+        """Per-session token-budget snapshot for the budget-exhausted audit.
 
-        Fires once per command that the strategy touched in any way
-        (pre-message, inter-chunk delay, clarification injection, or
-        a combination). The `off` strategy never reaches this path
-        because ``wasted_ms`` stays at zero and clarification is
-        aggressive-only.
+        Empty dict when the session has no budget recorded. The recorder
+        takes this as data so it does not reach into the service's
+        ``_budgets`` map.
         """
-        self._audit_log.record(
-            "bridge.wasting_applied",
-            session_id=str(session.session_id),
-            attacker_ip=session.source_ip,
-            strategy=strategy_name,
-            wasted_ms=wasted_ms,
-            pre_message=pre_message,
-            clarification_injected=clarification_injected,
-        )
-
-    def _record_budget_exhausted(
-        self,
-        session: SessionContext,
-        exc: BudgetExhaustedError,
-    ) -> None:
-        """Audit a per-session token-budget exhaustion."""
-        budget = self._budgets.get(session.session_id)
-        budget_snapshot = budget.as_dict() if budget is not None else {}
-        self._audit_log.record(
-            "bridge.budget_exhausted",
-            session_id=str(session.session_id),
-            attacker_ip=session.source_ip,
-            error=str(exc),
-            budget=budget_snapshot,
-        )
-
-    def _record_scan_truncated(
-        self,
-        session: SessionContext,
-        *,
-        kind: str,
-        input_length: int,
-        verdict: DefenseVerdict,
-    ) -> None:
-        """Audit-log a defense scan that truncated its input.
-
-        Stage 1.8.5 closes the silent-bypass gap: when scan_max_chars
-        is smaller than the actual input, the regex only sees a prefix.
-        The AnglerfishSettings cross-field validator prevents the
-        common shape of this bug (operator misconfiguration), but
-        runtime occurrences (an LLM response longer than expected, an
-        attacker payload that bypassed sanitisation upstream) still
-        warrant a signal. Operators reviewing audit logs can see
-        exactly how far over the cap the input ran.
-        """
-        self._audit_log.record(
-            "bridge.defense_scan_truncated",
-            kind=kind,
-            scan_max_chars=self._settings.defense.scan_max_chars,
-            input_length=input_length,
-            detector=verdict.detector,
-            session_id=str(session.session_id),
-            attacker_ip=session.source_ip,
-        )
-
-    def _record_handler_error(self, session: SessionContext, exc: Exception) -> None:
-        """Audit an unexpected error caught by a command handler's guard (M6)."""
-        self._logger.exception(
-            "bridge.handler_error session=%s",
-            session.session_id,
-        )
-        self._audit_log.record(
-            "bridge.handler_error",
-            session_id=str(session.session_id),
-            attacker_ip=session.source_ip,
-            error=f"{type(exc).__name__}: {exc}",
-        )
+        budget = self._budgets.get(session_id)
+        return budget.as_dict() if budget is not None else {}
 
     def _fail_closed(
         self,
