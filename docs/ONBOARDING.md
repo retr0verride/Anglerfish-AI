@@ -1,4 +1,4 @@
-# Anglerfish AI — onboarding
+# Anglerfish AI onboarding
 
 A 30-minute tour for a new contributor. After this you should know
 where the code lives, how to run the gates, and which conventions
@@ -26,8 +26,25 @@ production runtime. macOS and Windows are supported for development;
 some integration tests are skipped on Windows where they need POSIX
 signal plumbing.
 
-If `pytest` exits non-zero on a clean clone, that's a bug — file it.
+If `pytest` exits non-zero on a clean clone, that's a bug. File it.
 Every commit on `main` passes the full gate set.
+
+Running the dashboard, bridge, and lure locally is optional for a
+first read; the gates above are the contract. When you do want to see
+the services, the CLI drives all three:
+
+```bash
+anglerfish dashboard serve --host 127.0.0.1 --port 8420   # operator UI
+anglerfish bridge serve    --host 127.0.0.1 --port 8421   # Ollama middleware
+anglerfish lure serve                                     # SSH lure on :2222
+```
+
+The dashboard health check is plain HTTP and needs no auth:
+
+```bash
+curl http://127.0.0.1:8420/api/health
+# {"status":"ok","version":"0.1.0"}
+```
 
 ## 1. Read these four docs in this order (10 min)
 
@@ -41,6 +58,13 @@ Every commit on `main` passes the full gate set.
 The first three are reference; `CONTRIBUTING.md` is procedural. After
 those you have enough context to understand any single source file
 without reading every other file first.
+
+**Deploying it for real.** Production runs split across two VMs: a
+Model VM holds the GPU and Ollama, the honeypot VM has no GPU and calls
+the Model VM over the service network. The canonical, step-by-step
+guide is [`docs/proxmox.md`](proxmox.md). For a closed training sandbox,
+[`docs/proxmox-lab.md`](proxmox-lab.md) is the lab variant. You do not
+need either on day one.
 
 ## 2. Look at one design doc end to end (5 min)
 
@@ -110,14 +134,14 @@ backwards-compat code goes. No silent fallbacks, no
 ## What you do NOT need to read on day one
 
 * The full bridge defense layer ([`src/anglerfish/bridge/defense.py`](../src/anglerfish/bridge/defense.py)
-  + [`defense_patterns.py`](../src/anglerfish/bridge/defense_patterns.py)) — read when you touch it
-* The threat-engine techniques ([`src/anglerfish/threat/techniques.py`](../src/anglerfish/threat/techniques.py))
-  — read when you touch it
-* Every design doc — read the one for the stage you are working on,
-  reference the others as dependencies dictate
-* The 116-file Stage 1 corpus ([`tests/llm_defense/corpus/`](../tests/llm_defense/corpus/))
-  — this is the security regression suite; useful context but not
-  required for most contributions
+  + [`defense_patterns.py`](../src/anglerfish/bridge/defense_patterns.py)). Read when you touch it.
+* The threat-engine techniques ([`src/anglerfish/threat/techniques.py`](../src/anglerfish/threat/techniques.py)).
+  Read when you touch it.
+* Every design doc. Read the one for the stage you are working on,
+  reference the others as dependencies dictate.
+* The 116-file Stage 1 corpus ([`tests/llm_defense/corpus/`](../tests/llm_defense/corpus/)).
+  This is the security regression suite, useful context but not
+  required for most contributions.
 
 ## When you are stuck
 
@@ -127,4 +151,4 @@ backwards-compat code goes. No silent fallbacks, no
 * The roadmap dependency graph in `docs/ROADMAP.md` shows which stages must land before others
 
 If a doc disagrees with the code, the code is current and the doc is
-stale — open a PR fixing the doc. Drift is a bug.
+stale. Open a PR fixing the doc. Drift is a bug.

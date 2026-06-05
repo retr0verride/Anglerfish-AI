@@ -11,6 +11,11 @@ All commands assume:
 * The package lives in `/opt/anglerfish/venv/`. Symlinks under
   `/usr/local/bin/` keep `anglerfish`/`anglerfish-wizard` on PATH.
 
+This is the split-only topology from [`proxmox.md`](proxmox.md): Ollama
+and the GPU run on a separate **Model VM**, and the honeypot calls it over
+the service network. Commands below run on the honeypot VM unless they say
+otherwise. `<model-ip>` is the Model VM's service-network address.
+
 > When in doubt, run `anglerfish config show` - it prints the live
 > configuration with secrets masked, which is enough to confirm what
 > the bridge and dashboard are actually using.
@@ -27,7 +32,7 @@ All commands assume:
 | `anglerfish-lure.service`         | Native asyncssh SSH honeypot bound to the bait NIC.       |
 | `anglerfish-dashboard.service`    | FastAPI dashboard + WebSocket stream.                     |
 | `anglerfish-audit-shipper.service` | Ships the audit log off-box (default-off; set `audit.shipper.url`). |
-| `anglerfish-model-pull.service`   | First-boot pull of the configured Ollama models (local Ollama only). |
+| `anglerfish-model-pull.service`   | First-boot model pull. A no-op in the split topology (Ollama is a trusted remote); you pull models on the Model VM instead. |
 | `anglerfish-geo-update.service`   | One-shot MaxMind GeoLite2 fetch.                          |
 | `anglerfish-geo-update.timer`     | Weekly trigger for the geo-update service.                |
 
@@ -269,10 +274,9 @@ file and `VACUUM` periodically.
 Stop captures (so attackers see a stuck shell, not a crash):
 
 ```bash
-sudo systemctl stop anglerfish-bridge.service
-# Stop the lure listener too (if it's running under a hand-rolled unit).
+sudo systemctl stop anglerfish-lure.service anglerfish-bridge.service
 sudo zstd -19 --rm /var/lib/anglerfish/sessions.db
-sudo systemctl start anglerfish-bridge.service
+sudo systemctl start anglerfish-bridge.service anglerfish-lure.service
 ```
 
 The credentials DB is small (a few MB per ten-thousand attempts);
@@ -282,7 +286,7 @@ don't truncate it.
 
 ## Recovery scenarios
 
-### Ollama unreachable
+### Model VM (Ollama) unreachable
 
 The bridge degrades to a static fallback (`anglerfish.bridge.fallback`)
 that returns plausible-looking shell errors. Attackers see no LLM
@@ -290,19 +294,28 @@ output but the honeypot stays up. Symptoms in `journalctl -u
 anglerfish-bridge.service`:
 
 ```text
-ollama.client_error url=http://...:11434/api/chat ...
+ollama.client_error url=http://<model-ip>:11434/api/chat ...
 ```
 
-Recovery:
+In the split topology the model runs on the Model VM, so work the link
+from the honeypot side out to the Model VM:
 
 ```bash
-# 1. Reach the LLM box yourself
-curl -s http://<ollama-host>:11434/api/version
+# 1. From the honeypot, can you reach the Model VM's Ollama API?
+curl -s http://<model-ip>:11434/api/version
 
-# 2. If unreachable, check the firewall rule lets you through
-sudo nft list ruleset | grep ollama
+# 2. If it hangs or refuses, check honeypot egress allows the Model VM.
+sudo nft list ruleset | grep 11434
 
-# 3. Restart the bridge after the LLM comes back; not strictly
+# 3. If the honeypot rule is fine, the problem is on the Model VM.
+#    SSH to the Model VM and check Ollama and its firewall there:
+ssh <user>@<model-ip> 'systemctl is-active ollama.service; \
+    ss -lntp | grep 11434; \
+    sudo nft list ruleset | grep 11434'
+#    Want: ollama active, bound to <model-ip>:11434, and an nftables
+#    rule accepting :11434 from the honeypot's service IP.
+
+# 4. Restart the bridge once the Model VM answers again; not strictly
 #    required (the bridge retries) but resets the per-session
 #    history window and fallback counters.
 sudo systemctl restart anglerfish-bridge.service
@@ -401,8 +414,11 @@ skipped; a partial corpus is better than refusing to import.
 
 ### Decommission
 
+Stop the bait listener first so no new attacker traffic lands mid-wipe:
+
 ```bash
 sudo systemctl stop \
+    anglerfish-lure.service \
     anglerfish-bridge.service \
     anglerfish-dashboard.service \
     anglerfish-firewall.service
@@ -411,5 +427,13 @@ sudo shred -u /var/lib/anglerfish/credentials.db*
 sudo shred -u /var/lib/anglerfish/sessions.db*
 ```
 
-Then `qm destroy <vmid>` on the Proxmox host. Audit logs are not
-shredded by this procedure, handle them per your retention policy.
+Then destroy both VMs on the Proxmox host (see [`proxmox.md`](proxmox.md)
+step 8):
+
+```bash
+qm stop <honeypot-vmid> && qm destroy <honeypot-vmid>
+qm stop <model-vmid>    && qm destroy <model-vmid>
+```
+
+Audit logs are not shredded by this procedure, handle them per your
+retention policy.

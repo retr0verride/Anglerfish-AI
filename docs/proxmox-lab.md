@@ -3,7 +3,23 @@
 This is the **closed-lab** variant of the Proxmox deployment guide. The
 production [`proxmox.md`](proxmox.md) puts Anglerfish on a real attacker
 network; this one puts it in a hermetic sandbox where attackers can
-only reach the honeypot from inside your own host. Use it for:
+only reach the honeypot from inside your own host.
+
+Read [`proxmox.md`](proxmox.md) first. It is the canonical step-by-step
+deploy: two bridges, GPU passthrough, the Model VM, Ollama, the honeypot
+VM, the first-boot wizard, and verification. This lab guide does not
+repeat those steps. It covers only the lab-specific differences: the
+air-gapped bait bridge, host-side PCAP capture, the snapshot/reset
+workflow, and PCAP replay. Everything else, including the split-VM
+topology, you take from `proxmox.md`.
+
+The topology is the same as production. The honeypot VM has no GPU and
+calls a separate Model VM running Ollama. The lab difference is scale,
+not shape: a lab Model VM can run a small model, and the bait bridge is
+air-gapped instead of internet-exposed. The honeypot still reaches
+Ollama over the service network, never over loopback.
+
+Use the lab for:
 
 * **Training yourself** - operate a honeypot end-to-end without the
   legal/operational risk of exposing it to the real internet.
@@ -94,30 +110,44 @@ suricata -r /var/log/anglerfish-lab/pcap/cap-*.pcap -l /tmp/sur-out
 
 ---
 
-## 2. Deploy the honeypot VM in lab mode
+## 2. Build the Model VM and deploy the honeypot
 
-The existing [`proxmox/deploy.sh`](../proxmox/deploy.sh) works for the
-lab too, just override the bait bridge:
+Build the Model VM and stand up Ollama per [`proxmox.md`](proxmox.md)
+steps 3 and 4. The only lab change is the model: pull a smaller one from
+the [`MODEL_SETUP.md`](MODEL_SETUP.md) hardware table (for example
+`phi-3.5:3.8b`) instead of the production stack, and size the Model VM's
+RAM and VRAM to it. Put the Model VM on `vmbr-service`, same as
+production. The honeypot reaches it over that bridge.
+
+Deploy the honeypot VM with [`proxmox/deploy.sh`](../proxmox/deploy.sh)
+as in [`proxmox.md`](proxmox.md) step 5. The deploy script reads the VM
+parameters, including the bait bridge, from
+[`proxmox/anglerfish.json`](../proxmox/anglerfish.json) (the `--template`
+flag points it at a different file). It has no `--bait-bridge` flag. For
+the lab, copy `anglerfish.json` and set `network.bait_bridge` to
+`vmbr-lab` (the air-gapped bridge from §1.1), then pass your copy:
 
 ```bash
 sudo ./deploy.sh \
     --iso ./anglerfish-ai-0.1.0.iso \
-    --vmid 9100 \
+    --vmid 9000 \
     --name anglerfish-lab \
-    --bait-bridge vmbr-lab    # the air-gapped one, not vmbr-bait
+    --template ./anglerfish-lab.json
 ```
 
-(If `--bait-bridge` isn't in your `deploy.sh` yet, edit
-[`proxmox/anglerfish.json`](../proxmox/anglerfish.json) and set
-`network.bait_bridge` to `vmbr-lab` before running the deploy.)
+The first-boot wizard runs as in [`proxmox.md`](proxmox.md) step 6.
+Point the Ollama endpoint and trusted remote IP at the lab Model VM:
 
-The first-boot wizard runs as normal. When it asks for the Ollama
-endpoint, you can:
+* **Ollama endpoint URL:** `http://<model-ip>:11434/` (the lab Model VM
+  on `vmbr-service`).
+* **Trusted remote Ollama IP:** `<model-ip>` (must match the endpoint
+  host).
+* **Ollama model tag:** the smaller model you pulled, for example
+  `phi-3.5:3.8b`.
 
-* Run Ollama on the Proxmox host (`http://<host-service-ip>:11434/`)
-  and reach it over `vmbr-service`. Most practical.
-* Run Ollama inside the honeypot VM (`http://127.0.0.1:11434/`). Wastes
-  RAM in a lab, both Ollama and the lure compete for the VM's memory.
+The endpoint host must be an IP literal, and it must not be loopback.
+The wizard rejects a hostname, and the split topology means the honeypot
+never runs Ollama itself.
 
 ---
 
@@ -127,10 +157,15 @@ After the wizard finishes and the honeypot is running normally, capture
 the baseline:
 
 ```bash
-sudo ./proxmox/lab/snapshot.sh 9100
-# [lab] taking snapshot 'clean' on VM 9100
-# [lab] done. roll back with: sudo ./reset.sh 9100 clean
+sudo ./proxmox/lab/snapshot.sh 9000
+# [lab] taking snapshot 'clean' on VM 9000
+# [lab] done. roll back with: sudo ./reset.sh 9000 clean
 ```
+
+`snapshot.sh` deletes any existing snapshot of that name first, then
+takes a fresh one, so re-running it always reflects current state. The
+VM disk must be on snapshot-capable storage (LVM-thin, ZFS, or qcow2);
+raw on directory storage does not support `qm snapshot`.
 
 This is the state every future attacker session starts from: empty
 credentials DB, empty audit log past the wizard's bootstrap entries,
@@ -150,9 +185,10 @@ Either:
   tcpreplay -i vmbr-lab --pps 50 ./attacker-sample.pcap
   ```
 
-Watch the dashboard at `https://<service-ip>:8420/` in real time.
-The audit log records operator actions; the credentials DB collects
-what the attacker tried; the threat engine scores the session.
+Watch the dashboard at `http://<service-ip>:8420/` in real time (plain
+HTTP, no TLS). The audit log records operator actions; the credentials
+DB collects what the attacker tried; the threat engine scores the
+session.
 
 When you're done analyzing, grab any data you want to keep:
 
@@ -172,16 +208,18 @@ scp anglerfish-ops@<service-ip>:/tmp/{bridge-log.txt,creds-session-1.db,audit-se
 ## 5. Reset to clean
 
 ```bash
-sudo ./proxmox/lab/reset.sh 9100
-# [lab] roll VM 9100 back to 'clean'? This DISCARDS all changes. [y/N] y
-# [lab] stopping VM 9100
-# [lab] rolling back VM 9100 to 'clean'
-# [lab] starting VM 9100
+sudo ./proxmox/lab/reset.sh 9000
+# [lab] roll VM 9000 back to 'clean'? This DISCARDS all changes. [y/N] y
+# [lab] stopping VM 9000
+# [lab] rolling back VM 9000 to 'clean'
+# [lab] starting VM 9000
 ```
 
 The script refuses to proceed without an explicit `y` because rollback
-destroys everything since the snapshot. Once it comes back up, you're
-ready for the next session.
+destroys everything since the snapshot, including captured credentials,
+audit log, and threat history. Save anything you want first (see the end
+of §4). Once the VM comes back up, you're ready for the next session.
+The Model VM stays up across resets; only the honeypot rolls back.
 
 ---
 
@@ -193,7 +231,7 @@ dataset like the SANS DShield captures), you can replay it:
 
 ```bash
 # 1. Make sure the honeypot is at clean state
-sudo ./proxmox/lab/reset.sh 9100
+sudo ./proxmox/lab/reset.sh 9000
 
 # 2. Find the bait IP (from the wizard's output, or qm config)
 BAIT_IP=10.10.10.42
@@ -250,7 +288,7 @@ doesn't generate intelligence the community can use. When you're ready:
 | ------------------------------------ | ------------------------------------------------ |
 | Apply the lab bridge config          | `ifreload -a`                                    |
 | Tail PCAP filenames                  | `ls -lt /var/log/anglerfish-lab/pcap/ \| head`   |
-| Deploy lab VM                        | `sudo ./proxmox/deploy.sh --bait-bridge vmbr-lab ...` |
+| Deploy lab VM                        | `sudo ./proxmox/deploy.sh --template ./anglerfish-lab.json ...` |
 | Take baseline snapshot               | `sudo ./proxmox/lab/snapshot.sh <vmid>`          |
 | Roll back between sessions           | `sudo ./proxmox/lab/reset.sh <vmid>`             |
 | Replay a PCAP                        | `sudo tcpreplay -i vmbr-lab --pps 20 file.pcap`  |

@@ -4,11 +4,53 @@ Work this top to bottom before exposing Anglerfish to attacker traffic.
 Each step is a single command you can run and verify. Skipping items is
 fine for a closed lab; **don't skip them for real-internet exposure**.
 
+This checklist assumes the split-only topology from
+[`proxmox.md`](proxmox.md): a **Model VM** holds the GPU and runs Ollama,
+and a separate **Honeypot VM** with no GPU calls the Model VM over the
+service network. Run the Model VM checks (sections 0 and 3.3) on the Model
+VM; run everything else on the Honeypot VM.
+
 If you're doing the strict-lab variant, see
 [`proxmox-lab.md`](proxmox-lab.md) instead, most of these checks still
 apply but the network ones loosen up.
 
 Legend: `[ ]` open, `[x]` done.
+
+---
+
+## 0. Model VM
+
+Run these on the **Model VM** (the GPU box that runs Ollama). The
+honeypot has no GPU and never runs the model. See
+[`proxmox.md`](proxmox.md) steps 3 and 4 for the build.
+
+```bash
+# GPU passthrough is live: the VM sees the card with VRAM.
+nvidia-smi
+# Lists your GPU. If this fails, passthrough is broken; recheck
+# proxmox.md step 2.
+
+# Ollama is bound to the service address only, never 0.0.0.0.
+ss -lntp | grep 11434
+# Want: a single LISTEN line on <model-ip>:11434, not 0.0.0.0:11434.
+
+# Ollama answers on the service address with the models you pulled.
+curl -s http://<model-ip>:11434/api/tags
+# JSON listing your pulled models (for example qwen3:14b).
+
+# nftables on the Model VM permits :11434 from the honeypot only.
+sudo nft list ruleset | grep 11434
+# Want: a rule like
+#   ip saddr <honeypot-service-ip> tcp dport 11434 accept
+sudo systemctl is-active nftables
+# active
+```
+
+- `[ ]` `nvidia-smi` lists the GPU with VRAM (passthrough verified).
+- `[ ]` Ollama is bound to `<model-ip>:11434`, not `0.0.0.0`.
+- `[ ]` `curl http://<model-ip>:11434/api/tags` returns your models.
+- `[ ]` Model VM nftables accepts `:11434` from the honeypot's
+  service IP only, and `nftables.service` is `active`.
 
 ---
 
@@ -94,19 +136,24 @@ sudo systemctl is-active anglerfish-firewall.service
 
 ### 3.3 Egress lock-down
 
+Run these on the **Honeypot VM**. The honeypot reaches the Model VM over
+the service network only; nothing else on the open internet is allowed
+out.
+
 ```bash
-# These MUST all be blocked from inside the VM:
+# These MUST all be blocked from inside the honeypot:
 timeout 3 curl -sS https://1.1.1.1/        ; echo "exit=$?"   # want non-zero
 timeout 3 curl -sS https://github.com/      ; echo "exit=$?"  # want non-zero
 timeout 3 nc -zv 8.8.8.8 443                ; echo "exit=$?"  # want non-zero
 
-# These MUST work (the service-NIC allowlist):
-timeout 3 curl -sS http://127.0.0.1:11434/  ; echo "exit=$?"  # Ollama, want 0
+# This MUST work (the service-NIC allowlist to the Model VM):
+timeout 3 curl -sS http://<model-ip>:11434/api/tags ; echo "exit=$?"  # want 0
 ```
 
 - `[ ]` All outbound to the open internet is **dropped** from inside
   the honeypot.
-- `[ ]` Ollama is reachable (loopback or trusted IP).
+- `[ ]` The Model VM's Ollama API at `http://<model-ip>:11434/` is
+  reachable from the honeypot's service NIC, and nothing else is.
 
 ### 3.4 No DNS leaks from the bait side
 
@@ -133,7 +180,13 @@ sudo -u anglerfish ANGLERFISH_LOG_LEVEL=INFO \
     | grep -E '(base_url|alert_webhook|trusted_remote|hec_url)'
 ```
 
-- `[ ]` `ollama.base_url` is loopback or matches `trusted_remote_host`.
+- `[ ]` `ollama.base_url` is `http://<model-ip>:11434/` and
+  `ollama.trusted_remote_host` is `<model-ip>`. In the split topology
+  the two must agree: the validator refuses to start if `base_url` points
+  at a non-loopback host that does not match `trusted_remote_host`, or if
+  the host is a DNS name instead of an IP literal. Set both via
+  `ANGLERFISH_OLLAMA__BASE_URL` and
+  `ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST` (the wizard does this).
 - `[ ]` `threat.alert_webhook_url` (if set) is `https://` and points to
   a public hostname or public IP, **not** RFC1918 / loopback /
   link-local. The validator will refuse to start otherwise.
@@ -184,13 +237,16 @@ sudo lsattr /var/log/anglerfish/audit.jsonl
 
 ## 6. Systemd state
 
+Run these on the **Honeypot VM**. Ollama runs on the Model VM, not here,
+so it is not in this list (check it in section 0).
+
 ```bash
 systemctl --no-pager status \
     anglerfish-firewall.service \
     anglerfish-bridge.service \
     anglerfish-dashboard.service \
-    anglerfish-firstboot.service \
-    ollama.service 2>&1 | grep -E 'Loaded|Active' | head -40
+    anglerfish-lure.service \
+    anglerfish-firstboot.service 2>&1 | grep -E 'Loaded|Active' | head -40
 ```
 
 - `[ ]` `anglerfish-firewall.service` - active or `oneshot` exited 0.
@@ -200,11 +256,14 @@ systemctl --no-pager status \
   ```
 - `[ ]` `anglerfish-bridge.service` - `active (running)`.
 - `[ ]` `anglerfish-dashboard.service` - `active (running)`.
-- `[ ]` Lure listener (`anglerfish lure serve`) is running. There is
-  no first-class systemd unit yet (TODO-3); operators run it
-  manually or via a hand-rolled unit.
-- `[ ]` `ollama.service` - `active (running)` (or running on a trusted
-  remote host you can reach).
+- `[ ]` `anglerfish-lure.service` - `active (running)`. The lure
+  `Requires=` the firewall and bridge, so it will not bind the bait NIC
+  if either failed.
+- `[ ]` The Model VM's Ollama is reachable from here (section 0 covers
+  the Model VM side):
+  ```bash
+  curl -fsS http://<model-ip>:11434/api/version
+  ```
 - `[ ]` No service in `failed` state:
   ```bash
   systemctl --failed --no-legend | head
@@ -231,7 +290,7 @@ ss -lntp | grep -E ':2222 |:22 '
 
 # Lure: validate-config without binding (idempotent, safe on a live host).
 anglerfish lure validate-config
-# Want: "lure config OK - listener would bind to <bait-ip>:<port>"
+# Want: "lure config OK - listener would bind to <listen_host>:<listen_port>"
 ```
 
 - `[ ]` Bridge `/api/health` returns 200.
@@ -340,6 +399,9 @@ WEBHOOK=$(grep ANGLERFISH_THREAT__ALERT_WEBHOOK_URL /etc/anglerfish/anglerfish.e
 ---
 
 ## What to do after deployment
+
+For routine day-2 operations see [`proxmox.md`](proxmox.md) step 8 and the
+[`RUNBOOK.md`](RUNBOOK.md).
 
 Day 1: watch the dashboard for the first few hours. Real attacker traffic
 arrives fast on a fresh public IP.
