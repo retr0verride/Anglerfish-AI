@@ -46,6 +46,13 @@ The rest of this guide assumes the **12GB VRAM (recommended)** row.
 
 ## 1. Get the GPU to the Anglerfish VM
 
+> **Split topology?** If you run Ollama on a separate VM instead of on
+> the honeypot (the `trusted_remote_host` path), do the GPU passthrough,
+> driver install, and Ollama setup **on that VM**, following
+> [`proxmox.md`](proxmox.md) §1.4. Then come back to this guide for the
+> model pull (§4) and the model picks. Step 1 here is the co-located
+> path: GPU on the honeypot VM, Ollama on loopback.
+
 On Proxmox, the GPU can only be passed through to one VM at a time.
 See [`proxmox.md`](proxmox.md) §"GPU passthrough" for the full
 walkthrough; the short version:
@@ -224,6 +231,11 @@ pins against the *layer/blob* digest, not the human-readable tag, this
 defeats silent tag re-pointing attacks. Capture the hashes now so the
 bridge can verify them at every startup.
 
+> **Split topology:** this check reads manifests from the bridge's local
+> filesystem, so with Ollama on a separate VM you either skip the pin or
+> sync the manifest tree to the honeypot. See [`proxmox.md`](proxmox.md)
+> §1.4 "Model-integrity pinning in split mode" for both options.
+
 ```bash
 # Install jq if not present
 sudo apt install -y jq
@@ -260,6 +272,11 @@ Set or update these lines:
 ```bash
 # Loopback Ollama - co-located with the bridge, no trusted_remote_host needed
 ANGLERFISH_OLLAMA__BASE_URL=http://127.0.0.1:11434/
+# Split topology (Ollama on a separate VM) instead uses the model VM's
+# service-network IP, plus the matching trusted-remote pin. The host must
+# be an IP literal; hostnames are rejected. See proxmox.md §1.4.
+#   ANGLERFISH_OLLAMA__BASE_URL=http://<ollama-ip>:11434/
+#   ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST=<ollama-ip>
 
 # Per-role models (fast + deep tiers). The pre-Stage-5 single-key
 # aliases ANGLERFISH_OLLAMA__MODEL / ANGLERFISH_DEFENSE__MODEL_EXPECTED_HASH

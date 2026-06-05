@@ -84,18 +84,35 @@ apt install proxmox-ve jq gawk
 
 ### 1.3 GPU passthrough (for local LLM)
 
-Anglerfish runs entirely on a local LLM via Ollama, co-located with
-the bridge for loopback-only inference. That means **the GPU should
-be passed through to the Anglerfish VM**: not to any sibling VM
-(Kali, replay VM, etc.).
+There are two supported topologies for where the model runs. Pick one
+before wiring the GPU:
+
+* **Co-located (this section, §1.3).** GPU passed to the honeypot VM,
+  Ollama on loopback. Simplest, lowest latency, and the model-integrity
+  pin works with no extra steps. The cost is that the GPU and model
+  runtime sit on the same VM that takes attacker traffic.
+* **Split (§1.4).** GPU passed to a separate Ollama VM that the honeypot
+  calls over the service NIC (`trusted_remote_host`). Keeps the GPU and
+  model runtime off the internet-facing VM, one isolation hop from the
+  bait segment. The cost is a second VM, a firewall rule, and a choice
+  about model-integrity pinning. Prefer this when isolating the model
+  runtime matters more than setup simplicity.
+
+The rest of §1.3 is the co-located path. For the split path skip to §1.4.
+
+Anglerfish can run the local LLM via Ollama co-located with the bridge
+for loopback-only inference. That means **the GPU is passed through to
+the Anglerfish VM**: not to any sibling VM (Kali, replay VM, etc.).
 
 Three reasons:
 
-1. **Architectural alignment.** The Ollama endpoint validator
-   ([`src/anglerfish/config/models.py:104-132`](../src/anglerfish/config/models.py#L104-L132))
+1. **Simplicity.** The Ollama endpoint validator
+   ([`src/anglerfish/config/models.py:255-279`](../src/anglerfish/config/models.py#L255-L279))
    defaults to loopback; remote-Ollama via `trusted_remote_host` works
-   but adds operator complexity and policy surface area for no gain
-   when one box can do both.
+   but adds a second VM, a firewall rule, and the model-integrity
+   tradeoff in §1.4. Co-located is the fewest moving parts. The split
+   path (§1.4) buys isolation in exchange for that complexity; choose
+   per your threat model, not by default.
 2. **Mixed-role hygiene.** Hosting the defender's LLM on the same
    VM as your attacker/replay tooling crosses defender and attacker
    infrastructure. Even in a lab, that's bad hygiene, if the
@@ -147,8 +164,168 @@ install per [`MODEL_SETUP.md`](MODEL_SETUP.md).
   Anglerfish for the honeypot's hot path.
 * Hardware budget for two GPUs. Not the common case.
 
-None of those apply to a single-honeypot lab, pass the GPU to
-Anglerfish.
+None of those apply to a single-honeypot lab using the co-located
+topology. For the split topology, the GPU goes to the dedicated model
+VM instead (§1.4).
+
+---
+
+### 1.4 Split topology: dedicated Ollama VM
+
+This is the §1.3 alternative: the GPU and Ollama run on their own VM,
+and the honeypot calls it over the service NIC. Both VMs live on the
+one Proxmox host. The honeypot reaches the model VM over `vmbr-service`;
+nothing on the bait side can see it.
+
+The honeypot never executes attacker input or model output, so the
+attacker cannot reach this VM directly. The split still earns its keep:
+the GPU and the Ollama runtime sit one isolation hop from the
+attacker-facing surface instead of on it. The attacker's only influence
+on the model is the prompt text the bridge forwards.
+
+#### Host: confirm IOMMU + vfio (one-time)
+
+GPU passthrough needs IOMMU enabled. If `dmesg | grep -e DMAR -e IOMMU`
+already shows it active and the GPU is bound to `vfio-pci`, skip to the
+VM build.
+
+```bash
+# Intel host: add to GRUB_CMDLINE_LINUX_DEFAULT in /etc/default/grub
+#   intel_iommu=on iommu=pt
+# AMD host:
+#   amd_iommu=on iommu=pt
+nano /etc/default/grub
+update-grub
+
+# Load the vfio modules at boot
+printf 'vfio\nvfio_iommu_type1\nvfio_pci\n' >> /etc/modules
+reboot
+```
+
+After reboot, bind the GPU to `vfio-pci` so the host driver does not
+claim it. Pass both the GPU function and its HDMI-audio function:
+
+```bash
+lspci -nn | grep -i nvidia
+# 01:00.0 VGA ... [10de:2504]    01:00.1 Audio ... [10de:228e]
+echo "options vfio-pci ids=10de:2504,10de:228e" > /etc/modprobe.d/vfio.conf
+update-initramfs -u && reboot
+```
+
+#### Build the model VM
+
+```bash
+# Minimal Debian VM on the service bridge. q35 + OVMF gives clean PCIe
+# passthrough; size RAM/disk to your model stack (see MODEL_SETUP.md).
+qm create <ollama-vmid> \
+    --name ollama-model \
+    --machine q35 --bios ovmf --efidisk0 local-lvm:1 \
+    --memory 16384 --cores 4 \
+    --scsihw virtio-scsi-single --scsi0 local-lvm:60 \
+    --net0 virtio,bridge=vmbr-service \
+    --cdrom local:iso/debian-12-netinst.iso \
+    --ostype l26
+
+qm start <ollama-vmid>
+# Install Debian (minimal, no desktop) from the console, then power off
+# to attach the GPU.
+qm stop <ollama-vmid>
+
+# Detach the GPU from any other VM first, then attach it here.
+qm set <ollama-vmid> --hostpci0 01:00,pcie=1
+qm start <ollama-vmid>
+```
+
+Give this VM a static address on the service network (or a DHCP
+reservation) so the honeypot's endpoint pin stays stable. The steps
+below call it `<ollama-ip>`.
+
+#### Configure the model VM
+
+```bash
+# Inside the model VM
+sudo apt install -y nvidia-driver firmware-misc-nonfree
+sudo reboot
+nvidia-smi          # must show the GPU before continuing
+
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Bind Ollama to the service address only, never `0.0.0.0`, and apply the
+workload tuning from [`MODEL_SETUP.md`](MODEL_SETUP.md) §3:
+
+```bash
+sudo systemctl edit ollama.service
+```
+
+```ini
+[Service]
+Environment="OLLAMA_HOST=<ollama-ip>:11434"
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+Environment="OLLAMA_MAX_LOADED_MODELS=2"
+Environment="OLLAMA_KEEP_ALIVE=-1"
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart ollama.service
+```
+
+Pull the models per [`MODEL_SETUP.md`](MODEL_SETUP.md) §4, then firewall
+the API so only the honeypot's service IP can reach it:
+
+```bash
+sudo apt install -y nftables
+sudo tee /etc/nftables.conf >/dev/null <<'NFT'
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        ct state established,related accept
+        iif "lo" accept
+        tcp dport 22 accept                                   # operator SSH (tighten saddr to mgmt)
+        ip saddr <honeypot-service-ip> tcp dport 11434 accept # Ollama: honeypot only
+    }
+}
+NFT
+sudo systemctl enable --now nftables
+```
+
+#### Point the honeypot at the model VM
+
+In the first-boot wizard, give the Ollama endpoint as
+`http://<ollama-ip>:11434/`; the wizard then asks for the trusted
+remote IP and pins it. Equivalently, in `/etc/anglerfish/anglerfish.env`:
+
+```bash
+# The endpoint host must be an IP literal. The wizard and the runtime
+# both reject hostnames: DNS could change between validation and use.
+ANGLERFISH_OLLAMA__BASE_URL=http://<ollama-ip>:11434/
+ANGLERFISH_OLLAMA__TRUSTED_REMOTE_HOST=<ollama-ip>
+```
+
+The honeypot's egress firewall already allows 11434 outbound on the
+service NIC, so no honeypot-side firewall change is needed.
+
+#### Model-integrity pinning in split mode
+
+The Stage 1 model-integrity check
+([`MODEL_SETUP.md`](MODEL_SETUP.md) §6) reads Ollama's manifest from the
+honeypot's **local** filesystem
+([`src/anglerfish/bridge/defense.py:638-650`](../src/anglerfish/bridge/defense.py#L638-L650)).
+With Ollama on a separate VM those manifests are not local, so you pick:
+
+1. **Skip the pin.** Leave `ANGLERFISH_DEFENSE__*_MODEL_EXPECTED_HASH`
+   unset. The bridge logs `bridge.model_integrity_skipped` and starts.
+   You lose the local hash pin, but the honeypot does not manage the
+   model anyway.
+2. **Keep the pin.** Copy the model VM's manifest tree to the honeypot
+   read-only (rsync over the service link) and point
+   `ANGLERFISH_DEFENSE__OLLAMA_MANIFEST_DIR` at the copy. Re-sync on
+   every `ollama pull`.
+
+Co-located (§1.3) keeps the pin with no extra work. That is the one
+capability the split topology trades for the stronger isolation.
 
 ---
 
