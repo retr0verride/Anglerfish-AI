@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import unicodedata
 
-__all__ = ["TRUNCATION_MARKER", "cap_output", "normalise_for_scan", "sanitize_command"]
+__all__ = [
+    "TRUNCATION_MARKER",
+    "cap_output",
+    "normalise_for_scan",
+    "sanitize_command",
+    "strip_control_chars",
+]
 
 
 TRUNCATION_MARKER = "\n[input truncated]"
@@ -56,6 +62,17 @@ def normalise_for_scan(text: str) -> str:
     )
 
 
+def strip_control_chars(text: str, *, allowed: frozenset[str] = _ALLOWED_CONTROL_CHARS) -> str:
+    """Drop C0 control characters (< 0x20) and DEL (0x7F), keeping ``allowed``.
+
+    ``allowed`` defaults to tab and LF. This is the single source of truth
+    for the control-character filter, shared by the bridge's command
+    sanitiser (inbound) and the lure's outbound text filter, so the two
+    cannot drift apart.
+    """
+    return "".join(ch for ch in text if ch in allowed or (ord(ch) >= 0x20 and ord(ch) != 0x7F))
+
+
 def sanitize_command(raw: str, *, max_chars: int) -> str:
     """Return a prompt-safe version of an attacker-supplied command.
 
@@ -80,16 +97,7 @@ def sanitize_command(raw: str, *, max_chars: int) -> str:
         raise ValueError(f"max_chars must be positive, got {max_chars}")
 
     normalised = raw.replace("\r\n", "\n").replace("\r", "\n")
-    cleaned_chars: list[str] = []
-    for ch in normalised:
-        if ch in _ALLOWED_CONTROL_CHARS:
-            cleaned_chars.append(ch)
-            continue
-        code = ord(ch)
-        if code < 0x20 or code == 0x7F:
-            continue
-        cleaned_chars.append(ch)
-    cleaned = "".join(cleaned_chars)
+    cleaned = strip_control_chars(normalised)
 
     if len(cleaned) > max_chars:
         cleaned = cleaned[:max_chars] + TRUNCATION_MARKER

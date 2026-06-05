@@ -68,7 +68,6 @@ class AnglerfishSettings(BaseSettings):
     )
 
     log_level: LogLevel = LogLevel.INFO
-    log_json: bool = True
     data_dir: Path = Path("/var/lib/anglerfish")
 
     # Network interface names the wizard records (ANGLERFISH_BAIT_INTERFACE /

@@ -15,6 +15,11 @@
 
 set -eu
 
+# live-build enters this chroot itself, so the builder image's
+# DEBIAN_FRONTEND does not propagate here. Set it so an apt-get install
+# below cannot stop on a debconf prompt and stall the whole ISO build.
+export DEBIAN_FRONTEND=noninteractive
+
 SRC=/opt/anglerfish/src
 VENV=/opt/anglerfish/venv
 

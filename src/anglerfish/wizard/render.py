@@ -74,7 +74,6 @@ def render_env(
         _HEADER,
         "# --- Global ---------------------------------------------------------------",
         _line("ANGLERFISH_LOG_LEVEL", "INFO"),
-        _line("ANGLERFISH_LOG_JSON", "true"),
         _line("ANGLERFISH_DATA_DIR", "/var/lib/anglerfish"),
         "",
         "# --- Network interfaces (consumed by nftables + systemd-networkd) --------",

@@ -72,7 +72,6 @@ _F664 = 0o100664
 _F644 = 0o100644
 _F640 = 0o100640
 _F600 = 0o100600
-_F755 = 0o100755
 _F444 = 0o100444
 _D755 = 0o040755
 _D700 = 0o040700
@@ -608,11 +607,6 @@ def _format_entries(
         )
         for e in entries
     )
-
-
-def _resolve_user_path(path: str, *, user: str) -> str:
-    """Substitute ``{user}`` into a static path, if present."""
-    return path.replace("{user}", user)
 
 
 def _dynamic_proc_content(path: str) -> str | None:

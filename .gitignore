@@ -92,3 +92,10 @@ iso/binary/
 # ISO build artifacts (./build.sh output)
 /output/
 .smoke-seed/
+
+# Local agent / editor state
+.claude/
+
+# Stray scratch and probe output (never commit)
+.intel_*.txt
+.__*__.txt

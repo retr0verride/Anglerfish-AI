@@ -1,7 +1,0 @@
-/home/user/projects/anglerfish-ai/src/anglerfish/intel/embeddings.py
-/home/user/projects/anglerfish-ai/src/anglerfish/intel/__init__.py
-/home/user/projects/anglerfish-ai/src/anglerfish/intel/intent.py
-/home/user/projects/anglerfish-ai/tests/dashboard/test_export_threatintel.py
-/home/user/projects/anglerfish-ai/tests/intel/__init__.py
-/home/user/projects/anglerfish-ai/tests/intel/test_embeddings.py
-/home/user/projects/anglerfish-ai/tests/intel/test_intent.py
