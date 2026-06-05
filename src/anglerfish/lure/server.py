@@ -43,6 +43,7 @@ from uuid import UUID
 
 import asyncssh
 
+from anglerfish.bridge.sanitize import strip_control_chars
 from anglerfish.fingerprint.hashes import compute_hassh
 from anglerfish.lure.bridge_client import BridgeClient, BridgeUnavailableError
 from anglerfish.lure.commands import NativeCommands
@@ -730,7 +731,7 @@ async def _handle_one_command(
     # Lure-side cap. The design intentionally caps closer to the
     # attacker than the bridge's max_input_chars.
     sanitised = line[: container.config.max_command_chars]
-    sanitised = _strip_c0(sanitised)
+    sanitised = strip_control_chars(sanitised)
 
     native = await container.commands.dispatch(session, sanitised)
     if native.handled:
@@ -906,12 +907,6 @@ def _write_fallback(
         scripted = scripted + "\n"
     if scripted:
         write(scripted)
-
-
-def _strip_c0(text: str) -> str:
-    """Drop C0 control bytes (except tab and newline) before sending up."""
-    allowed = {"\t", "\n"}
-    return "".join(c for c in text if c in allowed or (ord(c) >= 0x20 and c != "\x7f"))
 
 
 # ---------------------------------------------------------------------------
