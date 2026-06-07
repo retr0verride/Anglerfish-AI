@@ -35,6 +35,12 @@ from anglerfish.wizard.honeytokens import HONEYTOKENS_TERMS
 from anglerfish.wizard.network import list_interfaces
 from anglerfish.wizard.persistence import atomic_write_private, save_answers
 from anglerfish.wizard.preflight import PreflightChecker
+from anglerfish.wizard.provision import (
+    FileProvisioner,
+    OperatorAccount,
+    SystemProvisioner,
+    WizardProvisioner,
+)
 from anglerfish.wizard.render import (
     render_authorized_keys,
     render_env,
@@ -119,6 +125,9 @@ def run_wizard(
     preflight: PreflightChecker | None = None,
     run_preflight: bool = True,
     audit: AuditLog | None = None,
+    provision: bool = False,
+    operator_console_password: str | None = None,
+    provisioner: WizardProvisioner | None = None,
 ) -> WizardOutput:
     """Generate secrets, render artefacts, write them atomically.
 
@@ -127,6 +136,14 @@ def run_wizard(
     defaults to a :class:`PreflightChecker` with the standard 5 s
     timeout; set ``run_preflight=False`` to skip reachability checks
     entirely (useful in tests).
+
+    ``provision`` selects how the operator account is handled. The default
+    (False) renders ``authorized_keys`` to a directory only
+    (:class:`FileProvisioner`), which is all local dev and the tests need.
+    The appliance passes ``provision=True`` (via ``--provision``) to create
+    the real UNIX account with :class:`SystemProvisioner`, applying the
+    optional ``operator_console_password`` as a console-only fallback. Pass
+    ``provisioner`` to inject a specific implementation (tests).
     """
     if not answers.terms_acknowledged:
         raise TermsDeclinedError(
@@ -173,11 +190,26 @@ def run_wizard(
     _atomic_write(resolved.hostname_path, etc_hostname, mode=0o644)
     _atomic_write(resolved.hosts_path, etc_hosts, mode=0o644)
 
-    authorized_keys_path: Path | None = None
-    if answers.operator_ssh_pubkey is not None:
-        ak_body = render_authorized_keys(answers.operator_ssh_pubkey)
-        authorized_keys_path = resolved.ops_home / ".ssh" / "authorized_keys"
-        _atomic_write(authorized_keys_path, ak_body, mode=0o600)
+    chosen_provisioner: WizardProvisioner
+    if provisioner is not None:
+        chosen_provisioner = provisioner
+    elif provision:
+        chosen_provisioner = SystemProvisioner()
+    else:
+        chosen_provisioner = FileProvisioner()
+    ak_body = (
+        render_authorized_keys(answers.operator_ssh_pubkey)
+        if answers.operator_ssh_pubkey is not None
+        else None
+    )
+    authorized_keys_path = chosen_provisioner.provision(
+        OperatorAccount(
+            username=answers.operator_username,
+            ops_home=resolved.ops_home,
+            authorized_key=ak_body,
+            console_password=operator_console_password,
+        ),
+    )
 
     save_answers(answers, resolved.answers_path)
 
@@ -185,6 +217,7 @@ def run_wizard(
         audit.record(
             "wizard.run",
             env_path=str(resolved.env_path),
+            operator_account_provisioned=provision,
             bait_interface=answers.bait_interface,
             service_interface=answers.service_interface,
             secrets_regenerated={

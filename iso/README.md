@@ -3,10 +3,14 @@
 `./build.sh` (at the repo root) produces a bootable **Debian 12 (bookworm)**
 ISO that:
 
-1. Boots a minimal text console.
-2. Runs `anglerfish-wizard` on tty1 before any networked service comes up
-   (`anglerfish-firstboot.service`); the wizard owns the console until it
-   has written the env file, then hands `getty@tty1` back.
+1. Boots a minimal text console with both a VGA console (tty0/tty1, the
+   Proxmox noVNC view) and a serial console (ttyS0, reachable via
+   `qm terminal` or QEMU `-serial`).
+2. Runs `anglerfish-wizard` on `/dev/console` before any networked service
+   comes up (`anglerfish-firstboot.service`); the wizard takes its input from
+   the serial line and mirrors output to VGA, owns the console until it has
+   written the env file, then hands both `getty@tty1` and
+   `serial-getty@ttyS0` back.
 3. Brings up the nftables firewall (`anglerfish-firewall.service`) from the
    wizard's interface answers.
 4. Starts the bridge, the dashboard, and the SSH lure
@@ -83,9 +87,11 @@ cosign verify-blob \
 
 The ISO is a BIOS+UEFI hybrid (`syslinux` for BIOS El Torito, `grub-efi`
 for UEFI). `dd` it to a USB stick or boot it directly in QEMU / VirtualBox
-/ VMware. On first boot the wizard takes over tty1 and walks the operator
-through the responsible-use terms, NIC selection, Ollama configuration, and
-secret generation.
+/ VMware. On first boot the wizard takes over `/dev/console` and walks the
+operator through the responsible-use terms, NIC selection, Ollama
+configuration, and secret generation. Drive it over the serial console
+(`qm terminal <vmid>` on Proxmox, or QEMU `-serial`); the Proxmox noVNC view
+mirrors the same prompts if you prefer to read there.
 
 ## Persisting to disk
 

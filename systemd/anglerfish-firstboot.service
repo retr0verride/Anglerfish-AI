@@ -12,18 +12,30 @@ RemainAfterExit=no
 StandardInput=tty
 StandardOutput=tty
 StandardError=tty
-TTYPath=/dev/tty1
+# Run on /dev/console, not /dev/tty1. The cmdline registers console=tty0
+# console=ttyS0 (see iso/auto/config), so /dev/console takes input from the
+# serial line (ttyS0, reachable via `qm terminal`) and mirrors output to the
+# VGA console (tty0, the Proxmox noVNC view). The operator drives the wizard
+# as stable serial text; noVNC is a readable fallback. TERM=vt220 gives Rich
+# a sane terminal type on the serial line so prompts render cleanly.
+TTYPath=/dev/console
 TTYReset=yes
 TTYVHangup=yes
-ExecStart=/opt/anglerfish/venv/bin/anglerfish-wizard --env /etc/anglerfish/anglerfish.env
+Environment=TERM=vt220
+# --provision: create the operator UNIX account (useradd + sudo + the SSH key,
+# plus the optional console fallback password). Runs as root here, which
+# useradd/chpasswd need. Without it the operator account is never created and
+# the key-only sshd locks the operator out.
+ExecStart=/opt/anglerfish/venv/bin/anglerfish-wizard --provision --env /etc/anglerfish/anglerfish.env
 
-# Re-enable getty@tty1 once the wizard completes successfully so the
-# operator can log in on the console for diagnostics. The chroot hook
-# masks getty@tty1 at image-build time so the wizard owns the tty on
-# first boot; we undo that mask here. Only runs when ExecStart returned
-# 0 (Type=oneshot's success contract).
-ExecStartPost=/bin/systemctl unmask getty@tty1.service
-ExecStartPost=/bin/systemctl start getty@tty1.service
+# Re-enable the console logins once the wizard completes successfully so the
+# operator can log in for diagnostics. The chroot hook masks both gettys at
+# image-build time so the wizard owns the console on first boot; we undo that
+# here. getty@tty1 is the VGA login (noVNC); serial-getty@ttyS0 is the serial
+# login (`qm terminal`). Only runs when ExecStart returned 0 (Type=oneshot's
+# success contract).
+ExecStartPost=/bin/systemctl unmask getty@tty1.service serial-getty@ttyS0.service
+ExecStartPost=/bin/systemctl start getty@tty1.service serial-getty@ttyS0.service
 
 # Schedule the MaxMind GeoLite2 update once the wizard has written the
 # license key into the env file. The fetch unit no-ops if the key is

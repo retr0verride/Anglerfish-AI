@@ -24,6 +24,7 @@ from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
 from anglerfish.cli.banner import write_banner
+from anglerfish.wizard.answers import WizardAnswers
 from anglerfish.wizard.persistence import DEFAULT_ANSWERS_PATH, load_answers
 from anglerfish.wizard.wizard import (
     TermsDeclinedError,
@@ -41,6 +42,30 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=False,
 )
+
+
+def _prompt_console_password(console: Console, answers: WizardAnswers) -> str | None:
+    """Collect the operator's console fallback password (hidden input).
+
+    The real sshd is key-only, so this password works only at the VM console;
+    it is the rescue path when the SSH key is wrong or absent. Blank skips it,
+    and a blank password with no SSH key is warned about because it leaves the
+    account with no way in.
+    """
+    password = Prompt.ask(
+        "Operator console fallback password (VM console only; blank to skip)",
+        password=True,
+        default="",
+    )
+    if password:
+        return password
+    if answers.operator_ssh_pubkey is None:
+        console.print(
+            "[yellow]Warning:[/yellow] no SSH key and no console password — the "
+            f"operator account {answers.operator_username!r} will have no login "
+            "method. Re-run with --provision to add one.",
+        )
+    return None
 
 
 @app.command()
@@ -71,6 +96,18 @@ def run(
         typer.Option(
             "--skip-preflight",
             help="Skip reachability checks against Ollama and the alert webhook.",
+        ),
+    ] = False,
+    provision: Annotated[
+        bool,
+        typer.Option(
+            "--provision",
+            help=(
+                "Create the operator UNIX account (useradd + sudo + the SSH "
+                "key, plus an optional console fallback password). Requires "
+                "root; the first-boot service passes this. Without it the key "
+                "is only rendered to a file."
+            ),
         ),
     ] = False,
     systemd_network_dir: Annotated[
@@ -137,11 +174,16 @@ def run(
             output=console.print,
             defaults=defaults,
         )
+        operator_console_password = (
+            _prompt_console_password(console, answers) if provision else None
+        )
         result = run_wizard(
             answers,
             env_path=env_path,
             paths=paths,
             run_preflight=not skip_preflight,
+            provision=provision,
+            operator_console_password=operator_console_password,
         )
     except TermsDeclinedError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -157,6 +199,10 @@ def run(
     console.print(f"  hostname:        {result.hostname_path}")
     if result.authorized_keys_path is not None:
         console.print(f"  ops authorized_keys: {result.authorized_keys_path}")
+    if provision:
+        console.print(f"Provisioned operator account: {answers.operator_username}")
+        if operator_console_password is not None:
+            console.print("  console fallback password: set")
     console.print(f"  saved answers:   {result.answers_path}")
     if result.dashboard_session_secret_generated:
         console.print("Generated new dashboard session secret.")

@@ -108,18 +108,23 @@ class WizardAnswers(BaseModel):
     bait_network: NetworkConfig = Field(default_factory=NetworkConfig)
     service_network: NetworkConfig = Field(default_factory=NetworkConfig)
 
-    # Operator access
+    # Operator access. The username becomes a real UNIX account at first boot
+    # (wizard --provision), so bound it to a POSIX-portable name: it reaches
+    # useradd as argv.
     operator_username: str = Field(
         default="anglerfish-ops",
         min_length=1,
         max_length=32,
+        pattern=r"^[a-z_][a-z0-9_-]*$",
     )
     operator_ssh_pubkey: str | None = Field(
         default=None,
         description=(
-            "Full authorized_keys-style line for the operator account. "
-            "If None, no key is installed and operators must use the noVNC "
-            "console (or run --reconfigure later to add one)."
+            "Full authorized_keys-style line for the operator account. Under "
+            "--provision the key is installed owned by that account so the "
+            "key-only sshd accepts it. If None, no key is installed and access "
+            "is via the VM console (set the console fallback password, or run "
+            "--reconfigure --provision later to add a key)."
         ),
         max_length=4096,
     )

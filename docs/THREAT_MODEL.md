@@ -139,7 +139,8 @@ PR, the PR template references the model.
 | Compromised bridge calls Ollama with arbitrary endpoint | Ollama config | Loopback or one configured IP literal - enforced at Pydantic validation time. |
 | Attacker uses the lure shell to write authorized_keys | Lure fakefs | The lure's filesystem is the static `fakefs` model in `src/anglerfish/lure/fakefs.py`; writes are not persisted to host disk. (Threat-engine `T1098` flags it for review regardless.) |
 | Wizard runs as root and writes attacker-controlled paths | Wizard | All output paths validated; interface names rejected on quote injection in `render_nftables`. The wizard does not accept arbitrary path overrides on first boot (only on `--reconfigure` via explicit CLI flags). |
-| Operator account elevates to root via sudo without audit | Operator SSH | The wizard creates `anglerfish-ops` as a non-root account. `sudo` membership is the operator's choice; we recommend `sudo` with logging. |
+| Operator account elevates to root via sudo without audit | Operator SSH | The first-boot wizard (`--provision`) creates the operator account as a non-root user in the `sudo` group so it can administer the box. It is reachable only on the firewalled service NIC, and the real sshd is key-only (`PasswordAuthentication no`), so the SSH path requires the operator's key. Operators wanting least-privilege can drop the account from `sudo` post-boot. |
+| Operator console fallback password reused over SSH or leaked from a backup | Operator account | The optional console password (`--provision`) is set via `chpasswd` on stdin (never argv or a persisted file; it is not written to `wizard.json` or `anglerfish.env`). Because sshd disables password auth, it is usable only at the VM serial/VGA console, not over the network. |
 
 ---
 

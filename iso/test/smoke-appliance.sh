@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
 # Full-appliance smoke: boot the real ISO under QEMU/KVM with the two-NIC
-# Proxmox topology, drive the first-boot wizard over QMP, then prove the
-# lure (:2222) and dashboard (:8420) are reachable and the honeypot loop
-# answers. Runs INSIDE the iso/Dockerfile builder container (needs qemu +
-# /dev/kvm). Results + screendumps land in /out for inspection.
+# Proxmox topology, drive the first-boot wizard over the serial console, then
+# prove the dashboard (:8420), the lure (:2222), and operator SSH into the
+# account the wizard creates (guest :22) all work. Runs INSIDE the
+# iso/Dockerfile builder container (needs qemu + /dev/kvm). Results +
+# screendumps land in /out for inspection.
 #
-# Exit status: 0 only if BOTH the dashboard health check and the lure
-# honeypot loop succeed. Any failure (no KVM, apt install failure, dead
-# dashboard, dead lure) exits non-zero so a caller or CI job can gate on it.
+# Exit status: 0 only if the dashboard health check, the lure honeypot loop,
+# AND operator SSH all succeed. Any failure (no KVM, apt install failure, dead
+# dashboard, dead lure, locked-out operator) exits non-zero so a caller or CI
+# job can gate on it.
 #
 # Usage (via docker run, see the host invocation):
 #   smoke-appliance.sh <iso_path> [skip-wizard]
@@ -18,6 +20,7 @@ ISO="${1:?usage: smoke-appliance.sh <iso_path> [skip-wizard]}"
 WIZ="${2:-}"  # "skip-wizard" for a pre-seeded image (no interactive wizard)
 OUT="/out"
 QMP="/tmp/anglerfish-qmp.sock"
+SERIAL="/tmp/anglerfish-serial.sock"
 DISK="/tmp/anglerfish-smoke.qcow2"
 RESULT="${OUT}/smoke-result.txt"
 
@@ -63,7 +66,13 @@ fi
 
 qemu-img create -f qcow2 "${DISK}" 20G >/dev/null
 
-log "booting QEMU (headless, QMP-driven, two NICs)"
+# Operator keypair: the wizard installs this pubkey into the account it creates
+# (--provision); we SSH in with the privkey afterwards to prove the operator
+# login the lockout fix restored actually works.
+rm -f "${OUT}/ops_key" "${OUT}/ops_key.pub"
+ssh-keygen -t ed25519 -N "" -q -f "${OUT}/ops_key"
+
+log "booting QEMU (headless, serial-driven, two NICs)"
 # bait NIC -> host :2222 (lure); service NIC -> host :8420 (dashboard).
 # Distinct SLIRP subnets so the two guest NICs get distinct DHCP leases.
 qemu-system-x86_64 \
@@ -75,19 +84,21 @@ qemu-system-x86_64 \
     -boot order=dc \
     -netdev "user,id=bait,net=10.0.2.0/24,hostfwd=tcp:127.0.0.1:2222-:2222" \
     -device "virtio-net-pci,netdev=bait,mac=52:54:00:ba:17:01" \
-    -netdev "user,id=service,net=10.0.3.0/24,hostfwd=tcp:127.0.0.1:8420-:8420" \
+    -netdev "user,id=service,net=10.0.3.0/24,hostfwd=tcp:127.0.0.1:8420-:8420,hostfwd=tcp:127.0.0.1:2022-:22" \
     -device "virtio-net-pci,netdev=service,mac=52:54:00:5e:01:01" \
     -vga std -display none \
     -qmp "unix:${QMP},server,nowait" \
-    -serial "file:${OUT}/smoke-serial.log" \
+    -serial "unix:${SERIAL},server,nowait" \
     &
 QEMU_PID=$!
 log "qemu pid ${QEMU_PID}"
 
 # Drive the wizard. menu_wait boot_wait svc_wait tuned for KVM. svc_wait is
 # generous because the dashboard is After=bridge and the bridge waits for
-# model-pull (the tinyllama fetch) before it starts.
-python3 /work/iso/test/qmp_wizard_smoke.py "${QMP}" "${OUT}" 12 130 300 "${WIZ}" 2>&1 | tee -a "${RESULT}"
+# model-pull (the tinyllama fetch) before it starts. The driver feeds the
+# operator pubkey so the SSH check below has a key to authenticate with.
+python3 /work/iso/test/qmp_wizard_smoke.py \
+    "${QMP}" "${SERIAL}" "${OUT}" 12 130 300 "${OUT}/ops_key.pub" "${WIZ}" 2>&1 | tee -a "${RESULT}"
 
 # Convert screendumps to PNG for easy viewing (best-effort).
 for ppm in "${OUT}"/smoke-*.ppm; do
@@ -120,6 +131,29 @@ for attempt in 1 2 3; do
     sleep 20
 done
 
+# Operator SSH: the wizard (--provision) creates the operator account and
+# installs the pubkey owned by it; the real sshd on the service NIC is
+# key-only. A successful login proves the lockout fix -- previously no operator
+# account was ever created, so this always failed. Skipped for a pre-seeded
+# image (no interactive wizard, so no key was fed).
+ops_ok=0
+if [ "${WIZ}" = "skip-wizard" ]; then
+    ops_ok=1
+    log "=== operator SSH: skipped (pre-seeded image) ==="
+else
+    log "=== operator SSH (:2022 -> guest :22, the account the wizard created) ==="
+    OPS_SSH_OPTS="-i ${OUT}/ops_key -p 2022 -o StrictHostKeyChecking=no \
+-o UserKnownHostsFile=/dev/null -o PreferredAuthentications=publickey \
+-o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10"
+    for attempt in 1 2 3 4 5; do
+        out="$(ssh ${OPS_SSH_OPTS} anglerfish-ops@127.0.0.1 'id -un; groups' 2>&1)"
+        log "attempt ${attempt}:"
+        printf '%s\n' "${out}" | sed 's/^/[ops] /' | tee -a "${RESULT}"
+        case "${out}" in *anglerfish-ops*) ops_ok=1; break ;; esac
+        sleep 15
+    done
+fi
+
 log "=== teardown ==="
 kill "${QEMU_PID}" 2>/dev/null
 sleep 2
@@ -131,8 +165,9 @@ wait "${QEMU_PID}" 2>/dev/null
 rc=0
 [ "${dash_ok}" -eq 1 ] || { log "FAIL: dashboard never returned status ok on :8420"; rc=1; }
 [ "${lure_ok}" -eq 1 ] || { log "FAIL: lure honeypot loop never answered on :2222"; rc=1; }
+[ "${ops_ok}" -eq 1 ] || { log "FAIL: operator SSH (the account the wizard creates) never succeeded on :2022"; rc=1; }
 if [ "${rc}" -eq 0 ]; then
-    log "PASS: dashboard + lure both healthy"
+    log "PASS: dashboard + lure + operator SSH all healthy"
 fi
 log "smoke complete; artifacts in ${OUT}"
 exit "${rc}"

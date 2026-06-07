@@ -47,5 +47,16 @@ lb config noauto \
     --mirror-chroot-security "${mirror_security}" \
     --mirror-binary "${mirror}" \
     --mirror-binary-security "${mirror_security}" \
-    --bootappend-live "boot=live components quiet splash" \
+    --bootappend-live "boot=live components console=tty0 console=ttyS0,115200 consoleblank=0" \
     "${@}"
+
+# Console policy. The first-boot wizard is interactive, so the appliance
+# registers BOTH a VGA console (tty0, what Proxmox noVNC shows) and a serial
+# console (ttyS0, what `qm terminal` and QEMU `-serial` attach to). Listing
+# ttyS0 last makes it /dev/console's input source: the operator drives the
+# wizard as stable text over `qm terminal`, while noVNC mirrors the same
+# output as a readable fallback. `consoleblank=0` disables the VT idle-blank
+# timer that previously froze the noVNC console mid-wizard. `quiet`/`splash`
+# are intentionally dropped so first-boot errors are visible on the console;
+# add `quiet` back here once a deployment is known-good if a clean console is
+# preferred.

@@ -32,6 +32,9 @@ python3-venv
 python3-pip
 nftables
 openssh-server
+# sudo: the first-boot wizard adds the operator account to the sudo group so
+# the operator can administer the box (the account is otherwise unprivileged).
+sudo
 ca-certificates
 curl
 wget
