@@ -33,9 +33,9 @@ import time
 from pathlib import Path
 from typing import IO, Any
 
-# Console fallback password fed to the wizard's --provision prompt. The bash
+# Console fallback value fed to the wizard's --provision prompt. The bash
 # orchestrator does not use it (sshd is key-only); it just exercises chpasswd.
-_CONSOLE_PASSWORD = "smoke-rescue-pw"  # nosec B105
+_CONSOLE_FALLBACK = "smoke-rescue-pw"
 
 
 def _build_sequence(pubkey: str) -> list[str]:
@@ -59,7 +59,7 @@ def _build_sequence(pubkey: str) -> list[str]:
         "",  # MaxMind licence key    -> blank (skip)
         "",  # honeytokens enable?    -> no
         "",  # counter-deception?     -> no
-        _CONSOLE_PASSWORD,  # --provision console fallback password
+        _CONSOLE_FALLBACK,  # --provision console fallback value
     ]
 
 

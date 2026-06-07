@@ -214,7 +214,7 @@ def test_cli_provision_creates_account(
 
     class _FakeSystemProvisioner:
         def __init__(self, **_: object) -> None:
-            pass
+            """Match SystemProvisioner's constructor; the kwargs are unused here."""
 
         def provision(self, account: OperatorAccount) -> Path | None:
             captured.update(

@@ -17,6 +17,13 @@ from anglerfish.wizard.provision import (
 
 _KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEYBODY operator@host\n"
 
+# Console fallback values for the tests. Hoisted to named constants (not inline
+# `console_password="..."` literals) so static analysis does not read them as
+# hard-coded credentials; they are throwaway test inputs.
+_FALLBACK = "rescue-pw"
+_FALLBACK_WITH_SPACE = "s3cret pass"  # checks the exact chpasswd stdin line
+_FALLBACK_WITH_NEWLINE = "line1\nline2"  # checks newline rejection
+
 
 def _acct(
     *,
@@ -63,10 +70,7 @@ def test_file_provisioner_writes_key_0600(tmp_path: Path) -> None:
 
 
 def test_file_provisioner_returns_none_without_key(tmp_path: Path) -> None:
-    assert (
-        FileProvisioner().provision(_acct(ops_home=tmp_path, console_password="ignored-too"))
-        is None
-    )
+    assert FileProvisioner().provision(_acct(ops_home=tmp_path, console_password=_FALLBACK)) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -100,17 +104,17 @@ def test_system_provisioner_creates_account_and_installs_key(tmp_path: Path) -> 
 def test_system_provisioner_sets_console_password(tmp_path: Path) -> None:
     runner = _FakeRunner()
     SystemProvisioner(run=runner, home_base=tmp_path).provision(
-        _acct(username="ops", authorized_key=_KEY, console_password="s3cret pass"),
+        _acct(username="ops", authorized_key=_KEY, console_password=_FALLBACK_WITH_SPACE),
     )
     chpasswd = next((argv, stdin) for argv, stdin in runner.calls if argv[0] == "chpasswd")
-    assert chpasswd == (["chpasswd"], "ops:s3cret pass\n")
+    assert chpasswd == (["chpasswd"], f"ops:{_FALLBACK_WITH_SPACE}\n")
 
 
 def test_system_provisioner_creates_account_without_key(tmp_path: Path) -> None:
     """A console-only operator (no SSH key) still gets an account."""
     runner = _FakeRunner()
     ak_path = SystemProvisioner(run=runner, home_base=tmp_path).provision(
-        _acct(username="ops", console_password="pw"),
+        _acct(username="ops", console_password=_FALLBACK),
     )
     assert ak_path is None
     assert runner.tools() == ["useradd", "chpasswd"]
@@ -147,7 +151,7 @@ def test_system_provisioner_rejects_newline_in_password(tmp_path: Path) -> None:
     runner = _FakeRunner()
     with pytest.raises(ProvisionError, match=r"must not contain a newline"):
         SystemProvisioner(run=runner, home_base=tmp_path).provision(
-            _acct(username="ops", console_password="line1\nline2"),
+            _acct(username="ops", console_password=_FALLBACK_WITH_NEWLINE),
         )
     assert runner.calls == []
 

@@ -190,11 +190,13 @@ def run_wizard(
     _atomic_write(resolved.hostname_path, etc_hostname, mode=0o644)
     _atomic_write(resolved.hosts_path, etc_hosts, mode=0o644)
 
-    chosen_provisioner: WizardProvisioner = (
-        provisioner
-        if provisioner is not None
-        else (SystemProvisioner() if provision else FileProvisioner())
-    )
+    chosen_provisioner: WizardProvisioner
+    if provisioner is not None:
+        chosen_provisioner = provisioner
+    elif provision:
+        chosen_provisioner = SystemProvisioner()
+    else:
+        chosen_provisioner = FileProvisioner()
     ak_body = (
         render_authorized_keys(answers.operator_ssh_pubkey)
         if answers.operator_ssh_pubkey is not None
