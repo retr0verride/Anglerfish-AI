@@ -241,10 +241,11 @@ First-boot Typer CLI. Files:
 
 | File                              | Responsibility                                                 |
 |-----------------------------------|----------------------------------------------------------------|
-| [`__main__.py`](../src/anglerfish/wizard/__main__.py)   | Typer entrypoint + `--reconfigure`. |
+| [`__main__.py`](../src/anglerfish/wizard/__main__.py)   | Typer entrypoint + `--reconfigure` + `--provision`. |
 | [`wizard.py`](../src/anglerfish/wizard/wizard.py)       | `prompt_for_answers` + `run_wizard` (orchestrator). |
 | [`answers.py`](../src/anglerfish/wizard/answers.py)     | `WizardAnswers` + `WizardOutput` Pydantic models. Secrets never live here. |
 | [`render.py`](../src/anglerfish/wizard/render.py)       | Renders env, nftables, systemd-networkd, hostname, authorized_keys. |
+| [`provision.py`](../src/anglerfish/wizard/provision.py) | Creates the operator UNIX account (`--provision`); renders `authorized_keys` only otherwise. |
 | [`secrets.py`](../src/anglerfish/wizard/secrets.py)     | `generate_*` helpers for bridge secret, session secret, encryption key. |
 | [`preflight.py`](../src/anglerfish/wizard/preflight.py) | Reachability probes for Ollama and the threat webhook. |
 | [`persistence.py`](../src/anglerfish/wizard/persistence.py) | Atomic JSON save/load of `WizardAnswers` for `--reconfigure`. |

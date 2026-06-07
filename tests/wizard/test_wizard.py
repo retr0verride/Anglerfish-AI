@@ -18,6 +18,7 @@ from anglerfish.wizard import (
     prompt_for_answers,
     run_wizard,
 )
+from anglerfish.wizard.provision import OperatorAccount
 
 _ED25519_BLOB = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00" * 40).decode()
 
@@ -92,6 +93,43 @@ def test_run_wizard_writes_authorized_keys_when_pubkey_provided(tmp_path: Path) 
     body = output.authorized_keys_path.read_text("utf-8")
     assert body.startswith("ssh-ed25519 ")
     assert body.endswith("\n")
+
+
+def test_run_wizard_forwards_provisioning_inputs(tmp_path: Path) -> None:
+    """run_wizard hands the operator details to the injected provisioner."""
+    captured: dict[str, object] = {}
+    sentinel = tmp_path / "recorded-authorized_keys"
+
+    class _Recorder:
+        def provision(self, account: OperatorAccount) -> Path | None:
+            captured.update(
+                username=account.username,
+                ops_home=account.ops_home,
+                authorized_key=account.authorized_key,
+                console_password=account.console_password,
+            )
+            return sentinel
+
+    paths = _paths(tmp_path)
+    answers = _answers(
+        operator_username="ops-1",
+        operator_ssh_pubkey=f"ssh-ed25519 {_ED25519_BLOB} ops",
+    )
+    output = run_wizard(
+        answers,
+        env_path=paths.env_path,
+        paths=paths,
+        run_preflight=False,
+        operator_console_password="rescue-pw",
+        provisioner=_Recorder(),
+    )
+
+    assert output.authorized_keys_path == sentinel
+    assert captured["username"] == "ops-1"
+    assert captured["ops_home"] == paths.ops_home
+    assert isinstance(captured["authorized_key"], str)
+    assert captured["authorized_key"].startswith("ssh-ed25519 ")
+    assert captured["console_password"] == "rescue-pw"
 
 
 def test_run_wizard_rejects_invalid_ssh_key(tmp_path: Path) -> None:

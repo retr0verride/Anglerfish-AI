@@ -22,7 +22,11 @@ TTYPath=/dev/console
 TTYReset=yes
 TTYVHangup=yes
 Environment=TERM=vt220
-ExecStart=/opt/anglerfish/venv/bin/anglerfish-wizard --env /etc/anglerfish/anglerfish.env
+# --provision: create the operator UNIX account (useradd + sudo + the SSH key,
+# plus the optional console fallback password). Runs as root here, which
+# useradd/chpasswd need. Without it the operator account is never created and
+# the key-only sshd locks the operator out.
+ExecStart=/opt/anglerfish/venv/bin/anglerfish-wizard --provision --env /etc/anglerfish/anglerfish.env
 
 # Re-enable the console logins once the wizard completes successfully so the
 # operator can log in for diagnostics. The chroot hook masks both gettys at
