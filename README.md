@@ -228,8 +228,12 @@ Both flags are optional. Without them the dashboard binds to
 ### Run the first-boot wizard manually
 
 ```bash
-anglerfish-wizard run --env /tmp/anglerfish.env
+anglerfish-wizard --env /tmp/anglerfish.env
 ```
+
+This dev invocation only renders config and the `authorized_keys` file. The
+appliance adds `--provision` (as root) to create the operator UNIX account; do
+not pass it on a workstation.
 
 ---
 

@@ -325,8 +325,14 @@ it does **not** start the VM. Start it so you can reach the console:
 
 ```bash
 qm start 9000
-qm terminal 9000     # serial console, or use the web UI
+qm terminal 9000     # serial console (recommended for the wizard)
 ```
+
+`qm terminal` is the serial console the wizard runs on. Drive the wizard
+there: it is stable text and pasting your SSH key is reliable. The web-UI
+noVNC console mirrors the same prompts if you prefer to read there, but it
+is read-only for the wizard (input comes from the serial line). Exit
+`qm terminal` with `Ctrl-O`.
 
 **Check:** the VM boots to the first-boot wizard's terms screen.
 
@@ -334,9 +340,9 @@ qm terminal 9000     # serial console, or use the web UI
 
 ## Step 6: Run the first-boot wizard
 
-The wizard runs on the console. Answer the prompts in order. The two that
-matter for the split topology are the Ollama endpoint and the trusted
-remote IP: point them at the Model VM.
+The wizard runs on the serial console (`qm terminal`). Answer the prompts
+in order. The two that matter for the split topology are the Ollama
+endpoint and the trusted remote IP: point them at the Model VM.
 
 | Prompt | What to enter |
 |--------|---------------|
@@ -346,8 +352,8 @@ remote IP: point them at the Model VM.
 | Service interface | The second NIC inside the guest. |
 | DHCP on the bait NIC | `y` if the bait bridge has DHCP, else answer the static prompts. |
 | DHCP on the service NIC | `y` if the service bridge has DHCP, else static. |
-| Operator UNIX username | Your ops login (separate from the honeypot users). |
-| Operator SSH public key | Paste an ED25519 pubkey. This is your post-boot entry. |
+| Operator UNIX username | Your ops login (separate from the honeypot users). The wizard creates this account in the `sudo` group. POSIX name only. |
+| Operator SSH public key | Paste an ED25519 pubkey, owned by the operator account. This is your post-boot entry. |
 | Dashboard admin username | The dashboard login. |
 | Dashboard admin password | Set one. Blank is open-mode, only safe on an isolated NIC. |
 | **Ollama endpoint URL** | **`http://<model-ip>:11434/`** (your Model VM). |
@@ -359,6 +365,7 @@ remote IP: point them at the Model VM.
 | MaxMind GeoLite2 licence key | Optional; blank to skip. |
 | Enable honeytokens | `n` unless you have read [`HONEYTOKENS.md`](HONEYTOKENS.md). |
 | Enable counter-deception | `n` unless you have read the threat model section. |
+| Operator console fallback password | Asked last. Hidden input; blank to skip. Console-only (sshd is key-only), so it is your rescue path if the SSH key fails. |
 
 The endpoint host must be an IP literal. The wizard rejects hostnames
 because DNS could change between validation and use.

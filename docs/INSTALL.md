@@ -33,7 +33,7 @@ README first. The wizard refuses to proceed until you accept it.
 | Model VM        | A separate VM that holds the GPU and runs Ollama. The honeypot calls it over the service network. Build it per [proxmox.md](proxmox.md) Steps 3 and 4 and [`MODEL_SETUP.md`](MODEL_SETUP.md). |
 | GPU             | NVIDIA card with ≥12GB VRAM passed through to the **Model VM** (not the honeypot). RTX 3060 12GB is the reference. CPU-only works but inference is slow enough to break the deception. See [proxmox.md](proxmox.md) Step 2 for passthrough setup. |
 | Service network | A `vmbr-service` link the honeypot uses to reach the Model VM on `:11434`. The honeypot's bait NIC never sees the Model VM. |
-| Operator access | An ED25519 SSH public key. The wizard installs it into the operator account; nothing else gets you back into the VM. |
+| Operator access | An ED25519 SSH public key (installed into the operator account the wizard creates). Optionally a console fallback password for the VM console. One of the two is how you get back into the VM. |
 | Optional        | A MaxMind licence key for first-boot GeoLite2 fetch. Without it, geo enrichment is empty until you stage `.mmdb` files manually. |
 
 ---
@@ -168,8 +168,10 @@ clean run. `Ctrl-A x` to terminate QEMU.
 
 ## 5. First-boot wizard
 
-The wizard runs on `tty1` (whether on the Proxmox console or under
-QEMU's `-nographic`). The full prompt list:
+The wizard runs on `/dev/console`. Drive it over the serial console
+(`qm terminal <vmid>` on Proxmox, or QEMU `-serial`), where it is stable
+text and pasting your SSH key is reliable; the Proxmox noVNC view mirrors
+the same prompts as a read-only fallback. The full prompt list:
 
 | Step | Prompt                                                | What to provide                                              |
 |------|-------------------------------------------------------|--------------------------------------------------------------|
@@ -178,8 +180,8 @@ QEMU's `-nographic`). The full prompt list:
 | 3    | Bait interface                                        | The guest's view of the bait NIC, e.g. `ens18`.              |
 | 4    | Service interface                                     | Guest's view of the service NIC, e.g. `ens19`.               |
 | 5    | DHCP on each NIC                                      | `y` if your bridge has a DHCP server; otherwise prompts for static IP, gateway, DNS. |
-| 6    | Operator UNIX username                                | The wizard creates this user; it's the only post-boot login. |
-| 7    | Operator SSH public key                               | Paste an `ssh-ed25519 ...` line. Blank skips it.             |
+| 6    | Operator UNIX username                                | The wizard creates this account (in the `sudo` group); it's your post-boot login. POSIX name only (`^[a-z_][a-z0-9_-]*$`). |
+| 7    | Operator SSH public key                               | Paste an `ssh-ed25519 ...` line, owned by the operator account. Blank skips it (then set a console password below, or you have no way in). |
 | 8    | Dashboard admin username                              | Default `admin`.                                             |
 | 9    | Dashboard admin password                              | Blank ⇒ open mode (only safe on a fully-isolated NIC).       |
 | 10   | Ollama endpoint URL                                   | Production: `http://<model-ip>:11434/` (your Model VM). Dev/test loopback is `http://127.0.0.1:11434/`. |
@@ -189,6 +191,7 @@ QEMU's `-nographic`). The full prompt list:
 | 14   | Fake username for the AI shell                        | Default `root`.                                              |
 | 15   | Threat alert webhook URL                              | Optional.                                                    |
 | 16   | MaxMind GeoLite2 licence key                          | Optional. Without it, geo lookups return empty records.      |
+| 17   | Operator console fallback password                    | Asked last on the appliance (`--provision`). Hidden input; blank to skip. Works only at the VM console (sshd is key-only), so it is the rescue path if your SSH key fails. |
 
 For the split topology, steps 10 and 11 both point at the Model VM. A
 non-loopback endpoint URL is rejected unless the trusted-remote IP is
@@ -201,7 +204,10 @@ After the wizard:
 * The env file is written to `/etc/anglerfish/anglerfish.env` (mode
   0600). Secrets are regenerated on every `--reconfigure`.
 * nftables is loaded from `/etc/anglerfish/nftables/anglerfish.nft`.
-* `getty@tty1` is re-enabled so you can log in on console.
+* The operator account is created (`sudo` group) with the SSH key it
+  owns and the optional console password.
+* `getty@tty1` and `serial-getty@ttyS0` are re-enabled so you can log in
+  on either the noVNC or the serial console.
 * `anglerfish-geo-update.service` runs once if a licence key was
   supplied.
 * The bridge, dashboard, and lure all start as systemd units
@@ -299,6 +305,10 @@ answers (IPs, model, webhook, geo key) without losing service state:
 ```bash
 sudo anglerfish-wizard --reconfigure
 ```
+
+Add `--provision` to also apply operator-account changes (a new SSH key,
+a changed username, or a console password); without it `--reconfigure`
+only rewrites the config files.
 
 Secrets in `/etc/anglerfish/anglerfish.env` regenerate on every run;
 expect to restart `anglerfish-bridge.service`, `anglerfish-lure.service`,
