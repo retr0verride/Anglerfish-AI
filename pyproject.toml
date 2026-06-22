@@ -59,7 +59,7 @@ dashboard = [
     "itsdangerous>=2.0,<3",
     "bcrypt>=4.0,<6",
     # Stage 13 slice 13.4: per-session PDF export (the only PDF path).
-    "reportlab>=4.0,<5",
+    "reportlab>=4.0,<6",
 ]
 geo = [
     "maxminddb>=2.6,<4",
@@ -109,7 +109,7 @@ dev = [
     "bcrypt>=4.0,<6",
     "maxminddb>=2.6,<4",
     "cryptography>=46.0.7,<49",
-    "reportlab>=4.0,<5",
+    "reportlab>=4.0,<6",
 ]
 
 [project.scripts]
