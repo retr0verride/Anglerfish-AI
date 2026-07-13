@@ -93,7 +93,7 @@ dev = [
     # and CI. The two had drifted (range allowed 2.1.x while the hook
     # stayed on v1.10.0), so a local pre-commit pass and CI disagreed.
     # Bump both together when moving to a newer mypy line.
-    "mypy>=1.10,<2.2",
+    "mypy>=1.10,<2.3",
     "pre-commit>=3.7,<5",
     "types-PyYAML>=6.0,<7",
     # Headless-browser driver for the SPA XSS regression test. The test is
